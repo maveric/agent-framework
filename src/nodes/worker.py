@@ -528,10 +528,14 @@ def _create_run_shell_wrapper(tool, worktree_path):
 
 def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
     """Bind tools to the current worktree path."""
-    worktree_path = state.get("worktree_path")
+    worktree_path = state.get("worktree_path") or state.get("_workspace_path")
+    
     if not worktree_path:
+        print("WARNING: No worktree_path or _workspace_path found in state", flush=True)
         return tools
         
+    print(f"DEBUG: Binding tools to path: {worktree_path}", flush=True)
+    
     from langchain_core.tools import StructuredTool
     
     bound_tools = []
