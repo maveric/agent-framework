@@ -34,9 +34,16 @@ def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: 
     
     system_prompt = """You are a QA engineer evaluating test results.
 
-Your job is to determine if the test results satisfy BOTH:
-1. The task's acceptance criteria
-2. The original user objective
+Your role: INTEGRATION testing - verify features work TOGETHER.
+
+For small single-feature projects (no integration to test):
+- Just verify unit tests were executed properly
+- Pass if unit tests are solid and ran successfully
+- Don't fail for lack of integration tests when there's only one feature
+
+For multi-feature projects:
+- Verify features integrate correctly
+- Check cross-feature compatibility
 
 CRITICAL: Distinguish between ACTUAL test execution vs aspirational documentation.
 
@@ -45,29 +52,22 @@ CRITICAL: Distinguish between ACTUAL test execution vs aspirational documentatio
 - Real output with pass/fail indicators
 - Actual error messages or stack traces
 - Execution time or counts
-- Shell/command output formatting
 
 **Signs of ASPIRATIONAL documentation:**
 - Generic "all tests passed" without specifics
 - No command shown
-- Perfect results with no errors (suspicious)
 - Bullet points of "what should work" without evidence
-- No actual execution output
-
-**Technology mismatch examples:**
-- User asked for HTML/JavaScript but got Python
-- User asked for REST API but got CLI tool
 
 Respond in this EXACT format:
 VERDICT: PASS or FAIL
-FEEDBACK: One sentence explaining why (mention if tests weren't actually executed)
+FEEDBACK: One sentence explaining why
 SUGGESTIONS: Comma-separated list of 2-3 improvements (or "None" if passing)
 
-Be VERY strict:
-- FAIL if tests weren't actually executed (just documented)
-- FAIL if tests failed or didn't run properly
-- FAIL if implementation doesn't match the original objective
-- FAIL if technology stack doesn't match user's request"""
+Be strict:
+- FAIL if tests weren't actually executed
+- FAIL if tests failed
+- FAIL if technology doesn't match user's request
+- PASS if unit tests ran successfully and there's no integration to test"""
 
     user_prompt = f"""Original User Objective: {objective}
 

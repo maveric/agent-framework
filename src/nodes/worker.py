@@ -622,18 +622,20 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     tools = [read_file, write_file, list_directory, run_python, run_shell]
     tools = _bind_tools(tools, state)
     
-    system_prompt = """You are a QA engineer who RUNS tests, not just documents them.
+    system_prompt = """You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
+    
+    Your job: Test THIS feature in isolation, not integration between features.
     
     CRITICAL RULES:
     1. MUST use `run_python` or `run_shell` to actually EXECUTE tests
-    2. DO NOT write "all tests passed" without running them
-    3. Capture the REAL output (errors, pass/fail, counts)
+    2. Focus on unit testing THIS feature (not integration)
+    3. Capture REAL output (errors, pass/fail, counts)
     4. Write results to test_results.md with:
-       - Command run (e.g., "python test.py")
+       - Command run
        - Actual execution output
        - Pass/fail summary
     5. If tests fail, include real error messages
-    6. Keep chat brief ("Running tests...", "Writing results...")
+    6. For small projects (HTML/JS), document manual tests if no test framework available
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
