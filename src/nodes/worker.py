@@ -116,8 +116,13 @@ def _execute_react_loop(
     if mock_mode:
         return _mock_execution(task)
 
-    # Setup LLM and create agent
-    llm = get_llm()
+    # Get orchestrator config and model config
+    from config import OrchestratorConfig
+    orch_config = OrchestratorConfig()  # This reads from config.py with user's gpt-5.1
+    model_config = orch_config.worker_model
+    
+    # Setup LLM with worker model config
+    llm = get_llm(model_config)
     
     # Create react agent (no state_modifier needed - we'll include system message in inputs)
     agent = create_react_agent(llm, tools)

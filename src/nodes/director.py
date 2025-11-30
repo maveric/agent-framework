@@ -142,7 +142,11 @@ def _mock_decompose(objective: str) -> List[Task]:
 
 def _decompose_objective(objective: str, spec: Dict[str, Any]) -> List[Task]:
     """Use LLM to decompose objective into tasks."""
-    llm = get_llm()
+    from config import OrchestratorConfig
+    orch_config = OrchestratorConfig()
+    model_config = orch_config.director_model
+    
+    llm = get_llm(model_config)
     structured_llm = llm.with_structured_output(DecompositionResponse)
     
     prompt = ChatPromptTemplate.from_messages([
