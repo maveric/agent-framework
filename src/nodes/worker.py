@@ -65,6 +65,7 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
     
     # Inject worktree path into state for handlers
     state["worktree_path"] = worktree_path
+    print(f"DEBUG: worker_node set state['worktree_path']={state.get('worktree_path')}", flush=True)
     
     # Execute handler
     print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
