@@ -54,15 +54,31 @@ def route_after_director(state: OrchestratorState):
     return [Send("worker", {"task_id": task_id, **state})]
 
 
-def route_after_worker(state: OrchestratorState, task_id: str) -> Literal["strategist", "director"]:
-    """Route after worker completes."""
-    task = next((t for t in state.get("tasks", []) if t["id"] == task_id), None)
+def route_after_worker(state: OrchestratorState) -> Literal["strategist", "director"]:
+    """
+    Route after worker completes.
     
-    if task and task.get("status") == "awaiting_qa":
+    Only TEST phase tasks go to Strategist for QA.
+    PLAN and BUILD tasks return directly to Director to avoid echo chamber.
+    """
+    # Get the task that just completed
+    tasks = state.get("tasks", [])
+    # Find most recently updated task in awaiting_qa status
+    qa_tasks = [t for t in tasks if t.get("status") == "awaiting_qa"]
+    
+    if not qa_tasks:
+        return "director"
+    
+    # Get the most recent one (last updated)
+    task = max(qa_tasks, key=lambda t: t.get("updated_at", ""))
+    
+    # Check phase - only TEST tasks go to QA
+    phase = task.get("phase", "")
+    if phase == "test":
+        print(f"  Routing to QA (TEST phase)", flush=True)
         return "strategist"
-    return "director"
-
-
-def route_after_strategist(state: OrchestratorState) -> Literal["director"]:
-    """Always return to director after QA."""
-    return "director"
+    else:
+        # PLAN and BUILD tasks skip QA, mark as complete and return to director
+        print(f"  Skipping QA ({phase} phase) - marking complete", flush=True)
+        task["status"] = "complete"
+        return "director"

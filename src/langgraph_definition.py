@@ -18,7 +18,6 @@ from nodes import (
     guardian_node,
     route_after_director,
     route_after_worker,
-    route_after_strategist,
 )
 from config import OrchestratorConfig
 
@@ -54,8 +53,10 @@ def create_orchestrator(
     # Director can dispatch to workers or end
     graph.add_conditional_edges("director", route_after_director)
     
-    # Worker goes to strategist for QA
-    graph.add_edge("worker", "strategist")
+    # Worker routes based on task phase:
+    # - TEST phase tasks go to Strategist for QA
+    # - PLAN/BUILD tasks return to Director (skip QA to avoid echo chamber)
+    graph.add_conditional_edges("worker", route_after_worker)
     
     # Strategist goes back to director
     graph.add_edge("strategist", "director")

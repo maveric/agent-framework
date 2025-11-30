@@ -10,7 +10,7 @@ from .director import director_node
 from .worker import worker_node
 from .strategist import strategist_node
 from .guardian import guardian_node
-from .routing import route_after_director, route_after_worker, route_after_strategist
+from .routing import route_after_director, route_after_worker
 
 __all__ = [
     "director_node",
@@ -19,5 +19,4 @@ __all__ = [
     "guardian_node",
     "route_after_director",
     "route_after_worker",
-    "route_after_strategist",
 ]
