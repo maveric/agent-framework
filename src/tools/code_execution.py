@@ -28,6 +28,9 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
     if cwd:
         env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
         
+    print(f"DEBUG: run_python cwd={cwd}", flush=True)
+    print(f"DEBUG: run_python PYTHONPATH={env.get('PYTHONPATH')}", flush=True)
+        
     try:
         # Run in a separate process
         result = subprocess.run(
@@ -81,6 +84,8 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
     env = os.environ.copy()
     if cwd:
         env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
+    
+    print(f"DEBUG: run_shell command='{command}' cwd={cwd}", flush=True)
     
     try:
         result = subprocess.run(
