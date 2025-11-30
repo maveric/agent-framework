@@ -78,18 +78,62 @@ def director_node(state: OrchestratorState, config: Dict[str, Any] = None) -> Di
 
 
 def _mock_decompose(objective: str) -> List[Task]:
-    """Mock decomposition for testing."""
-    print("MOCK: Decomposing objective without LLM")
+    """Mock decomposition for testing - creates realistic task breakdown."""
+    print(f"MOCK: Decomposing '{objective}' without LLM", flush=True)
+    
+    # Generate base IDs
+    base_id = uuid.uuid4().hex[:6]
+    plan_id = f"task_{base_id}_plan"
+    impl_id = f"task_{base_id}_impl"
+    test_id = f"task_{base_id}_test"
+    
     return [
+        # Task 1: Planning
         Task(
-            id=f"task_{uuid.uuid4().hex[:8]}",
-            component="hello_world",
+            id=plan_id,
+            component="api",
+            phase=TaskPhase.PLAN,
+            status=TaskStatus.PLANNED,
+            assigned_worker_profile=WorkerProfile.PLANNER,
+            description="Design API architecture and endpoints",
+            acceptance_criteria=[
+                "Architecture document created",
+                "Endpoints documented"
+            ],
+            depends_on=[],
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        ),
+        # Task 2: Implementation (depends on plan)
+        Task(
+            id=impl_id,
+            component="api",
             phase=TaskPhase.BUILD,
             status=TaskStatus.PLANNED,
             assigned_worker_profile=WorkerProfile.CODER,
-            description="Write a hello world script",
-            acceptance_criteria=["Script prints 'Hello, World!'"],
-            depends_on=[],
+            description="Implement API endpoints based on design",
+            acceptance_criteria=[
+                "API code implemented",
+                "Unit tests written",
+                "Code committed"
+            ],
+            depends_on=[plan_id],
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        ),
+        # Task 3: Testing (depends on implementation)
+        Task(
+            id=test_id,
+            component="api",
+            phase=TaskPhase.TEST,
+            status=TaskStatus.PLANNED,
+            assigned_worker_profile=WorkerProfile.TESTER,
+            description="Validate API meets acceptance criteria",
+            acceptance_criteria=[
+                "Integration tests pass",
+                "API responds correctly"
+            ],
+            depends_on=[impl_id],
             created_at=datetime.now(),
             updated_at=datetime.now()
         )

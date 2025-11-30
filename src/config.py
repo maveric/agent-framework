@@ -42,20 +42,26 @@ class OrchestratorConfig:
     
     # Model configurations for different roles
     director_model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model_name="claude-3-5-sonnet-20241022",
+        # provider="anthropic",
+        # model_name="claude-3-5-sonnet-20241022",
+        provider="openai",
+        model_name="gpt-5.1",
         temperature=0.7
     ))
     
     worker_model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model_name="claude-3-5-sonnet-20241022",
+        # provider="anthropic",
+        # model_name="claude-3-5-sonnet-20241022",
+        provider="openai",
+        model_name="gpt-5.1",
         temperature=0.5
     ))
     
     strategist_model: ModelConfig = field(default_factory=lambda: ModelConfig(
-        provider="anthropic",
-        model_name="claude-3-5-sonnet-20241022",
+        # provider="anthropic",
+        # model_name="claude-3-5-sonnet-20241022",
+        provider="openai",
+        model_name="gpt-5.1",
         temperature=0.3
     ))
     
