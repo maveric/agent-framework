@@ -125,6 +125,7 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
         # Store WorktreeManager instance and workspace path
         "_wt_manager": wt_manager,
         "_workspace_path": str(workspace_path),
+        "_orch_config": config,  # Store config so nodes can access model settings
     }
     
     # Run graph with thread_id for checkpointing

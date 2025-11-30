@@ -116,9 +116,12 @@ def _execute_react_loop(
     if mock_mode:
         return _mock_execution(task)
 
-    # Get orchestrator config and model config
+    # Get orchestrator config from state (has user's model settings)
     from config import OrchestratorConfig
-    orch_config = OrchestratorConfig()  # This reads from config.py with user's gpt-5.1
+    orch_config = state.get("_orch_config")
+    if not orch_config:
+        orch_config = OrchestratorConfig()
+    
     model_config = orch_config.worker_model
     
     # Setup LLM with worker model config

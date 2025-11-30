@@ -54,7 +54,7 @@ def director_node(state: OrchestratorState, config: Dict[str, Any] = None) -> Di
         if mock_mode:
             new_tasks = _mock_decompose(objective)
         else:
-            new_tasks = _decompose_objective(objective, state.get("spec", {}))
+            new_tasks = _decompose_objective(objective, state.get("spec", {}), state)
         # Convert to dicts for state
         tasks = [_task_to_dict(t) for t in new_tasks]
         # Fall through to readiness evaluation
@@ -140,10 +140,14 @@ def _mock_decompose(objective: str) -> List[Task]:
     ]
 
 
-def _decompose_objective(objective: str, spec: Dict[str, Any]) -> List[Task]:
+def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, Any]) -> List[Task]:
     """Use LLM to decompose objective into tasks."""
-    from config import OrchestratorConfig
-    orch_config = OrchestratorConfig()
+    # Get orchestrator config from state (has user's model settings)
+    orch_config = state.get("_orch_config")
+    if not orch_config:
+        from config import OrchestratorConfig
+        orch_config = OrchestratorConfig()
+    
     model_config = orch_config.director_model
     
     llm = get_llm(model_config)
