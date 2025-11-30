@@ -45,6 +45,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             model=model_config.model_name,
             temperature=model_config.temperature,
             max_tokens=model_config.max_tokens,
+            # max_completion_tokens=model_config.max_tokens,  # Removed to prevent conflict
             api_key=os.getenv("OPENAI_API_KEY")
         )
     elif provider == "google":

@@ -45,7 +45,7 @@ class OrchestratorConfig:
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
         provider="openai",
-        model_name="gpt-5.1",
+        model_name="gpt-4o",
         temperature=0.7
     ))
     

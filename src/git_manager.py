@@ -108,22 +108,43 @@ class WorktreeManager:
         
         wt_path = self._worktree_path(task_id, retry_number)
         
+        # Check if worktree already exists and is valid
+        if wt_path.exists() and (wt_path / ".git").exists():
+            return WorktreeInfo(
+                task_id=task_id,
+                branch_name=branch_name,
+                worktree_path=wt_path,
+                status=WorktreeStatus.ACTIVE,
+                retry_number=retry_number,
+                previous_branch=previous_branch
+            )
+            
+        # Cleanup existing directory if it exists but isn't a valid worktree
+        if wt_path.exists():
+            import shutil
+            try:
+                shutil.rmtree(wt_path)
+            except Exception:
+                pass
+        
         # Create worktree directory
         wt_path.mkdir(parents=True, exist_ok=True)
         
         # Git operations
         try:
-            # Create branch from main
+            # Create branch from main (ignore error if exists)
             subprocess.run(
                 ["git", "branch", branch_name, self.main_branch],
                 cwd=self.repo_path,
-                check=True,
+                check=False,
                 capture_output=True
             )
             
             # Create worktree
+            # Use --force to handle cases where git thinks the branch is already checked out
+            # (e.g. from a deleted worktree that wasn't pruned)
             subprocess.run(
-                ["git", "worktree", "add", str(wt_path), branch_name],
+                ["git", "worktree", "add", "--force", str(wt_path), branch_name],
                 cwd=self.repo_path,
                 check=True,
                 capture_output=True
@@ -131,7 +152,11 @@ class WorktreeManager:
         except subprocess.CalledProcessError as e:
             # Cleanup on failure
             if wt_path.exists():
-                wt_path.rmdir()
+                import shutil
+                try:
+                    shutil.rmtree(wt_path)
+                except Exception:
+                    pass
             raise RuntimeError(f"Failed to create worktree: {e.stderr.decode() if e.stderr else str(e)}")
         
         # Track it
@@ -305,6 +330,22 @@ def initialize_git_repo(repo_path: Path) -> None:
         )
         subprocess.run(
             ["git", "config", "user.email", "orchestrator@agent.local"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True
+        )
+        
+        # Create initial commit to establish 'main' branch
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "Initial commit"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True
+        )
+        
+        # Ensure we are on 'main' branch (some systems default to master)
+        subprocess.run(
+            ["git", "branch", "-M", "main"],
             cwd=repo_path,
             check=True,
             capture_output=True

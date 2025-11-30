@@ -13,6 +13,10 @@ import os
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Disable LangSmith tracing by default to prevent warnings
+if "LANGCHAIN_TRACING_V2" not in os.environ:
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 from langgraph_definition import create_orchestrator, start_run
 from config import OrchestratorConfig, ModelConfig
 

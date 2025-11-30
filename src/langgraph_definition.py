@@ -125,14 +125,19 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
         "mock_mode": config.mock_mode if config else False,
         # Store WorktreeManager instance and workspace path
         "_wt_manager": wt_manager,
+        "_wt_manager": wt_manager,
         "_workspace_path": str(workspace_path),
-        "_orch_config": config,  # Store config so nodes can access model settings
+        "orch_config": config,  # Store config (public key to ensure persistence)
     }
+    
+    # Generate unique thread ID for this run
+    thread_id = str(uuid.uuid4())
+    print(f"Starting run with thread_id: {thread_id}", flush=True)
     
     # Run graph with thread_id for checkpointing
     run_config = {
         "configurable": {
-            "thread_id": initial_state["run_id"],
+            "thread_id": thread_id,
             "mock_mode": config.mock_mode if config else False
         }
     }

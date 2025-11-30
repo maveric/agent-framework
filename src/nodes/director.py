@@ -35,7 +35,9 @@ class DecompositionResponse(BaseModel):
     tasks: List[TaskDefinition]
 
 
-def director_node(state: OrchestratorState, config: Dict[str, Any] = None) -> Dict[str, Any]:
+from langchain_core.runnables import RunnableConfig
+
+def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
     """
     Director: Task decomposition and readiness evaluation.
     """
@@ -143,7 +145,7 @@ def _mock_decompose(objective: str) -> List[Task]:
 def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, Any]) -> List[Task]:
     """Use LLM to decompose objective into tasks."""
     # Get orchestrator config from state (has user's model settings)
-    orch_config = state.get("_orch_config")
+    orch_config = state.get("orch_config")
     if not orch_config:
         from config import OrchestratorConfig
         orch_config = OrchestratorConfig()
