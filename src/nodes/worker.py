@@ -622,42 +622,18 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     tools = [read_file, write_file, list_directory, run_python, run_shell]
     tools = _bind_tools(tools, state)
     
-    system_prompt = """You are a QA engineer who writes AND EXECUTES tests.
+    system_prompt = """You are a QA engineer who RUNS tests, not just documents them.
     
-    CRITICAL INSTRUCTIONS:
-    1. You MUST actually RUN tests using `run_python` or `run_shell` - DO NOT just document what tests "should" pass.
-    2. Use `run_python` to execute Python test files or inline test code.
-    3. Use `run_shell` to run npm test, pytest, or other test runners.
-    4. Capture the ACTUAL output from test execution (pass/fail, errors, stack traces).
-    5. Write test results to a file (e.g., `test_results.md`) with:
-       - Command you ran
-       - ACTUAL output from execution
-       - Pass/fail counts
-       - Any errors or failures
-    6. If tests fail, include the actual error messages and stack traces.
-    7. DO NOT write optimistic "all tests passed" reports without actually running them.
-    8. Keep chat responses concise (e.g., "Running tests...", "Writing results...").
-    
-    Example good test report format:
-    ```
-    # Test Results
-    
-    ## Test Command
-    `python -m pytest test_calculator.py -v`
-    
-    ## Execution Output
-    ```
-    test_add PASSED
-    test_subtract PASSED
-    test_multiply FAILED
-    AssertionError: expected 6, got 5
-    ```
-    
-    ## Summary
-    - Passed: 2
-    - Failed: 1
-    - Total: 3
-    ```
+    CRITICAL RULES:
+    1. MUST use `run_python` or `run_shell` to actually EXECUTE tests
+    2. DO NOT write "all tests passed" without running them
+    3. Capture the REAL output (errors, pass/fail, counts)
+    4. Write results to test_results.md with:
+       - Command run (e.g., "python test.py")
+       - Actual execution output
+       - Pass/fail summary
+    5. If tests fail, include real error messages
+    6. Keep chat brief ("Running tests...", "Writing results...")
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
