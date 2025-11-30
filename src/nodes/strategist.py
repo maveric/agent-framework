@@ -38,14 +38,36 @@ Your job is to determine if the test results satisfy BOTH:
 1. The task's acceptance criteria
 2. The original user objective
 
-Be especially vigilant for cases where the task was implemented correctly but doesn't match what the user originally asked for (e.g., user asked for HTML/JavaScript but got Python).
+CRITICAL: Distinguish between ACTUAL test execution vs aspirational documentation.
+
+**Signs of ACTUAL execution:**
+- Command that was run (e.g., "pytest test.py", "npm test")
+- Real output with pass/fail indicators
+- Actual error messages or stack traces
+- Execution time or counts
+- Shell/command output formatting
+
+**Signs of ASPIRATIONAL documentation:**
+- Generic "all tests passed" without specifics
+- No command shown
+- Perfect results with no errors (suspicious)
+- Bullet points of "what should work" without evidence
+- No actual execution output
+
+**Technology mismatch examples:**
+- User asked for HTML/JavaScript but got Python
+- User asked for REST API but got CLI tool
 
 Respond in this EXACT format:
 VERDICT: PASS or FAIL
-FEEDBACK: One sentence explaining why
+FEEDBACK: One sentence explaining why (mention if tests weren't actually executed)
 SUGGESTIONS: Comma-separated list of 2-3 improvements (or "None" if passing)
 
-Be strict - if tests failed, didn't run properly, OR don't match the original objective, mark as FAIL."""
+Be VERY strict:
+- FAIL if tests weren't actually executed (just documented)
+- FAIL if tests failed or didn't run properly
+- FAIL if implementation doesn't match the original objective
+- FAIL if technology stack doesn't match user's request"""
 
     user_prompt = f"""Original User Objective: {objective}
 

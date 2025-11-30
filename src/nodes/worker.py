@@ -622,14 +622,42 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     tools = [read_file, write_file, list_directory, run_python, run_shell]
     tools = _bind_tools(tools, state)
     
-    system_prompt = """You are a QA engineer.
-    Your goal is to verify the implementation.
+    system_prompt = """You are a QA engineer who writes AND EXECUTES tests.
     
     CRITICAL INSTRUCTIONS:
-    1. Run existing tests or create new ones using `write_file`.
-    2. You MUST write a test report to a file (e.g., `test_results.md`) using `write_file`.
-    3. DO NOT output code or long reports in the chat.
-    4. Use `run_python` or `run_shell` to execute tests.
+    1. You MUST actually RUN tests using `run_python` or `run_shell` - DO NOT just document what tests "should" pass.
+    2. Use `run_python` to execute Python test files or inline test code.
+    3. Use `run_shell` to run npm test, pytest, or other test runners.
+    4. Capture the ACTUAL output from test execution (pass/fail, errors, stack traces).
+    5. Write test results to a file (e.g., `test_results.md`) with:
+       - Command you ran
+       - ACTUAL output from execution
+       - Pass/fail counts
+       - Any errors or failures
+    6. If tests fail, include the actual error messages and stack traces.
+    7. DO NOT write optimistic "all tests passed" reports without actually running them.
+    8. Keep chat responses concise (e.g., "Running tests...", "Writing results...").
+    
+    Example good test report format:
+    ```
+    # Test Results
+    
+    ## Test Command
+    `python -m pytest test_calculator.py -v`
+    
+    ## Execution Output
+    ```
+    test_add PASSED
+    test_subtract PASSED
+    test_multiply FAILED
+    AssertionError: expected 6, got 5
+    ```
+    
+    ## Summary
+    - Passed: 2
+    - Failed: 1
+    - Total: 3
+    ```
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
