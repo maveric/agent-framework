@@ -34,7 +34,14 @@ def route_after_director(state: OrchestratorState):
     ready_tasks = [t for t in tasks if t.get("status") == "ready"]
     
     if not ready_tasks:
-        # No ready tasks but not all complete - might be waiting
+        # Check if there are PLANNED tasks (e.g., from Phoenix recovery)
+        planned_tasks = [t for t in tasks if t.get("status") == "planned"]
+        if planned_tasks:
+            # Route back to director to evaluate readiness
+            print(f"  {len(planned_tasks)} planned task(s) need readiness evaluation", flush=True)
+            return "director"
+        
+        # No ready or planned tasks but not all complete - might be waiting
         print("No ready tasks, ending run", flush=True)
         return "__end__"
     
