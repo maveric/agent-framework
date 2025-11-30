@@ -835,15 +835,17 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     
     CRITICAL RULES:
     1. MUST use `run_python` or `run_shell` to actually EXECUTE tests
-    2. Focus on unit testing THIS feature (not integration)
-    3. Capture REAL output (errors, pass/fail, counts)
-    4. Write results to `agents-work/test-results/test-{task_desc}.md` with:
+    2. Use `python` (not `python3`) for compatibility
+    3. Verify file existence with `list_directory` before running tests
+    4. Focus on unit testing THIS feature (not integration)
+    5. Capture REAL output (errors, pass/fail, counts)
+    6. Write results to `agents-work/test-results/test-{task_desc}.md` with:
        - Command run
        - Actual execution output
        - Pass/fail summary
-    5. Create the `agents-work/test-results/` directory if it does not exist
-    6. If tests fail, include real error messages
-    7. For small projects (HTML/JS), document manual tests if no test framework available
+    7. Create the `agents-work/test-results/` directory if it does not exist
+    8. If tests fail, include real error messages
+    9. For small projects (HTML/JS), document manual tests if no test framework available
     
     The agents-work/ folder is for agent artifacts, NOT project code.
     Write test files to the project root, but test RESULTS to agents-work/test-results/.
