@@ -576,6 +576,16 @@ def _qa_verdict_to_dict(q: QAVerdict) -> Dict[str, Any]:
     }
 
 def _dict_to_qa_verdict(data: Dict[str, Any]) -> QAVerdict:
+    # Support simplified format from LLM-based evaluation: {passed, feedback, suggestions}
+    if "overall_feedback" not in data and "feedback" in data:
+        return QAVerdict(
+            passed=data["passed"],
+            criterion_results=[],
+            overall_feedback=data.get("feedback", "No feedback provided"),
+            suggested_focus=", ".join(data.get("suggestions", [])) if data.get("suggestions") else None,
+        )
+    
+    # Original detailed format
     return QAVerdict(
         passed=data["passed"],
         criterion_results=[_dict_to_criterion_result(c) for c in data.get("criterion_results", [])],

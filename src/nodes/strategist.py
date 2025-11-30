@@ -14,9 +14,9 @@ from llm_client import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
-def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, config: Any) -> Dict[str, Any]:
+def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, objective: str, config: Any) -> Dict[str, Any]:
     """
-    Use LLM to evaluate test results against acceptance criteria.
+    Use LLM to evaluate test results against acceptance criteria AND original objective.
     
     Returns:
         dict with keys: passed (bool), feedback (str), suggestions (list)
@@ -34,16 +34,22 @@ def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: 
     
     system_prompt = """You are a QA engineer evaluating test results.
 
-Your job is to determine if the test results satisfy the acceptance criteria.
+Your job is to determine if the test results satisfy BOTH:
+1. The task's acceptance criteria
+2. The original user objective
+
+Be especially vigilant for cases where the task was implemented correctly but doesn't match what the user originally asked for (e.g., user asked for HTML/JavaScript but got Python).
 
 Respond in this EXACT format:
 VERDICT: PASS or FAIL
 FEEDBACK: One sentence explaining why
 SUGGESTIONS: Comma-separated list of 2-3 improvements (or "None" if passing)
 
-Be strict - if tests failed or didn't run properly, mark as FAIL."""
+Be strict - if tests failed, didn't run properly, OR don't match the original objective, mark as FAIL."""
 
-    user_prompt = f"""Task Description: {task.get('description', 'N/A')}
+    user_prompt = f"""Original User Objective: {objective}
+
+Task Description: {task.get('description', 'N/A')}
 
 Acceptance Criteria:
 {criteria_text}
@@ -51,7 +57,7 @@ Acceptance Criteria:
 Test Results:
 {test_results_content}
 
-Evaluate whether the test results satisfy ALL acceptance criteria."""
+Evaluate whether the test results satisfy ALL acceptance criteria AND match the original user objective."""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -152,8 +158,9 @@ def strategist_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dic
                         test_results_content = test_results_path.read_text(encoding="utf-8")
                         print(f"  Reading test results from {test_results_path.name}", flush=True)
                         
-                        # Use LLM to evaluate
-                        qa_verdict = _evaluate_test_results_with_llm(task, test_results_content, state.get("orch_config"))
+                        # Use LLM to evaluate against objective AND acceptance criteria
+                        objective = state.get("objective", "Unknown objective")
+                        qa_verdict = _evaluate_test_results_with_llm(task, test_results_content, objective, state.get("orch_config"))
                         qa_passed = qa_verdict["passed"]
                         failure_reason = qa_verdict["feedback"] if not qa_passed else None
                         
