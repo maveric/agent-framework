@@ -35,6 +35,8 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
     """
     Worker: Execute task based on profile.
     """
+    print(f"DEBUG: worker_node state keys: {list(state.keys())}", flush=True)
+    print(f"DEBUG: worker_node _workspace_path: {state.get('_workspace_path')}", flush=True)
     task_id = state.get("task_id")
     if not task_id:
         return {}
