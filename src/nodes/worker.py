@@ -668,7 +668,7 @@ def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] 
     tools = _bind_tools(tools, state)
     
     system_prompt = """You are a researcher.
-    Your goal is to gather information.
+    Your goal is to gather information."""
     return WorkerResult(
         status="complete",
         result_path=result_path,
@@ -840,19 +840,6 @@ def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] 
     
     system_prompt = """You are a researcher.
     Your goal is to gather information.
-    """
-    
-    return _execute_react_loop(task, tools, system_prompt, state, config)
-
-
-def _write_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Writing tasks."""
-    tools = [read_file, write_file, list_directory]
-    tools = _bind_tools(tools, state)
-    
-    system_prompt = """You are a technical writer.
-    Your goal is to write documentation.
-    
     CRITICAL INSTRUCTIONS:
     1. You MUST write documentation to files (e.g., `README.md`) using `write_file`.
     2. DO NOT output documentation in the chat.
