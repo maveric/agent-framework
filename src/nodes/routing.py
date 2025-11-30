@@ -21,9 +21,9 @@ def route_after_director(state: OrchestratorState):
     if not tasks:
         return "__end__"
     
-    # Check if all tasks are complete
+    # Check if all tasks are complete (failed tasks can be retried by Phoenix)
     all_complete = all(
-        t.get("status") in ["complete", "failed", "abandoned"] 
+        t.get("status") in ["complete", "abandoned"] 
         for t in tasks
     )
     if all_complete:
