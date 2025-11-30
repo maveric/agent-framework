@@ -156,7 +156,12 @@ def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, 
     structured_llm = llm.with_structured_output(DecompositionResponse)
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "Decompose the objective into 2-5 tasks. Use phases: plan, build, test."),
+        ("system", """Decompose the objective into 2-5 tasks following these phases:
+- PLAN phase: Design, architecture, planning tasks (use planner_worker)
+- BUILD phase: Implementation, coding tasks (use code_worker)
+- TEST phase: Testing, validation, QA tasks (use test_worker)
+
+IMPORTANT: Include at least one TEST phase task to validate the implementation."""),
         ("user", "Objective: {objective}")
     ])
     
@@ -164,12 +169,30 @@ def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, 
         response = structured_llm.invoke(prompt.format(objective=objective))
         tasks = []
         for t_def in response.tasks:
+            # Map string phase to enum
+            phase_map = {
+                "plan": TaskPhase.PLAN,
+                "build": TaskPhase.BUILD,
+                "test": TaskPhase.TEST
+            }
+            phase = phase_map.get(t_def.phase.lower(), TaskPhase.BUILD)
+            
+            # Map worker profile string to enum
+            profile_map = {
+                "planner_worker": WorkerProfile.PLANNER,
+                "code_worker": WorkerProfile.CODER,
+                "test_worker": WorkerProfile.TESTER,
+                "research_worker": WorkerProfile.RESEARCHER,
+                "writer_worker": WorkerProfile.WRITER
+            }
+            worker_profile = profile_map.get(t_def.worker_profile, WorkerProfile.CODER)
+            
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
                 component=t_def.component,
-                phase=TaskPhase.BUILD,
+                phase=phase,
                 status=TaskStatus.PLANNED,
-                assigned_worker_profile=WorkerProfile.CODER,
+                assigned_worker_profile=worker_profile,
                 description=t_def.description,
                 acceptance_criteria=t_def.acceptance_criteria,
                 depends_on=[],
