@@ -162,18 +162,27 @@ def strategist_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dic
             
             # Check 3: For TEST tasks, evaluate actual test results
             elif task.get("phase") == "test":
-                # Try to read test results file
+                # Try to read test results file from agents-work/test-results/
                 test_results_path = None
                 files_modified = aar.get("files_modified", [])
                 
                 # Look for test results in modified files
+                # Prefer agents-work/test-results/ location
                 for file in files_modified:
-                    if "test" in file.lower() and file.endswith(".md"):
-                        # Construct path to file in worktree
+                    if "agents-work/test-results" in file and file.endswith(".md"):
                         if workspace_path:
                             worktree_path = Path(workspace_path) / ".worktrees" / task_id
                             test_results_path = worktree_path / file
                             break
+                
+                # Fallback: check for test_results.md in root (old location)
+                if not test_results_path:
+                    for file in files_modified:
+                        if "test" in file.lower() and file.endswith(".md"):
+                            if workspace_path:
+                                worktree_path = Path(workspace_path) / ".worktrees" / task_id
+                                test_results_path = worktree_path / file
+                                break
                 
                 if test_results_path and test_results_path.exists():
                     try:

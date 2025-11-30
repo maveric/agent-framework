@@ -604,14 +604,22 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     tools = [read_file, write_file, list_directory, file_exists]
     tools = _bind_tools(tools, state)
     
-    system_prompt = """You are a technical architect.
+    # Create a clean filename from task description
+    task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
+    task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
+    
+    system_prompt = f"""You are a technical architect.
     Your goal is to create a detailed implementation plan.
     
     CRITICAL INSTRUCTIONS:
     1. Explore the codebase first using `list_directory` and `read_file`.
-    2. You MUST write your plan to a file (e.g., `plan.md`) using `write_file`.
-    3. DO NOT output the plan in the chat.
-    4. Keep chat responses concise.
+    2. You MUST write your plan to `agents-work/plans/plan-{task_desc}.md` using `write_file`.
+    3. Create the `agents-work/plans/` directory if it doesn't exist.
+    4. DO NOT output the plan in the chat.
+    5. Keep chat responses concise.
+    
+    The agents-work/ folder is for agent artifacts, NOT project code.
+    Your plan should reference actual project files, but be written to agents-work/plans/.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
@@ -622,7 +630,11 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     tools = [read_file, write_file, list_directory, run_python, run_shell]
     tools = _bind_tools(tools, state)
     
-    system_prompt = """You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
+    # Create a clean filename from task description
+    task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
+    task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
+    
+    system_prompt = f"""You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
     
     Your job: Test THIS feature in isolation, not integration between features.
     
@@ -630,12 +642,16 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     1. MUST use `run_python` or `run_shell` to actually EXECUTE tests
     2. Focus on unit testing THIS feature (not integration)
     3. Capture REAL output (errors, pass/fail, counts)
-    4. Write results to test_results.md with:
+    4. Write results to `agents-work/test-results/test-{task_desc}.md` with:
        - Command run
        - Actual execution output
        - Pass/fail summary
-    5. If tests fail, include real error messages
-    6. For small projects (HTML/JS), document manual tests if no test framework available
+    5. Create the `agents-work/test-results/` directory if it doesn't exist
+    6. If tests fail, include real error messages
+    7. For small projects (HTML/JS), document manual tests if no test framework available
+    
+    The agents-work/ folder is for agent artifacts, NOT project code.
+    Write test files to the project root, but test RESULTS to agents-work/test-results/.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
