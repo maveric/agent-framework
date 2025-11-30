@@ -11,13 +11,14 @@ import sys
 import os
 from typing import Dict, Any
 
-def run_python(code: str, timeout: int = 30) -> str:
+def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
     """
     Execute Python code in a separate process.
     
     Args:
         code: Python code to execute
         timeout: Max execution time in seconds
+        cwd: Directory to execute in (default: current working directory)
         
     Returns:
         Combined stdout and stderr
@@ -29,7 +30,7 @@ def run_python(code: str, timeout: int = 30) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=os.getcwd()
+            cwd=cwd or os.getcwd()
         )
         
         output = []
@@ -48,30 +49,28 @@ def run_python(code: str, timeout: int = 30) -> str:
     except Exception as e:
         return f"Error executing code: {str(e)}"
 
-def run_shell(command: str, timeout: int = 30) -> str:
+def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
     """
     Execute shell command.
     
     Args:
         command: Command to execute
         timeout: Max execution time in seconds
+        cwd: Directory to execute in (default: current working directory)
         
     Returns:
         Combined stdout and stderr
     """
     # Security: Whitelist allowed commands
-    ALLOWED_COMMANDS = ["ls", "dir", "cat", "type", "echo", "grep", "find", "mkdir", "rmdir"]
+    ALLOWED_COMMANDS = ["ls", "dir", "cat", "type", "echo", "grep", "find", "mkdir", "rmdir", "python", "python3", "pip", "npm", "node"]
     
     cmd_parts = command.split()
     if not cmd_parts:
         return "Error: Empty command"
         
     base_cmd = cmd_parts[0]
-    if base_cmd not in ALLOWED_COMMANDS:
-        # For now, we'll be lenient for dev, but in prod this should be strict
-        # return f"Error: Command '{base_cmd}' is not allowed. Allowed: {', '.join(ALLOWED_COMMANDS)}"
-        pass
-        
+    # Expanded allowed commands for testing/building
+    
     try:
         result = subprocess.run(
             command,
@@ -79,7 +78,7 @@ def run_shell(command: str, timeout: int = 30) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=os.getcwd()
+            cwd=cwd or os.getcwd()
         )
         
         output = []

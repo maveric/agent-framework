@@ -513,6 +513,18 @@ def _create_delete_file_wrapper(tool, worktree_path):
         return tool(path, confirm, root=worktree_path)
     return delete_file_wrapper
 
+def _create_run_python_wrapper(tool, worktree_path):
+    def run_python_wrapper(code: str, timeout: int = 30):
+        """Execute Python code."""
+        return tool(code, timeout, cwd=worktree_path)
+    return run_python_wrapper
+
+def _create_run_shell_wrapper(tool, worktree_path):
+    def run_shell_wrapper(command: str, timeout: int = 30):
+        """Execute shell command."""
+        return tool(command, timeout, cwd=worktree_path)
+    return run_shell_wrapper
+
 def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
     """Bind tools to the current worktree path."""
     worktree_path = state.get("worktree_path")
@@ -550,6 +562,14 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
             elif tool.__name__ == "delete_file":
                 wrapper = _create_delete_file_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="delete_file"))
+                
+        elif tool.__name__ in ["run_python", "run_shell"]:
+            if tool.__name__ == "run_python":
+                wrapper = _create_run_python_wrapper(tool, worktree_path)
+                bound_tools.append(StructuredTool.from_function(wrapper, name="run_python"))
+            elif tool.__name__ == "run_shell":
+                wrapper = _create_run_shell_wrapper(tool, worktree_path)
+                bound_tools.append(StructuredTool.from_function(wrapper, name="run_shell"))
                 
         else:
             bound_tools.append(tool)
