@@ -21,6 +21,8 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Agent Orchestrator")
     parser.add_argument("--objective", type=str, default="Build a simple API", help="What to build")
+    parser.add_argument("--workspace", type=str, default="../workspace", 
+                       help="Directory where the project will be built (default: ../workspace)")
     parser.add_argument("--mock-run", action="store_true", help="Run in mock mode (no LLM)")
     parser.add_argument("--provider", type=str, default="openai", 
                        choices=["openai", "anthropic", "google"],
@@ -69,6 +71,7 @@ def main():
     print(f"AGENT ORCHESTRATOR")
     print(f"{'='*60}")
     print(f"Objective: {args.objective}")
+    print(f"Workspace: {args.workspace}")
     print(f"Provider: {args.provider}")
     print(f"Model: {model_name}")
     print(f"Mock Mode: {args.mock_run}")
@@ -76,7 +79,11 @@ def main():
     
     # Run orchestrator
     try:
-        result = start_run(args.objective, config=config)
+        result = start_run(
+            objective=args.objective,
+            workspace=args.workspace,
+            config=config
+        )
         
         print(f"\n{'='*60}")
         print("RUN COMPLETE")

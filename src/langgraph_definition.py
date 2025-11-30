@@ -70,12 +70,13 @@ def create_orchestrator(
     return graph.compile(checkpointer=checkpointer)
 
 
-def start_run(objective: str, spec: dict = None, config: OrchestratorConfig = None):
+def start_run(objective: str, workspace: str = "../workspace", spec: dict = None, config: OrchestratorConfig = None):
     """
     Start an orchestrator run.
     
     Args:
         objective: What to build
+        workspace: Directory where project will be built
         spec: Optional specification
         config: Orchestrator configuration
     
@@ -89,16 +90,21 @@ def start_run(objective: str, spec: dict = None, config: OrchestratorConfig = No
     
     orchestrator = create_orchestrator(config)
     
-    # Initialize git repository structure
-    repo_path = Path.cwd()
-    worktree_base = repo_path / "worktrees"
+    # Setup workspace directory
+    workspace_path = Path(workspace).resolve()
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Initializing workspace: {workspace_path}")
+    
+    # Initialize git repository in workspace
+    initialize_git_repo(workspace_path)
+    
+    # Create worktree manager for workspace
+    worktree_base = workspace_path / ".worktrees"
     worktree_base.mkdir(exist_ok=True)
     
-    initialize_git_repo(repo_path)
-    
-    # Create WorktreeManager instance
     wt_manager = WorktreeManager(
-        repo_path=repo_path,
+        repo_path=workspace_path,
         worktree_base=worktree_base
     )
     
@@ -116,8 +122,9 @@ def start_run(objective: str, spec: dict = None, config: OrchestratorConfig = No
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat(),
         "mock_mode": config.mock_mode if config else False,
-        # Store WorktreeManager instance (will be passed through state)
+        # Store WorktreeManager instance and workspace path
         "_wt_manager": wt_manager,
+        "_workspace_path": str(workspace_path),
     }
     
     # Run graph with thread_id for checkpointing

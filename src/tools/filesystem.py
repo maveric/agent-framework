@@ -12,15 +12,23 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 # Security: Restrict operations to the workspace root
+# This will be overridden by passing workspace_path in tool calls
 WORKSPACE_ROOT = Path(os.getcwd())
 
-def _is_safe_path(path: str) -> bool:
+def _get_workspace_root() -> Path:
+    """Get workspace root from environment or current directory."""
+    # This can be overridden via context
+    return WORKSPACE_ROOT
+
+def _is_safe_path(path: str, workspace_root: Path = None) -> bool:
     """Ensure path is within workspace."""
+    if workspace_root is None:
+        workspace_root = _get_workspace_root()
     try:
         # Resolve absolute path
-        target = (WORKSPACE_ROOT / path).resolve()
+        target = (workspace_root / path).resolve()
         # Check if it starts with workspace root
-        return str(target).startswith(str(WORKSPACE_ROOT))
+        return str(target).startswith(str(workspace_root))
     except Exception:
         return False
 
