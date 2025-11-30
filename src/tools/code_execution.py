@@ -26,7 +26,7 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
     # Prepare environment with CWD in PYTHONPATH
     env = os.environ.copy()
     if cwd:
-        env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
         
     print(f"DEBUG: run_python cwd={cwd}", flush=True)
     print(f"DEBUG: run_python PYTHONPATH={env.get('PYTHONPATH')}", flush=True)
@@ -83,7 +83,7 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
     # Prepare environment with CWD in PYTHONPATH
     env = os.environ.copy()
     if cwd:
-        env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
     
     print(f"DEBUG: run_shell command='{command}' cwd={cwd}", flush=True)
     

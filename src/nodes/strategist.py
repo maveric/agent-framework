@@ -120,7 +120,9 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
         }
 
 
-def strategist_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
+from langchain_core.runnables import RunnableConfig
+
+def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
     """
     Strategist: LLM-based QA evaluation of test results.
     """

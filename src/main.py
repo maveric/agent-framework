@@ -90,10 +90,29 @@ def main():
     
     # Run orchestrator
     try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        import sqlite3
+        
+        # Setup persistent DB
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
+        
+        # We need to pass checkpointer to start_run, but start_run currently calls create_orchestrator internally.
+        # We should modify start_run to accept checkpointer or modify create_orchestrator call inside it.
+        # Actually, start_run in langgraph_definition.py calls create_orchestrator(config).
+        # We need to modify start_run in langgraph_definition.py to accept checkpointer too.
+        # For now, let's just modify start_run in langgraph_definition.py as well.
+        
+        # Wait, I can't modify langgraph_definition.py from here.
+        # I should have modified start_run in langgraph_definition.py earlier.
+        # Let's check langgraph_definition.py content again.
+        
         result = start_run(
             objective=args.objective,
             workspace=args.workspace,
-            config=config
+            config=config,
+            checkpointer=checkpointer
         )
         
         print(f"\n{'='*60}")

@@ -613,7 +613,7 @@ def _dict_to_aar(data: Dict[str, Any]) -> AAR:
         time_spent_estimate=data.get("time_spent_estimate"),
     )
 
-def _task_to_dict(t: Task) -> Dict[str, Any]:
+def task_to_dict(t: Task) -> Dict[str, Any]:
     return {
         "id": t.id,
         "component": t.component,

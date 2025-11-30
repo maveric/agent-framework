@@ -73,7 +73,12 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
     target_path = _get_workspace_root(root) / path
     
     # Create parent directories if needed
-    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        # This can happen if a file exists with the same name as a directory
+        # We'll try to proceed, but the open() call might fail if the path is invalid
+        pass
     
     with open(target_path, "w", encoding=encoding) as f:
         f.write(content)

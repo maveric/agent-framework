@@ -7,7 +7,11 @@ Assembles all nodes into a StateGraph.
 """
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.sqlite import SqliteSaver
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+except ImportError:
+    SqliteSaver = None
+
 from langgraph.checkpoint.memory import MemorySaver
 
 from state import OrchestratorState
@@ -24,14 +28,16 @@ from config import OrchestratorConfig
 
 def create_orchestrator(
     config: OrchestratorConfig = None,
-    checkpoint_mode: str = "memory"
+    checkpoint_mode: str = "memory",
+    checkpointer = None
 ):
     """
     Create and compile the orchestrator graph.
     
     Args:
         config: Orchestrator configuration
-        checkpoint_mode: "sqlite" or "memory"
+        checkpoint_mode: "sqlite" or "memory" (ignored if checkpointer is provided)
+        checkpointer: Optional pre-configured checkpointer
     
     Returns:
         Compiled StateGraph
@@ -62,16 +68,19 @@ def create_orchestrator(
     graph.add_edge("strategist", "director")
     
     # Setup checkpointing
-    if checkpoint_mode == "sqlite":
-        checkpointer = SqliteSaver.from_conn_string(":memory:")
-    else:
-        checkpointer = MemorySaver()
+    if checkpointer is None:
+        if checkpoint_mode == "sqlite" and SqliteSaver is not None:
+            checkpointer = SqliteSaver.from_conn_string(":memory:")
+        else:
+            if checkpoint_mode == "sqlite":
+                print("Warning: SqliteSaver not available, falling back to MemorySaver")
+            checkpointer = MemorySaver()
     
     # Compile
     return graph.compile(checkpointer=checkpointer)
 
 
-def start_run(objective: str, workspace: str = "../workspace", spec: dict = None, config: OrchestratorConfig = None):
+def start_run(objective: str, workspace: str = "../workspace", spec: dict = None, config: OrchestratorConfig = None, checkpointer = None):
     """
     Start an orchestrator run.
     
@@ -80,6 +89,7 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
         workspace: Directory where project will be built
         spec: Optional specification
         config: Orchestrator configuration
+        checkpointer: Optional checkpointer
     
     Returns:
         Final state
@@ -89,7 +99,7 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
     from pathlib import Path
     from git_manager import WorktreeManager, initialize_git_repo
     
-    orchestrator = create_orchestrator(config)
+    orchestrator = create_orchestrator(config, checkpointer=checkpointer)
     
     # Setup workspace directory
     workspace_path = Path(workspace).resolve()
