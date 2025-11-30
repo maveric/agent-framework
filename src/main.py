@@ -21,8 +21,8 @@ def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Agent Orchestrator")
     parser.add_argument("--objective", type=str, default="Build a simple API", help="What to build")
-    parser.add_argument("--workspace", type=str, default="../workspace", 
-                       help="Directory where the project will be built (default: ../workspace)")
+    parser.add_argument("--workspace", type=str, default="projects/workspace", 
+                       help="Directory where the project will be built (default: projects/workspace)")
     parser.add_argument("--mock-run", action="store_true", help="Run in mock mode (no LLM)")
     parser.add_argument("--provider", type=str, default="openai", 
                        choices=["openai", "anthropic", "google"],

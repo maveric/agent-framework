@@ -7,6 +7,7 @@ __pycache__/
 .venv/
 venv/
 ENV/
+.env
 
 # IDEs
 .vscode/
@@ -22,3 +23,4 @@ worktrees/
 # Node modules (if any frontend exists)
 node_modules/
 **/node_modules/
+llm_logs/

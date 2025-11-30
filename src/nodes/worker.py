@@ -21,6 +21,7 @@ from orchestrator_types import (
 )
 from llm_client import get_llm
 from config import OrchestratorConfig
+from llm_logger import log_llm_request, validate_request_size
 
 # Import tools
 from tools import (
@@ -52,13 +53,14 @@ def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[st
         result = handler(task, state, config)
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        print(f"Worker Error: {e}", flush=True)
+        error_details = traceback.format_exc()
+        print(f"Worker Error Details:", flush=True)
+        print(error_details, flush=True)
         # Return failed result
         result = WorkerResult(
             status="failed",
             result_path="",
-            aar=AAR(summary=f"Error: {e}", approach="failed", challenges=[], decisions_made=[], files_modified=[])
+            aar=AAR(summary=f"Error: {str(e)[:200]}", approach="failed", challenges=[], decisions_made=[], files_modified=[])
         )
     
     # Commit changes if task completed successfully
@@ -124,8 +126,15 @@ def _execute_react_loop(
     
     model_config = orch_config.worker_model
     
-    # Setup LLM with worker model config
-    llm = get_llm(model_config)
+    # Setup LLM with worker model config and limit max tokens
+    from config import ModelConfig
+    limited_config = ModelConfig(
+        provider=model_config.provider,
+        model_name=model_config.model_name,
+        temperature=model_config.temperature,
+        max_tokens=1000  # Reasonable output limit (was causing 812K token requests!)
+    )
+    llm = get_llm(limited_config)
     
     # Create react agent (no state_modifier needed - we'll include system message in inputs)
     agent = create_react_agent(llm, tools)
@@ -138,11 +147,31 @@ def _execute_react_loop(
         ]
     }
     
+    # Log request for debugging
+    try:
+        stats = log_llm_request(task.id, inputs["messages"], tools, {})
+        print(f"  [LOG] Request: {stats['message_count']} msgs, {stats['total_chars']} chars (~{stats['estimated_tokens']} tokens)", flush=True)
+        print(f"  [LOG] Tools: {stats['tool_count']}, Log: {stats['log_file']}", flush=True)
+        
+        # Validate size (max 100K chars to prevent issues)
+        validate_request_size(stats, max_chars=100000)
+    except Exception as e:
+        print(f"  [LOG ERROR]: {e}", flush=True)
+        if "too large" in str(e).lower():
+            raise
+    
     print(f"  Starting ReAct agent...", flush=True)
     
     # Invoke agent
     # We use a recursion limit to prevent infinite loops
-    result = agent.invoke(inputs, config={"recursion_limit": 50})
+    try:
+        result = agent.invoke(inputs, config={"recursion_limit": 50})
+    except Exception as e:
+        # Log token info if it's a rate limit error
+        if "812" in str(e) or "token" in str(e).lower():
+            print(f"  DEBUG: Token error - inspecting agent state", flush=True)
+            print(f"  DEBUG: Inputs had {total_chars} chars", flush=True)
+        raise
     
     # Extract results
     messages = result["messages"]
@@ -198,19 +227,16 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     """Coding tasks."""
     from tools import git_commit, git_status, git_diff, git_add
     
+    # Use fewer tools to reduce token usage
     tools = [
-        read_file, write_file, list_directory, file_exists, 
-        run_python, run_shell,
-        git_commit, git_status, git_diff, git_add
+        read_file, write_file, list_directory, file_exists
     ]
     
-    system_prompt = """You are a senior software engineer. 
-    Your goal is to implement the requested feature or fix.
-    
-    1. Explore the codebase first using list_directory and read_file.
-    2. Create or modify files using write_file.
-    3. Verify your work using run_python or run_shell.
-    4. When done, provide a final summary.
+    # Shorter system prompt to reduce tokens
+    system_prompt = """You are a software engineer. Implement the requested feature.
+    1. Use list_directory and read_file to explore.
+    2. Use write_file to create/modify files.
+    3. Keep responses concise.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
