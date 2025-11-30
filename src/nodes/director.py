@@ -61,12 +61,36 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
         tasks = [_task_to_dict(t) for t in new_tasks]
         # Fall through to readiness evaluation
     
-    # Evaluate task readiness
+    # Evaluate task readiness and handle failed tasks (Phoenix recovery)
     all_tasks = [_dict_to_task(t) for t in tasks]
     updates = []
     
+    MAX_RETRIES = 2  # Maximum number of retries before giving up
+    
     for task in all_tasks:
-        if task.status == TaskStatus.PLANNED:
+        # Phoenix recovery: Retry failed tasks
+        if task.status == TaskStatus.FAILED:
+            retry_count = task.retry_count if task.retry_count is not None else 0
+            
+            if retry_count < MAX_RETRIES:
+                # Reset task for retry
+                print(f"Phoenix: Retrying task {task.id} (attempt {retry_count + 1}/{MAX_RETRIES})", flush=True)
+                task.status = TaskStatus.PLANNED
+                task.retry_count = retry_count + 1
+                task.updated_at = datetime.now()
+                
+                # Include QA feedback in the task for context
+                if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
+                    feedback = task.qa_verdict.overall_feedback
+                    print(f"  Previous failure: {feedback[:100]}", flush=True)
+                
+                updates.append(_task_to_dict(task))
+            else:
+                print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
+                # Keep as failed permanently
+        
+        # Standard readiness evaluation for planned tasks
+        elif task.status == TaskStatus.PLANNED:
             new_status = _evaluate_readiness(task, all_tasks)
             if new_status != task.status:
                 task.status = new_status
