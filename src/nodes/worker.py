@@ -601,7 +601,7 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
 
 def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Planning tasks."""
-    tools = [read_file, list_directory, file_exists]
+    tools = [read_file, write_file, list_directory, file_exists]
     tools = _bind_tools(tools, state)
     
     system_prompt = """You are a technical architect.
