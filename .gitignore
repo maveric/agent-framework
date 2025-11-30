@@ -1,7 +1,24 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
-.env
+venv/
+ENV/
+
+# IDEs
 .vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+checkpoints/
+worktrees/
 *.log
-*.sqlite
+
+# Node modules (if any frontend exists)
+node_modules/
+**/node_modules/
