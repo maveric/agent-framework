@@ -23,6 +23,11 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
     Returns:
         Combined stdout and stderr
     """
+    # Prepare environment with CWD in PYTHONPATH
+    env = os.environ.copy()
+    if cwd:
+        env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
+        
     try:
         # Run in a separate process
         result = subprocess.run(
@@ -30,7 +35,8 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=cwd or os.getcwd()
+            cwd=cwd or os.getcwd(),
+            env=env
         )
         
         output = []
@@ -71,6 +77,11 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
     base_cmd = cmd_parts[0]
     # Expanded allowed commands for testing/building
     
+    # Prepare environment with CWD in PYTHONPATH
+    env = os.environ.copy()
+    if cwd:
+        env["PYTHONPATH"] = cwd + os.pathsep + env.get("PYTHONPATH", "")
+    
     try:
         result = subprocess.run(
             command,
@@ -78,7 +89,8 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=cwd or os.getcwd()
+            cwd=cwd or os.getcwd(),
+            env=env
         )
         
         output = []
