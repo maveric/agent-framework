@@ -389,7 +389,8 @@ def _execute_react_loop(
     
     # Log request for debugging
     try:
-        stats = log_llm_request(task.id, inputs["messages"], tools, {})
+        workspace_path = state.get("_workspace_path")
+        stats = log_llm_request(task.id, inputs["messages"], tools, {}, workspace_path=workspace_path)
         print(f"  [LOG] Request: {stats['message_count']} msgs, {stats['total_chars']} chars (~{stats['estimated_tokens']} tokens)", flush=True)
         print(f"  [LOG] Tools: {stats['tool_count']}, Log: {stats['log_file']}", flush=True)
         
@@ -455,7 +456,7 @@ def _execute_react_loop(
                         print(f"  [Fallback Error] Failed to write response file: {e}", flush=True)
     
     # Log the response
-    workspace_path = state.get("workspace_path")
+    workspace_path = state.get("_workspace_path")
     result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
     print(f"  [LOG] Files modified: {files_modified}", flush=True)
             
