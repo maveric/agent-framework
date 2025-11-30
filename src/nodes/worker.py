@@ -116,11 +116,15 @@ def _execute_react_loop(
     if mock_mode:
         return _mock_execution(task)
 
-    # Setup LLM
+    # Setup LLM and create agent
     llm = get_llm()
     
-    # Create agent
-    agent = create_react_agent(llm, tools, state_modifier=system_prompt)
+    # Create react agent with system message
+    agent = create_react_agent(
+        llm, 
+        tools,
+        messages_modifier=SystemMessage(content=system_prompt)
+    )
     
     # Initial input
     inputs = {

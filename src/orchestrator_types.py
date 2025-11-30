@@ -26,6 +26,7 @@ class TaskStatus(str, Enum):
     ACTIVE = "active"             # Worker currently executing
     AWAITING_QA = "awaiting_qa"   # Artifact produced, waiting for Strategist
     FAILED_QA = "failed_qa"       # Strategist rejected, candidate for Phoenix
+    FAILED = "failed"             # Task execution failed (error/exception)
     COMPLETE = "complete"         # Strategist approved, task done
     WAITING_HUMAN = "waiting_human"  # Needs human input (max retries or ambiguity)
     ABANDONED = "abandoned"       # Removed due to re-planning

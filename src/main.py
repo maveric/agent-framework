@@ -34,6 +34,11 @@ def main():
     # Load environment variables
     from dotenv import load_dotenv
     load_dotenv()
+    
+    # Disable LangSmith tracing by default (unless explicitly enabled)
+    import os
+    if "LANGCHAIN_TRACING_V2" not in os.environ:
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
     # Determine model name
     if args.model:
