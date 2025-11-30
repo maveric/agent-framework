@@ -99,7 +99,7 @@ def main():
         tasks = result.get('tasks', [])
         print(f"Total tasks: {len(tasks)}")
         for t in tasks:
-            status_icon = "✓ " if t.get('status') == 'complete' else "✗"
+            status_icon = "[OK]" if t.get('status') == 'complete' else "[X]"
             print(f"{status_icon} {t.get('id')}: {t.get('status')} - {t.get('description')}")
             
         completed = [t for t in tasks if t.get('status') == 'complete']

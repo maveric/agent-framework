@@ -46,7 +46,7 @@ def strategist_node(state: Dict[str, Any]) -> Dict[str, Any]:
             
             # Update task status
             if qa_passed:
-                print(f"  ✓ QA Passed", flush=True)
+                print(f"  [QA PASS]", flush=True)
                 task["status"] = "complete"
                 
                 # Merge to main if not in mock mode
@@ -55,13 +55,13 @@ def strategist_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     try:
                         result = wt_manager.merge_to_main(task_id)
                         if result.success:
-                            print(f"  ✓ Merged to main", flush=True)
+                            print(f"  [MERGED]", flush=True)
                         else:
-                            print(f"  ⚠ Merge conflict", flush=True)
+                            print(f"  [CONFLICT]", flush=True)
                     except Exception as e:
-                        print(f"  ⚠ Merge failed: {e}", flush=True)
+                        print(f"  [MERGE ERROR]: {e}", flush=True)
             else:
-                print(f"  ✗ QA Failed: {failure_reason}", flush=True)
+                print(f"  [QA FAIL]: {failure_reason}", flush=True)
                 task["status"] = "failed"
             
             task["updated_at"] = datetime.now().isoformat()
