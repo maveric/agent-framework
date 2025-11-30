@@ -455,7 +455,8 @@ def _execute_react_loop(
                         print(f"  [Fallback Error] Failed to write response file: {e}", flush=True)
     
     # Log the response
-    log_llm_response(task.id, result, files_modified, status="complete")
+    workspace_path = state.get("workspace_path")
+    result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
     print(f"  [LOG] Files modified: {files_modified}", flush=True)
             
     # Generate AAR
@@ -470,7 +471,7 @@ def _execute_react_loop(
     
     return WorkerResult(
         status="complete",
-        result_path=f"llm_logs/response_{task.id}_{timestamp}.json",
+        result_path=result_path,
         aar=aar
     )
 

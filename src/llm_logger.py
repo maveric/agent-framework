@@ -7,25 +7,49 @@ Logs all requests sent to LLM for debugging.
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-LOG_DIR = Path("llm_logs")
-LOG_DIR.mkdir(exist_ok=True)
+# Default log directory (fallback if workspace not provided)
+DEFAULT_LOG_DIR = Path("llm_logs")
+
+def _get_log_dir(task_id: str, workspace_path: Optional[str] = None) -> Path:
+    """
+    Get the log directory for a task.
+    
+    If workspace_path is provided, logs go to: workspace/.llm_logs/{task_id}/
+    Otherwise, logs go to: llm_logs/
+    """
+    if workspace_path:
+        log_dir = Path(workspace_path) / ".llm_logs" / task_id
+    else:
+        log_dir = DEFAULT_LOG_DIR
+    
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
 
 def log_llm_request(
     task_id: str,
     messages: List[Any],
     tools: List[Any],
-    config: Dict[str, Any] = None
+    config: Dict[str, Any] = None,
+    workspace_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Log an LLM request and return stats.
+    
+    Args:
+        task_id: Task identifier
+        messages: Messages being sent to LLM
+        tools: Tools available to LLM
+        config: Optional config dict
+        workspace_path: Path to workspace (for organized logging)
     
     Returns:
         dict with 'total_chars', 'estimated_tokens', 'message_count', 'tool_count'
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"request_{task_id}_{timestamp}.json"
+    log_dir = _get_log_dir(task_id, workspace_path)
+    log_file = log_dir / f"request_{timestamp}.json"
     
     # Calculate stats
     total_chars = sum(len(str(m.content)) for m in messages if hasattr(m, 'content'))
@@ -92,8 +116,9 @@ def log_llm_response(
     task_id: str,
     result: Any,
     files_modified: List[str] = None,
-    status: str = "unknown"
-) -> None:
+    status: str = "unknown",
+    workspace_path: Optional[str] = None
+) -> str:
     """
     Log the LLM response and execution results.
     
@@ -102,9 +127,14 @@ def log_llm_response(
         result: Agent result object
         files_modified: List of files that were modified
         status: Task status (complete/failed)
+        workspace_path: Path to workspace (for organized logging)
+    
+    Returns:
+        Path to log file
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"response_{task_id}_{timestamp}.json"
+    log_dir = _get_log_dir(task_id, workspace_path)
+    log_file = log_dir / f"response_{timestamp}.json"
     
     # Extract messages from result
     messages = []
@@ -130,3 +160,5 @@ def log_llm_response(
         json.dump(log_entry, f, indent=2)
     
     print(f"  [LOG] Response saved: {log_file}", flush=True)
+    return str(log_file)
+

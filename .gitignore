@@ -24,3 +24,4 @@ worktrees/
 node_modules/
 **/node_modules/
 llm_logs/
+.llm_logs/
