@@ -288,6 +288,7 @@ def initialize_git_repo(repo_path: Path) -> None:
     git_dir = repo_path / ".git"
     
     if not git_dir.exists():
+        # Initialize repo
         subprocess.run(
             ["git", "init"],
             cwd=repo_path,
@@ -295,9 +296,15 @@ def initialize_git_repo(repo_path: Path) -> None:
             capture_output=True
         )
         
-        # Create initial commit
+        # Configure git user for this repo
         subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", "Initial commit"],
+            ["git", "config", "user.name", "Agent Orchestrator"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "orchestrator@agent.local"],
             cwd=repo_path,
             check=True,
             capture_output=True
