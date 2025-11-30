@@ -40,17 +40,19 @@ def main():
     if "LANGCHAIN_TRACING_V2" not in os.environ:
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-    # Determine model name
+    # Determine model configuration
     if args.model:
+        # User specified model via CLI
         model_name = args.model
     else:
-        # Default models per provider
-        defaults = {
-            "openai": "gpt-4o",
-            "anthropic": "claude-3-5-sonnet-20241022",
-            "google": "gemini-1.5-pro"
-        }
-        model_name = defaults[args.provider]
+        # Use defaults from config.py (respects user's config.py edits)
+        default_config = OrchestratorConfig()
+        if args.provider == "openai":
+            model_name = default_config.worker_model.model_name if default_config.worker_model.provider == "openai" else "gpt-4o"
+        elif args.provider == "anthropic":
+            model_name = default_config.worker_model.model_name if default_config.worker_model.provider == "anthropic" else "claude-3-5-sonnet-20241022"
+        else:  # google
+            model_name = "gemini-1.5-pro"
     
     # Create config
     config = OrchestratorConfig(

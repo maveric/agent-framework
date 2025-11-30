@@ -119,12 +119,15 @@ def _execute_react_loop(
     # Setup LLM and create agent
     llm = get_llm()
     
-    # Create react agent with system message
-    agent = create_react_agent(
-        llm, 
-        tools,
-        messages_modifier=SystemMessage(content=system_prompt)
-    )
+    # Create state modifier function to inject system prompt
+    def add_system_message(state):
+        messages = list(state["messages"])
+        if not any(isinstance(m, SystemMessage) for m in messages):
+            messages.insert(0, SystemMessage(content=system_prompt))
+        return {"messages": messages}
+    
+    # Create react agent with state modifier
+    agent = create_react_agent(llm, tools, state_modifier=add_system_message)
     
     # Initial input
     inputs = {
