@@ -21,7 +21,7 @@ from orchestrator_types import (
 )
 from llm_client import get_llm
 from config import OrchestratorConfig
-from llm_logger import log_llm_request, validate_request_size
+from llm_logger import log_llm_request, validate_request_size, log_llm_response
 
 # Import tools
 from tools import (
@@ -192,6 +192,13 @@ def _execute_react_loop(
             for tc in msg.tool_calls:
                 if tc["name"] in ["write_file", "append_file"]:
                     files_modified.append(tc["args"].get("path"))
+    
+    # Remove duplicates
+    files_modified = list(set(files_modified))
+    
+    # Log the response
+    log_llm_response(task.id, result, files_modified, status="complete")
+    print(f"  [LOG] Files modified: {files_modified}", flush=True)
             
     # Generate AAR
     return WorkerResult(
@@ -202,7 +209,7 @@ def _execute_react_loop(
             approach="ReAct agent execution",
             challenges=[],
             decisions_made=[],
-            files_modified=list(set(files_modified))
+            files_modified=files_modified
         )
     )
 

@@ -86,3 +86,47 @@ def validate_request_size(stats: Dict[str, Any], max_chars: int = 100000) -> Non
             f"Maximum allowed: {max_chars} chars. "
             f"Check log file: {stats['log_file']}"
         )
+
+
+def log_llm_response(
+    task_id: str,
+    result: Any,
+    files_modified: List[str] = None,
+    status: str = "unknown"
+) -> None:
+    """
+    Log the LLM response and execution results.
+    
+    Args:
+        task_id: Task identifier
+        result: Agent result object
+        files_modified: List of files that were modified
+        status: Task status (complete/failed)
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"response_{task_id}_{timestamp}.json"
+    
+    # Extract messages from result
+    messages = []
+    if hasattr(result, 'get') and 'messages' in result:
+        for msg in result['messages']:
+            messages.append({
+                "type": type(msg).__name__,
+                "content": str(msg.content)[:1000] + "..." if len(str(getattr(msg, 'content', ''))) > 1000 else str(getattr(msg, 'content', '')),
+                "tool_calls": getattr(msg, 'tool_calls', [])[:3] if hasattr(msg, 'tool_calls') else []
+            })
+    
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "task_id": task_id,
+        "status": status,
+        "files_modified": files_modified or [],
+        "file_count": len(files_modified) if files_modified else 0,
+        "messages": messages,
+        "message_count": len(messages)
+    }
+    
+    with open(log_file, 'w', encoding='utf-8') as f:
+        json.dump(log_entry, f, indent=2)
+    
+    print(f"  [LOG] Response saved: {log_file}", flush=True)
