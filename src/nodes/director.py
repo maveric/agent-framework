@@ -219,11 +219,35 @@ IMPORTANT: Include at least one TEST phase task to validate the implementation."
                 assigned_worker_profile=worker_profile,
                 description=t_def.description,
                 acceptance_criteria=t_def.acceptance_criteria,
-                depends_on=[],
+                depends_on=[],  # Will be populated after all tasks created
                 created_at=datetime.now(),
                 updated_at=datetime.now()
             )
             tasks.append(task)
+        
+        # Infer dependencies based on phases:
+        # - BUILD tasks depend on all PLAN tasks in same component
+        # - TEST tasks depend on all BUILD tasks in same component
+        for task in tasks:
+            if task.phase == TaskPhase.BUILD:
+                # Depend on all PLAN tasks in same component
+                task.depends_on = [
+                    t.id for t in tasks 
+                    if t.phase == TaskPhase.PLAN and t.component == task.component
+                ]
+            elif task.phase == TaskPhase.TEST:
+                # Depend on all BUILD tasks in same component
+                task.depends_on = [
+                    t.id for t in tasks 
+                    if t.phase == TaskPhase.BUILD and t.component == task.component
+                ]
+                # If no BUILD tasks in component, depend on PLAN tasks
+                if not task.depends_on:
+                    task.depends_on = [
+                        t.id for t in tasks 
+                        if t.phase == TaskPhase.PLAN and t.component == task.component
+                    ]
+        
         return tasks
     except Exception as e:
         print(f"Decomposition error: {e}")
