@@ -11,6 +11,7 @@ interface Task {
     status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked';
     phase: string;
     component: string;
+    assigned_worker_profile?: string;
     depends_on: string[];
     acceptance_criteria?: string[];
     result_path?: string;
@@ -44,6 +45,7 @@ interface RunDetails {
     tasks: Task[];
     insights: any[];
     design_log: any[];
+    workspace_path?: string;
 }
 
 export function RunDetails() {
@@ -156,6 +158,22 @@ export function RunDetails() {
                         <div className="prose prose-invert max-w-none">
                             <p className="text-lg text-slate-300">{run.objective}</p>
                         </div>
+                        <div className="flex items-center gap-4 text-sm text-slate-400 mt-1">
+                            <div className="flex items-center gap-1">
+                                <Activity className="w-4 h-4" />
+                                <span>{run.strategy_status}</span>
+                            </div>
+                            <div>•</div>
+                            <div>{run.tasks.length} tasks</div>
+                            {run.workspace_path && (
+                                <>
+                                    <div>•</div>
+                                    <div className="font-mono text-xs bg-slate-800 px-2 py-0.5 rounded border border-slate-700 select-all">
+                                        {run.workspace_path}
+                                    </div>
+                                </>
+                            )}
+                        </div>
                     </div>
                     <div className="flex flex-col items-end text-sm text-slate-500">
                         <div className="flex items-center gap-2 mb-1">
@@ -197,6 +215,11 @@ export function RunDetails() {
                                 <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.component}</span>
                                     <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
+                                    {task.assigned_worker_profile && (
+                                        <span className="bg-purple-900/30 text-purple-300 px-1.5 py-0.5 rounded border border-purple-800/50">
+                                            {task.assigned_worker_profile}
+                                        </span>
+                                    )}
                                 </div>
 
                                 {task.depends_on && task.depends_on.length > 0 && (

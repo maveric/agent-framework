@@ -663,8 +663,9 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     system_prompt = """You are a software engineer. Implement the requested feature.
     
     CRITICAL INSTRUCTIONS:
-    1. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
-    2. Read any plan files to understand the intended design and architecture.
+    1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` in the project root. You MUST follow it exactly for API routes, data models, and file structure.
+    2. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
+    3. Read any plan files to understand the intended design and architecture.
     3. You MUST use `write_file` to create or modify files.
     4. DO NOT output code in the chat. Only use the tools.
     5. You are working in a real file system. Your changes are persistent.
@@ -672,6 +673,17 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     7. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
     
     Remember: agents-work/ has plans and test results. Your code goes in the project root.
+    
+    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
+    - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
+    - If you need to verify your code with a server, use the **TEST HARNESS PATTERN**:
+      Write a Python script that:
+      1. Starts the server in a subprocess (`subprocess.Popen`)
+      2. Waits for it to be ready (poll localhost)
+      3. Sends requests to test it
+      4. Kills the subprocess
+      5. Prints the results
+    - ALWAYS ensure your commands exit.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
@@ -691,9 +703,13 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
                 - description: str
                 - phase: "build" | "test" | "research"
                 - component: str (e.g., "backend", "frontend")
-                - assigned_worker_profile: "code_worker" | "test_worker" | "research_worker" | "writer_worker"
                 - depends_on: List[str] (optional, titles of other subtasks this depends on)
         """
+        import os  # Import os locally to ensure it's available
+        # Enforce Design by Contract: Check if design_spec.md exists
+        if not os.path.exists("design_spec.md"):
+            return "ERROR: You MUST write 'design_spec.md' to the project root BEFORE creating subtasks. This is a strict requirement."
+
         return f"Created {len(subtasks)} subtasks."
 
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
@@ -708,8 +724,10 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     
     CRITICAL INSTRUCTIONS:
     1. Explore the codebase first using `list_directory` and `read_file`.
-    2. **DESIGN BY CONTRACT**: Before creating subtasks, you MUST write a `design_spec.md` file to the project root (or `agents-work/specs/`).
-       - This file MUST define:
+    2. **DESIGN BY CONTRACT**: Before creating subtasks, you MUST write a specification file.
+       - **FILENAME**: `design_spec.md` (EXACTLY this name).
+       - **LOCATION**: Project root directory (e.g., `./design_spec.md`).
+       - **CONTENT**:
          - API Routes (methods, paths, parameters, responses)
          - Data Models (JSON schemas, database tables)
          - File Structure (where files should go)
@@ -741,10 +759,11 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     Your job: Test THIS feature in isolation, not integration between features.
     
     CRITICAL RULES:
-    1. MUST use `run_python` or `run_shell` to actually EXECUTE tests
-    2. Use `python` (not `python3`) for compatibility
-    3. Verify file existence with `list_directory` before running tests
-    4. Focus on unit testing THIS feature (not integration)
+    1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` to know what to test (routes, selectors, etc.).
+    2. MUST use `run_python` or `run_shell` to actually EXECUTE tests
+    3. Use `python` (not `python3`) for compatibility
+    4. Verify file existence with `list_directory` before running tests
+    5. Focus on unit testing THIS feature (not integration)
     5. Capture REAL output (errors, pass/fail, counts)
     6. Write results to `agents-work/test-results/test-{task_desc}.md` with:
        - Command run

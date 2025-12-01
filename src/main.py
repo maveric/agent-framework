@@ -35,12 +35,46 @@ def main():
     
     args = parser.parse_args()
     
+    # Setup logging
+    import datetime
+    
+    # Create logs directory in the workspace
+    workspace_path = os.path.abspath(args.workspace)
+    log_dir = os.path.join(workspace_path, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Create log file with timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"run_{timestamp}.log")
+    
+    class Tee:
+        def __init__(self, *files):
+            self.files = files
+            
+        def write(self, obj):
+            for f in self.files:
+                f.write(obj)
+                f.flush()
+                
+        def flush(self):
+            for f in self.files:
+                f.flush()
+                
+    # Open log file and redirect stdout/stderr
+    f = open(log_file, 'w', encoding='utf-8')
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    
+    sys.stdout = Tee(sys.stdout, f)
+    sys.stderr = Tee(sys.stderr, f)
+    
+    print(f"Logging to: {log_file}")
+    
     # Load environment variables
     from dotenv import load_dotenv
     load_dotenv()
     
     # Disable LangSmith tracing by default (unless explicitly enabled)
-    import os
     if "LANGCHAIN_TRACING_V2" not in os.environ:
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
 

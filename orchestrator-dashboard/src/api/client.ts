@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// In development, use relative URLs to go through Vite's proxy
+// In production, or if VITE_API_URL is set, use that
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '' : 'http://localhost:8085');
 
 interface FetchOptions extends RequestInit {
     params?: Record<string, string>;

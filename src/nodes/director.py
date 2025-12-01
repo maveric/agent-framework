@@ -65,7 +65,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
     all_tasks = [_dict_to_task(t) for t in tasks]
     updates = []
     
-    MAX_RETRIES = 2  # Maximum number of retries before giving up
+    MAX_RETRIES = 4  # Maximum number of retries before giving up
     
     for task in all_tasks:
         # Phoenix recovery: Retry failed tasks

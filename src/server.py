@@ -49,6 +49,7 @@ class RunSummary(BaseModel):
     updated_at: str
     task_counts: Dict[str, int]
     tags: List[str]
+    workspace_path: Optional[str] = None
 
 class HumanResolution(BaseModel):
     action: str
@@ -220,7 +221,8 @@ async def list_runs():
                     created_at=created_at,
                     updated_at=updated_at,
                     task_counts=task_counts,
-                    tags=state.get("tags", [])
+                    tags=state.get("tags", []),
+                    workspace_path=state.get("_workspace_path", "")
                 ))
                 
                 # Also update runs_index for other endpoints
@@ -291,7 +293,8 @@ async def get_run(run_id: str):
                 "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])],
                 "insights": state.get("insights", []),
                 "design_log": state.get("design_log", []),
-                "guardian": state.get("guardian", {})
+                "guardian": state.get("guardian", {}),
+                "workspace_path": state.get("_workspace_path", "")
             }
     except Exception as e:
         logger.error(f"Error getting run details: {e}")
@@ -440,4 +443,4 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8085)

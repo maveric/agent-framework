@@ -110,6 +110,17 @@ class WorktreeManager:
         
         # Check if worktree already exists and is valid
         if wt_path.exists() and (wt_path / ".git").exists():
+            # Sync with main to ensure we have latest fixes (e.g. from Phoenix recovery)
+            try:
+                subprocess.run(
+                    ["git", "merge", self.main_branch, "-m", f"Sync {self.main_branch} into {branch_name}"],
+                    cwd=wt_path,
+                    check=False,  # Don't crash on conflict, just warn
+                    capture_output=True
+                )
+            except Exception as e:
+                print(f"  Warning: Failed to sync worktree with main: {e}")
+
             return WorktreeInfo(
                 task_id=task_id,
                 branch_name=branch_name,

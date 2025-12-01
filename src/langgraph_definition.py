@@ -151,5 +151,11 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
             "mock_mode": config.mock_mode if config else False
         }
     }
-    result = orchestrator.invoke(initial_state, config=run_config)
+    result = orchestrator.invoke(initial_state, config={
+        "recursion_limit": 100,
+        "configurable": {
+            "thread_id": thread_id,
+            "mock_mode": config.mock_mode if config else False
+        }
+    })
     return result

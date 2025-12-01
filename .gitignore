@@ -11,19 +11,6 @@ ENV/
 
 # IDEs
 .vscode/
-.idea/
-*.swp
-*.swo
-
-# Project specific
-checkpoints/
-worktrees/
-*.log
-
-# Node modules (if any frontend exists)
-node_modules/
-**/node_modules/
-llm_logs/
 .llm_logs/
 *.db
 *.db-shm
@@ -31,3 +18,11 @@ llm_logs/
 temp_test_env/
 dist/
 projects/
+
+# Node
+node_modules/
+.node/
+
+# Logs
+logs/
+error.log

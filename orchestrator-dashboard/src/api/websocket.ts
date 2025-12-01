@@ -22,7 +22,11 @@ export interface WSMessage {
     timestamp: string;
 }
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+// In development, use relative WebSocket URL to go through Vite's proxy
+// In production, or if VITE_WS_URL is set, use that
+const WS_URL = import.meta.env.VITE_WS_URL || (import.meta.env.DEV
+    ? `ws://${window.location.host}/ws`
+    : 'ws://localhost:8085/ws');
 
 interface WebSocketState {
     socket: WebSocket | null;
