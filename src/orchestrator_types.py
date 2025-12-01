@@ -465,7 +465,7 @@ class BlackboardState:
             "spec": self.spec,
             "design_log": [_design_decision_to_dict(d) for d in self.design_log],
             "insights": [_insight_to_dict(i) for i in self.insights],
-            "tasks": [_task_to_dict(t) for t in self.tasks],
+            "tasks": [task_to_dict(t) for t in self.tasks],
             "task_memories": self.task_memories,  # BaseMessage is already serializable
             "filesystem_index": self.filesystem_index,
             "guardian": _guardian_state_to_dict(self.guardian),

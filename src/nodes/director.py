@@ -11,7 +11,7 @@ from datetime import datetime
 from state import OrchestratorState
 from orchestrator_types import (
     Task, TaskStatus, TaskPhase, WorkerProfile,
-    _dict_to_task, _task_to_dict
+    _dict_to_task, task_to_dict
 )
 from llm_client import get_llm
 from pydantic import BaseModel, Field
@@ -58,7 +58,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
         else:
             new_tasks = _decompose_objective(objective, state.get("spec", {}), state)
         # Convert to dicts for state
-        tasks = [_task_to_dict(t) for t in new_tasks]
+        tasks = [task_to_dict(t) for t in new_tasks]
         # Fall through to readiness evaluation
     
     # Evaluate task readiness and handle failed tasks (Phoenix recovery)
@@ -84,7 +84,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                     feedback = task.qa_verdict.overall_feedback
                     print(f"  Previous failure: {feedback[:100]}", flush=True)
                 
-                updates.append(_task_to_dict(task))
+                updates.append(task_to_dict(task))
             else:
                 print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
                 # Keep as failed permanently
@@ -95,10 +95,10 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             if new_status != task.status:
                 task.status = new_status
                 task.updated_at = datetime.now()
-                updates.append(_task_to_dict(task))
+                updates.append(task_to_dict(task))
             # If it was just created (and thus not in original state), we must add it
             elif task.id not in [t["id"] for t in state.get("tasks", [])]:
-                updates.append(_task_to_dict(task))
+                updates.append(task_to_dict(task))
     
     return {"tasks": updates} if updates else {}
 

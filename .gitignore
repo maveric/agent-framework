@@ -25,3 +25,9 @@ node_modules/
 **/node_modules/
 llm_logs/
 .llm_logs/
+*.db
+*.db-shm
+*.db-wal
+temp_test_env/
+dist/
+projects/

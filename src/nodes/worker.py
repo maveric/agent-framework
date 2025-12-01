@@ -17,7 +17,7 @@ from langgraph.prebuilt import create_react_agent
 from state import OrchestratorState
 from orchestrator_types import (
     Task, TaskStatus, WorkerProfile, WorkerResult, AAR,
-    _dict_to_task, _task_to_dict, _aar_to_dict
+    _dict_to_task, task_to_dict, _aar_to_dict
 )
 from llm_client import get_llm
 from config import OrchestratorConfig
@@ -232,7 +232,7 @@ def _execute_react_loop(
 from state import OrchestratorState
 from orchestrator_types import (
     Task, TaskStatus, WorkerProfile, WorkerResult, AAR,
-    _dict_to_task, _task_to_dict, _aar_to_dict
+    _dict_to_task, task_to_dict, _aar_to_dict
 )
 from llm_client import get_llm
 from config import OrchestratorConfig
