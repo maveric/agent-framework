@@ -9,3 +9,4 @@ fastapi
 uvicorn
 python-dotenv
 websockets
+playwright

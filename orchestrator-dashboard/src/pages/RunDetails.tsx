@@ -1,7 +1,8 @@
 import { useParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle } from 'lucide-react';
+import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 interface Task {
@@ -10,6 +11,27 @@ interface Task {
     status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked';
     phase: string;
     component: string;
+    depends_on: string[];
+    acceptance_criteria?: string[];
+    result_path?: string;
+    qa_verdict?: {
+        passed: boolean;
+        overall_feedback: string;
+    };
+    aar?: {
+        summary: string;
+        approach: string;
+        challenges: string[];
+        decisions_made: string[];
+        files_modified: string[];
+        time_spent_estimate?: string;
+    };
+    escalation?: {
+        type: string;
+        reason: string;
+        suggested_action: string;
+        blocking: boolean;
+    };
 }
 
 interface RunDetails {
@@ -27,11 +49,58 @@ interface RunDetails {
 export function RunDetails() {
     const { runId } = useParams<{ runId: string }>();
 
+    const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+
+    const toggleTask = (taskId: string) => {
+        setExpandedTasks(prev => {
+            const next = new Set(prev);
+            if (next.has(taskId)) {
+                next.delete(taskId);
+            } else {
+                next.add(taskId);
+            }
+            return next;
+        });
+    };
+
     const { data: run, isLoading, error } = useQuery({
         queryKey: ['run', runId],
         queryFn: () => apiClient<RunDetails>(`/api/runs/${runId}`),
         refetchInterval: 1000, // Poll every second for real-time updates
     });
+
+    const sortedTasks = useMemo(() => {
+        if (!run?.tasks) return [];
+
+        const taskMap = new Map(run.tasks.map(t => [t.id, t]));
+        const visited = new Set<string>();
+        const visiting = new Set<string>();
+        const result: Task[] = [];
+
+        const visit = (taskId: string) => {
+            if (visited.has(taskId)) return;
+            if (visiting.has(taskId)) {
+                console.warn(`Cycle detected involving task ${taskId}`);
+                return;
+            }
+
+            const task = taskMap.get(taskId);
+            if (!task) return;
+
+            visiting.add(taskId);
+
+            if (task.depends_on && Array.isArray(task.depends_on)) {
+                task.depends_on.forEach(depId => visit(depId));
+            }
+
+            visiting.delete(taskId);
+            visited.add(taskId);
+            result.push(task);
+        };
+
+        run.tasks.forEach(t => visit(t.id));
+        return result;
+    }, [run?.tasks]);
 
     if (isLoading) {
         return (
@@ -104,10 +173,16 @@ export function RunDetails() {
                 <div className="lg:col-span-1 space-y-4">
                     <h2 className="text-lg font-semibold text-slate-200">Tasks ({run.tasks.length})</h2>
                     <div className="space-y-3">
-                        {run.tasks.map((task) => (
+                        {sortedTasks.map((task) => (
                             <div key={task.id} className="bg-slate-800 p-4 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
-                                <div className="flex items-start justify-between mb-2">
-                                    <span className="font-mono text-xs text-slate-500">{task.id}</span>
+                                <div
+                                    className="flex items-start justify-between mb-2 cursor-pointer"
+                                    onClick={() => toggleTask(task.id)}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        {expandedTasks.has(task.id) ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+                                        <span className="font-mono text-xs text-slate-500">{task.id}</span>
+                                    </div>
                                     <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
                                         task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
                                             task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
@@ -116,11 +191,104 @@ export function RunDetails() {
                                         {task.status}
                                     </span>
                                 </div>
-                                <p className="text-sm text-slate-300 line-clamp-2">{task.description}</p>
+
+                                <p className={`text-sm text-slate-300 ${expandedTasks.has(task.id) ? '' : 'line-clamp-2'}`}>{task.description}</p>
+
                                 <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.component}</span>
                                     <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
                                 </div>
+
+                                {task.depends_on && task.depends_on.length > 0 && (
+                                    <div className="mt-2 text-xs text-slate-500">
+                                        <span className="mr-1">Depends on:</span>
+                                        {task.depends_on.map(dep => (
+                                            <span key={dep} className="bg-slate-800 border border-slate-700 px-1 rounded mr-1 font-mono">
+                                                {dep}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {expandedTasks.has(task.id) && (
+                                    <div className="mt-4 pt-4 border-t border-slate-700/50 space-y-3">
+                                        {task.acceptance_criteria && task.acceptance_criteria.length > 0 && (
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-slate-400 mb-1">Acceptance Criteria</h4>
+                                                <ul className="list-disc list-inside text-xs text-slate-300 space-y-1">
+                                                    {task.acceptance_criteria.map((criteria, idx) => (
+                                                        <li key={idx}>{criteria}</li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+
+                                        {task.result_path && (
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-slate-400 mb-1">Result Path</h4>
+                                                <code className="text-xs bg-slate-900 px-2 py-1 rounded text-slate-300 block overflow-x-auto">
+                                                    {task.result_path}
+                                                </code>
+                                            </div>
+                                        )}
+
+                                        {task.qa_verdict && (
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-slate-400 mb-1">QA Verdict</h4>
+                                                <div className={`text-xs p-2 rounded ${task.qa_verdict.passed ? 'bg-green-900/20 text-green-300' : 'bg-red-900/20 text-red-300'}`}>
+                                                    <div className="font-medium mb-1">{task.qa_verdict.passed ? 'PASSED' : 'FAILED'}</div>
+                                                    <p>{task.qa_verdict.overall_feedback}</p>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {task.escalation && (
+                                            <div>
+                                                <h4 className="text-xs font-semibold text-orange-400 mb-1 flex items-center gap-2">
+                                                    <AlertCircle className="w-3 h-3" />
+                                                    Escalation: {task.escalation.type}
+                                                </h4>
+                                                <div className="bg-orange-900/20 p-2 rounded border border-orange-700/50 text-xs text-orange-200">
+                                                    <p className="font-medium mb-1">{task.escalation.reason}</p>
+                                                    <p className="text-orange-300/80">Action: {task.escalation.suggested_action}</p>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {task.aar && (
+                                            <div className="space-y-2">
+                                                <h4 className="text-xs font-semibold text-slate-400 border-b border-slate-700 pb-1">After Action Report</h4>
+
+                                                <div>
+                                                    <span className="text-xs text-slate-500 font-medium">Summary:</span>
+                                                    <p className="text-xs text-slate-300 mt-0.5">{task.aar.summary}</p>
+                                                </div>
+
+                                                {task.aar.challenges && task.aar.challenges.length > 0 && (
+                                                    <div>
+                                                        <span className="text-xs text-slate-500 font-medium">Challenges:</span>
+                                                        <ul className="list-disc list-inside text-xs text-slate-300 mt-0.5">
+                                                            {task.aar.challenges.map((c, i) => <li key={i}>{c}</li>)}
+                                                        </ul>
+                                                    </div>
+                                                )}
+
+                                                {task.aar.files_modified && task.aar.files_modified.length > 0 && (
+                                                    <div>
+                                                        <span className="text-xs text-slate-500 font-medium">Files Modified:</span>
+                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                            {task.aar.files_modified.map((f, i) => (
+                                                                <span key={i} className="bg-slate-900 px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 border border-slate-800">
+                                                                    {f.split('/').pop()}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         ))}
                         {run.tasks.length === 0 && (

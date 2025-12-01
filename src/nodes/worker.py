@@ -326,6 +326,11 @@ def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[st
     task_dict["aar"] = _aar_to_dict(result.aar) if result.aar else None
     task_dict["updated_at"] = datetime.now().isoformat()
     
+    # Persist suggested tasks if any (for hierarchical planning)
+    if result.suggested_tasks:
+        from orchestrator_types import _suggested_task_to_dict
+        task_dict["suggested_tasks"] = [_suggested_task_to_dict(st) for st in result.suggested_tasks]
+    
     return {"tasks": [task_dict]}
 
 
@@ -422,8 +427,10 @@ def _execute_react_loop(
     messages = result["messages"]
     last_message = messages[-1]
     
-    # Identify modified files from tool calls
+    # Identify modified files and suggested tasks from tool calls
     files_modified = []
+    suggested_tasks = []
+    
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
@@ -431,6 +438,32 @@ def _execute_react_loop(
                     path = tc["args"].get("path")
                     if path:
                         files_modified.append(path)
+                elif tc["name"] == "create_subtasks":
+                    subtasks = tc["args"].get("subtasks", [])
+                    print(f"  [LOG] Captured {len(subtasks)} suggested subtasks", flush=True)
+                    
+                    # Convert dicts to SuggestedTask objects
+                    from orchestrator_types import SuggestedTask, TaskPhase
+                    import uuid
+                    
+                    for st in subtasks:
+                        try:
+                            # Generate a temporary ID if not provided
+                            suggested_id = f"suggested_{uuid.uuid4().hex[:8]}"
+                            
+                            suggested_tasks.append(SuggestedTask(
+                                suggested_id=suggested_id,
+                                component=st.get("component", task.component),
+                                phase=TaskPhase(st.get("phase", "build")),
+                                description=st.get("description", st.get("title", "No description")),
+                                rationale=f"Suggested by planner task {task.id}",
+                                depends_on=st.get("depends_on", []),
+                                acceptance_criteria=st.get("acceptance_criteria", []),
+                                suggested_by_task=task.id,
+                                priority=st.get("priority", 5)
+                            ))
+                        except Exception as e:
+                            print(f"  [ERROR] Failed to parse suggested task: {e}", flush=True)
             
     # Remove duplicates
     files_modified = list(set(files_modified))
@@ -476,7 +509,8 @@ def _execute_react_loop(
     return WorkerResult(
         status="complete",
         result_path=result_path,
-        aar=aar
+        aar=aar,
+        suggested_tasks=suggested_tasks
     )
 
 
@@ -531,6 +565,12 @@ def _create_run_shell_wrapper(tool, worktree_path):
         return tool(command, timeout, cwd=worktree_path)
     return run_shell_wrapper
 
+def _create_subtasks_wrapper(tool, worktree_path):
+    def create_subtasks_wrapper(subtasks: List[Dict[str, Any]]):
+        """Create subtasks for the project."""
+        return tool(subtasks)
+    return create_subtasks_wrapper
+
 def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
     """Bind tools to the current worktree path."""
     worktree_path = state.get("worktree_path") or state.get("_workspace_path")
@@ -580,6 +620,10 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
             elif tool.__name__ == "run_shell":
                 wrapper = _create_run_shell_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="run_shell"))
+        
+        elif tool.__name__ == "create_subtasks":
+             # No binding needed for this one, just pass it through
+             bound_tools.append(tool)
                 
         else:
             bound_tools.append(tool)
@@ -635,7 +679,24 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
 
 def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Planning tasks."""
-    tools = [read_file, write_file, list_directory, file_exists]
+    
+    # Define the tool locally to avoid circular imports or global scope issues
+    def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
+        """
+        Create a list of subtasks to be executed by other workers.
+        
+        Args:
+            subtasks: List of dicts, each containing:
+                - title: str
+                - description: str
+                - phase: "build" | "test" | "research"
+                - component: str (e.g., "backend", "frontend")
+                - assigned_worker_profile: "code_worker" | "test_worker" | "research_worker" | "writer_worker"
+                - depends_on: List[str] (optional, titles of other subtasks this depends on)
+        """
+        return f"Created {len(subtasks)} subtasks."
+
+    tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
     tools = _bind_tools(tools, state)
     
     # Create a clean filename from task description
@@ -643,17 +704,24 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
     
     system_prompt = f"""You are a technical architect.
-    Your goal is to create a detailed implementation plan.
+    Your goal is to create a detailed implementation plan AND break it down into executable subtasks.
     
     CRITICAL INSTRUCTIONS:
     1. Explore the codebase first using `list_directory` and `read_file`.
-    2. You MUST write your plan to `agents-work/plans/plan-{task_desc}.md` using `write_file`.
-    3. Create the `agents-work/plans/` directory if it does not exist.
-    4. DO NOT output the plan in the chat.
-    5. Keep chat responses concise.
-    
-    The agents-work/ folder is for agent artifacts, NOT project code.
-    Your plan should reference actual project files, but be written to agents-work/plans/.
+    2. **DESIGN BY CONTRACT**: Before creating subtasks, you MUST write a `design_spec.md` file to the project root (or `agents-work/specs/`).
+       - This file MUST define:
+         - API Routes (methods, paths, parameters, responses)
+         - Data Models (JSON schemas, database tables)
+         - File Structure (where files should go)
+       - This ensures the Frontend and Backend workers agree on the contract.
+    3. You MUST write your high-level plan to `agents-work/plans/plan-{task_desc}.md` using `write_file`.
+    4. AFTER writing the spec and plan, you MUST use `create_subtasks` to define the concrete work items.
+       - Break the work down into small, manageable chunks.
+       - **MANDATORY**: In the description of every subtask, explicitly reference the spec file (e.g., "Implement API according to `design_spec.md`").
+       - Define dependencies between them using `depends_on`.
+       - Assign the correct worker profile.
+    5. DO NOT output the plan in the chat.
+    6. Keep chat responses concise.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
@@ -685,6 +753,33 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     7. Create the `agents-work/test-results/` directory if it does not exist
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
+    
+    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
+    - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
+    - If you need to test a server, use the **TEST HARNESS PATTERN**:
+      Write a Python script that:
+      1. Starts the server in a subprocess (`subprocess.Popen`)
+      2. Waits for it to be ready (poll localhost)
+      3. Sends requests to test it
+      4. Kills the subprocess
+      5. Prints the results
+    - ALWAYS ensure your commands exit.
+
+    **BROWSER/UI TESTING**:
+    - Use `playwright` (python) for browser automation.
+    - MUST use `headless=True` to avoid GUI issues.
+    - Example pattern:
+      ```python
+      from playwright.sync_api import sync_playwright
+      # ... inside test harness ...
+      with sync_playwright() as p:
+          browser = p.chromium.launch(headless=True)
+          page = browser.new_page()
+          page.goto("http://localhost:5000")
+          # Use auto-waiting selectors: page.click("text=Add Task")
+          # Verify state: assert page.is_visible(".task-card")
+          browser.close()
+      ```
     
     The agents-work/ folder is for agent artifacts, NOT project code.
     Write test files to the project root, but test RESULTS to agents-work/test-results/.

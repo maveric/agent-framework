@@ -73,18 +73,55 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             retry_count = task.retry_count if task.retry_count is not None else 0
             
             if retry_count < MAX_RETRIES:
-                # Reset task for retry
                 print(f"Phoenix: Retrying task {task.id} (attempt {retry_count + 1}/{MAX_RETRIES})", flush=True)
-                task.status = TaskStatus.PLANNED
-                task.retry_count = retry_count + 1
-                task.updated_at = datetime.now()
                 
-                # Include QA feedback in the task for context
-                if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
+                # SPECIAL HANDLING: If TEST task failed QA, spawn a FIX task
+                # Note: task.qa_verdict is a QAVerdict object, not a dict
+                if task.phase == TaskPhase.TEST and task.qa_verdict and not task.qa_verdict.passed:
                     feedback = task.qa_verdict.overall_feedback
-                    print(f"  Previous failure: {feedback[:100]}", flush=True)
-                
-                updates.append(task_to_dict(task))
+                    print(f"  QA Failure detected. Spawning fix task.", flush=True)
+                    print(f"  Feedback: {feedback[:100]}...", flush=True)
+                    
+                    # Create a new BUILD task to fix the issues
+                    fix_task_id = f"task_{uuid.uuid4().hex[:8]}"
+                    fix_task = Task(
+                        id=fix_task_id,
+                        component=task.component,
+                        phase=TaskPhase.BUILD,
+                        status=TaskStatus.PLANNED,
+                        assigned_worker_profile=WorkerProfile.CODER,  # Default to Coder for fixes
+                        description=f"Fix issues in {task.component} reported by QA.\n\nQA Feedback:\n{feedback}",
+                        acceptance_criteria=[
+                            "Address all QA feedback points",
+                            "Ensure code compiles/runs",
+                            "Verify fix before re-testing"
+                        ],
+                        depends_on=task.depends_on.copy(),  # Depend on what the test depended on
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    
+                    # Add the fix task
+                    updates.append(task_to_dict(fix_task))
+                    
+                    # Update the TEST task to depend on the fix task
+                    task.depends_on.append(fix_task_id)
+                    task.status = TaskStatus.PLANNED
+                    task.retry_count = retry_count + 1
+                    task.updated_at = datetime.now()
+                    updates.append(task_to_dict(task))
+                    
+                else:
+                    # Standard retry (reset to PLANNED)
+                    task.status = TaskStatus.PLANNED
+                    task.retry_count = retry_count + 1
+                    task.updated_at = datetime.now()
+                    
+                    # Include QA feedback in the task for context if available
+                    if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
+                        feedback = task.qa_verdict.overall_feedback
+                        print(f"  Previous failure: {feedback[:100]}", flush=True)
+                    updates.append(task_to_dict(task))
             else:
                 print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
                 # Keep as failed permanently
@@ -99,7 +136,86 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             # If it was just created (and thus not in original state), we must add it
             elif task.id not in [t["id"] for t in state.get("tasks", [])]:
                 updates.append(task_to_dict(task))
-    
+
+        # Check for suggested tasks (Hierarchical Planning) from AWAITING_QA tasks
+        # Note: We check this even if status didn't change, because the worker might have just finished
+        if task.status == TaskStatus.AWAITING_QA:
+            # We need to access the raw task dict from state to get 'suggested_tasks'
+            # because _dict_to_task might not have preserved it if it's not in the Task dataclass yet
+            # (Wait, we didn't add suggested_tasks to Task dataclass, but it IS in the dict in state)
+            raw_task = next((t for t in tasks if t["id"] == task.id), None)
+            suggested_tasks_data = raw_task.get("suggested_tasks", []) if raw_task else []
+            
+            if suggested_tasks_data:
+                print(f"Director: Found {len(suggested_tasks_data)} suggested tasks from {task.id}", flush=True)
+                
+                # We need to do this properly. Let's collect them first.
+                new_tasks_to_create = []
+                title_to_id_map = {}
+                
+                for st_data in suggested_tasks_data:
+                    new_task_id = f"task_{uuid.uuid4().hex[:8]}"
+                    title = st_data.get("description", "Untitled") # Use description as title for mapping
+                    title_to_id_map[title] = new_task_id
+                    
+                    new_tasks_to_create.append({
+                        "id": new_task_id,
+                        "data": st_data
+                    })
+                    
+                for item in new_tasks_to_create:
+                    new_id = item["id"]
+                    st_data = item["data"]
+                    
+                    # Resolve dependencies
+                    raw_deps = st_data.get("depends_on", [])
+                    resolved_deps = []
+                    for dep in raw_deps:
+                        if dep in title_to_id_map:
+                            resolved_deps.append(title_to_id_map[dep])
+                        else:
+                            # It might be an existing task ID or just a string we can't resolve
+                            # For now, keep it if it looks like an ID, otherwise warn
+                            if dep.startswith("task_"):
+                                resolved_deps.append(dep)
+                            else:
+                                print(f"  Warning: Could not resolve dependency '{dep}' for new task", flush=True)
+                    
+                    # Determine profile
+                    phase_str = st_data.get("phase", "build").lower()
+                    phase = TaskPhase.BUILD
+                    if phase_str == "test": phase = TaskPhase.TEST
+                    elif phase_str == "plan": phase = TaskPhase.PLAN
+                    
+                    profile = WorkerProfile.CODER
+                    if phase == TaskPhase.TEST: profile = WorkerProfile.TESTER
+                    elif phase == TaskPhase.PLAN: profile = WorkerProfile.PLANNER
+                        
+                    new_task = Task(
+                        id=new_id,
+                        component=st_data.get("component", task.component),
+                        phase=phase,
+                        status=TaskStatus.PLANNED,
+                        assigned_worker_profile=profile,
+                        description=st_data.get("description", "No description"),
+                        acceptance_criteria=st_data.get("acceptance_criteria", []),
+                        depends_on=resolved_deps,
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    
+                    print(f"  Created task {new_id}: {new_task.description[:50]}...", flush=True)
+                    updates.append(task_to_dict(new_task))
+                
+                # Clear suggested tasks so we don't process them again
+                # We can't easily modify the state dict here directly to remove it, 
+                # but since we are generating new tasks, the next director run won't see them as "new" suggestions 
+                # unless we have a way to mark them processed.
+                # Actually, if we don't clear them, we'll create duplicates every loop!
+                # We must update the parent task to remove suggested_tasks.
+                raw_task["suggested_tasks"] = [] # Clear it
+                updates.append(raw_task) # Add parent task update
+
     return {"tasks": updates} if updates else {}
 
 
