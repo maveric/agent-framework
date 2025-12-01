@@ -705,16 +705,26 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
                 - component: str (e.g., "backend", "frontend")
                 - depends_on: List[str] (optional, titles of other subtasks this depends on)
         """
-        import os  # Import os locally to ensure it's available
+        import os
+        
         # Enforce Design by Contract: Check if design_spec.md exists
-        if not os.path.exists("design_spec.md"):
+        # Planner writes it in their worktree before calling this
+        # We must check the worktree path, not the CWD
+        worktree_path = state.get("worktree_path")
+        
+        # Construct the full path to the spec file
+        spec_path = "design_spec.md"
+        if worktree_path:
+            spec_path = os.path.join(worktree_path, "design_spec.md")
+            
+        if not os.path.exists(spec_path):
             return "ERROR: You MUST write 'design_spec.md' to the project root BEFORE creating subtasks. This is a strict requirement."
 
         return f"Created {len(subtasks)} subtasks."
 
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
     tools = _bind_tools(tools, state)
-    
+
     # Create a clean filename from task description
     task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
     task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
@@ -772,6 +782,11 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     7. Create the `agents-work/test-results/` directory if it does not exist
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
+    
+    **MANDATORY FOR QA APPROVAL**:
+    - You MUST create a markdown file in `agents-work/test-results/` named `test-{task_desc}.md`.
+    - This file MUST contain the actual output of your tests.
+    - If this file is missing, QA WILL FAIL.
     
     **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
     - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.

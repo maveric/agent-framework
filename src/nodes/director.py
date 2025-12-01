@@ -124,7 +124,14 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                     updates.append(task_to_dict(task))
             else:
                 print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
-                # Keep as failed permanently
+                # Update task status to a terminal state and add to updates
+                # This prevents infinite retrying
+                task.status = TaskStatus.FAILED
+                task.updated_at = datetime.now()
+                # Mark that we've already processed this max-retry failure
+                # by ensuring retry_count is set high enough to skip next time
+                task.retry_count = MAX_RETRIES + 1  
+                updates.append(task_to_dict(task))
         
         # Standard readiness evaluation for planned tasks
         elif task.status == TaskStatus.PLANNED:

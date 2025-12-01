@@ -152,8 +152,8 @@ def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dic
                     "suggestions": ["Ensure worker returns valid AAR"]
                 }
             
-            # Check 2: Files were modified
-            elif not aar.get("files_modified"):
+            # Check 2: Files were modified (Only strict for BUILD tasks)
+            elif task.get("phase") == "build" and not aar.get("files_modified"):
                 qa_passed = False
                 failure_reason = "No files modified"
                 qa_verdict = {

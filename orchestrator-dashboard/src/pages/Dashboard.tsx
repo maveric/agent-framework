@@ -81,7 +81,7 @@ export function Dashboard() {
                         <p className="text-muted-foreground">No runs found.</p>
                     ) : (
                         <div className="space-y-4">
-                            {runs?.slice(0, 5).map((run) => (
+                            {runs?.map((run) => (
                                 <Link key={run.run_id} to={`/runs/${run.run_id}`} className="block">
                                     <div className="flex items-center justify-between p-4 border rounded-lg hover:bg-slate-50 transition-colors">
                                         <div className="space-y-1">

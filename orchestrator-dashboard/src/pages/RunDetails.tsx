@@ -46,6 +46,11 @@ interface RunDetails {
     insights: any[];
     design_log: any[];
     workspace_path?: string;
+    model_config?: {
+        director_model: { provider: string; model_name: string; temperature: number };
+        worker_model: { provider: string; model_name: string; temperature: number };
+        strategist_model: { provider: string; model_name: string; temperature: number };
+    };
 }
 
 export function RunDetails() {
@@ -184,6 +189,39 @@ export function RunDetails() {
                     </div>
                 </div>
             </div>
+
+            {/* Model Configuration */}
+            {run.model_config && (
+                <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
+                    <h2 className="text-lg font-semibold text-slate-200 mb-4">Model Configuration</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50">
+                            <div className="text-xs font-semibold text-purple-400 mb-2">DIRECTOR</div>
+                            <div className="space-y-1">
+                                <div className="text-sm text-slate-300 font-mono">{run.model_config.director_model.model_name}</div>
+                                <div className="text-xs text-slate-500">{run.model_config.director_model.provider}</div>
+                                <div className="text-xs text-slate-500">temp: {run.model_config.director_model.temperature}</div>
+                            </div>
+                        </div>
+                        <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50">
+                            <div className="text-xs font-semibold text-blue-400 mb-2">WORKER</div>
+                            <div className="space-y-1">
+                                <div className="text-sm text-slate-300 font-mono">{run.model_config.worker_model.model_name}</div>
+                                <div className="text-xs text-slate-500">{run.model_config.worker_model.provider}</div>
+                                <div className="text-xs text-slate-500">temp: {run.model_config.worker_model.temperature}</div>
+                            </div>
+                        </div>
+                        <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50">
+                            <div className="text-xs font-semibold text-green-400 mb-2">STRATEGIST</div>
+                            <div className="space-y-1">
+                                <div className="text-sm text-slate-300 font-mono">{run.model_config.strategist_model.model_name}</div>
+                                <div className="text-xs text-slate-500">{run.model_config.strategist_model.provider}</div>
+                                <div className="text-xs text-slate-500">temp: {run.model_config.strategist_model.temperature}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Content Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

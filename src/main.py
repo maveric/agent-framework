@@ -29,7 +29,7 @@ def main():
                        help="Directory where the project will be built (default: projects/workspace)")
     parser.add_argument("--mock-run", action="store_true", help="Run in mock mode (no LLM)")
     parser.add_argument("--provider", type=str, default="openai", 
-                       choices=["openai", "anthropic", "google"],
+                       choices=["openai", "anthropic", "google", "glm", "openrouter"],
                        help="LLM provider (default: openai)")
     parser.add_argument("--model", type=str, help="Model name (e.g., gpt-4o, claude-3-5-sonnet-20241022)")
     
@@ -86,31 +86,48 @@ def main():
         # Use defaults from config.py (respects user's config.py edits)
         default_config = OrchestratorConfig()
         if args.provider == "openai":
-            model_name = default_config.worker_model.model_name if default_config.worker_model.provider == "openai" else "gpt-4o"
+            model_name = default_config.worker_model.model_name if default_config.worker_model.provider == "openai" else "gpt-4.1"
         elif args.provider == "anthropic":
             model_name = default_config.worker_model.model_name if default_config.worker_model.provider == "anthropic" else "claude-3-5-sonnet-20241022"
-        else:  # google
+        elif args.provider == "google":
             model_name = "gemini-1.5-pro"
+        elif args.provider == "glm":
+            model_name = "glm-4-plus"  # Default GLM model
+        elif args.provider == "openrouter":
+            model_name = "anthropic/claude-3.5-sonnet"  # Default OpenRouter model
+        else:
+            model_name = "gpt-4.1"  # Fallback
     
-    # Create config
-    config = OrchestratorConfig(
-        director_model=ModelConfig(
-            provider=args.provider,
-            model_name=model_name,
-            temperature=0.7
-        ),
-        worker_model=ModelConfig(
-            provider=args.provider,
-            model_name=model_name,
-            temperature=0.5
-        ),
-        strategist_model=ModelConfig(
-            provider=args.provider,
-            model_name=model_name,
-            temperature=0.3
-        ),
-        mock_mode=args.mock_run
-    )
+    # Load base config from config.py (respects user's settings)
+    base_config = OrchestratorConfig()
+    
+    # Only override if user explicitly passed --provider or --model
+    # If they didn't specify, respect config.py settings
+    if args.model or args.provider != "openai":  # "openai" is the default, so if it's that, user didn't specify
+        # User wants to override - apply to all models
+        config = OrchestratorConfig(
+            director_model=ModelConfig(
+                provider=args.provider,
+                model_name=model_name,
+                temperature=0.7
+            ),
+            worker_model=ModelConfig(
+                provider=args.provider,
+                model_name=model_name,
+                temperature=0.5
+            ),
+            strategist_model=ModelConfig(
+                provider=args.provider,
+                model_name=model_name,
+                temperature=0.3
+            ),
+            mock_mode=args.mock_run
+        )
+    else:
+        # No CLI override - use config.py settings
+        config = base_config
+        config.mock_mode = args.mock_run
+
     
     print(f"\n{'='*60}")
     print(f"AGENT ORCHESTRATOR")

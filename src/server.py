@@ -158,6 +158,33 @@ def get_orchestrator_graph():
     
     return create_orchestrator(checkpointer=global_checkpointer)
 
+def _serialize_orch_config(config):
+    """Serialize OrchestratorConfig to dict for API response."""
+    if not config:
+        return None
+    
+    try:
+        return {
+            "director_model": {
+                "provider": config.director_model.provider,
+                "model_name": config.director_model.model_name,
+                "temperature": config.director_model.temperature
+            },
+            "worker_model": {
+                "provider": config.worker_model.provider,
+                "model_name": config.worker_model.model_name,
+                "temperature": config.worker_model.temperature
+            },
+            "strategist_model": {
+                "provider": config.strategist_model.provider,
+                "model_name": config.strategist_model.model_name,
+                "temperature": config.strategist_model.temperature
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error serializing config: {e}")
+        return None
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
@@ -239,6 +266,9 @@ async def list_runs():
                 
     except Exception as e:
         logger.error(f"Error listing runs: {e}")
+    
+    # Sort by created_at descending (most recent first)
+    summaries.sort(key=lambda x: x.created_at, reverse=True)
         
     return summaries
 
@@ -294,7 +324,8 @@ async def get_run(run_id: str):
                 "insights": state.get("insights", []),
                 "design_log": state.get("design_log", []),
                 "guardian": state.get("guardian", {}),
-                "workspace_path": state.get("_workspace_path", "")
+                "workspace_path": state.get("_workspace_path", ""),
+                "model_config": _serialize_orch_config(state.get("orch_config"))
             }
     except Exception as e:
         logger.error(f"Error getting run details: {e}")

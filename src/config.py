@@ -52,16 +52,16 @@ class OrchestratorConfig:
     worker_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
-        provider="openai",
-        model_name="gpt-5.1-codex-mini",
+        provider="openrouter",
+        model_name="minimax/minimax-m2",
         temperature=0.5
     ))
     
     strategist_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
-        provider="openai",
-        model_name="gpt-4.1",
+        provider="openrouter",
+        model_name="minimax/minimax-m2",
         temperature=0.3
     ))
     
