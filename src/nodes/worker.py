@@ -510,6 +510,9 @@ def _execute_react_loop(
                                 print(f"  [ERROR] LLM must call create_subtasks with a LIST of DICTS, not strings or other types.", flush=True)
                                 continue
                                 
+                            title = st.get("title", "Untitled")
+                            desc = st.get("description", "No description")
+
                             # Prepend title to description so it's preserved for dependency resolution
                             # UPDATE: Appending instead of prepending to avoid confusing the LLM
                             full_desc = f"{desc}\n\nTitle: {title}"
@@ -519,17 +522,18 @@ def _execute_react_loop(
                             
                             suggested_tasks.append(SuggestedTask(
                                 suggested_id=suggested_id,
-                                component=st_data.get("component", task.component),
-                                phase=TaskPhase(st_data.get("phase", "build")),
+                                component=st.get("component", task.component),
+                                phase=TaskPhase(st.get("phase", "build")),
                                 description=full_desc,
                                 rationale=f"Suggested by planner task {task.id}",
-                                depends_on=st_data.get("depends_on", []),
-                                acceptance_criteria=st_data.get("acceptance_criteria", []),
+                                depends_on=st.get("depends_on", []),
+                                acceptance_criteria=st.get("acceptance_criteria", []),
                                 suggested_by_task=task.id,
-                                priority=st_data.get("priority", 5)
+                                priority=st.get("priority", 5)
                             ))
                         except Exception as e:
                             print(f"  [ERROR] Failed to parse suggested task: {e}", flush=True)
+
             
     # Remove duplicates
     files_modified = list(set(files_modified))
