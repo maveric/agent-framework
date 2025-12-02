@@ -1018,6 +1018,18 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
     
+    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
+    - NEVER run blocking commands like `python app.py`, `flask run`, or `npm start` directly
+    - These will hang forever and block the workflow
+    - Use the **TEST HARNESS PATTERN** instead:
+      1. Write a test script that starts the server in a subprocess (`subprocess.Popen`)
+      2. Wait for it to be ready (poll localhost with timeout)
+      3. Send test requests to verify functionality
+      4. Kill the subprocess
+      5. Print test results
+    - Example: test_server.py that starts Flask, tests endpoints, then kills the process
+    - ALWAYS ensure your commands exit with results
+    
     **MANDATORY FOR QA APPROVAL**:
     - You MUST create a markdown file in `agents-work/test-results/` named `test-{task_desc}.md`.
     - This file MUST contain the actual output of your tests.
