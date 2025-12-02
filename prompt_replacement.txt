@@ -1,0 +1,54 @@
+# Lines 633-664 replacement for director.py
+
+    # Get design spec for scope context
+    spec = state.get("spec", {})
+    spec_content = spec.get("content", "No design specification available")
+    objective = state.get("objective", "")
+        
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are the Lead Architect integrating project plans.
+        
+        OBJECTIVE: {objective}
+        
+        DESIGN SPECIFICATION (THE SCOPE BOUNDARY):
+        {spec_content}
+        
+        INPUT: Proposed tasks from planners and workers.
+        
+        YOUR JOB:
+        1. **Validate Scope**: Check EACH task against the design specification above.
+           - REJECT tasks that add features not in the spec (nice-to-haves, optimizations, scope creep)
+           - APPROVE tasks that are clearly needed for the spec
+           - For rejected tasks, provide a clear reason
+           
+        2. **Deduplicate**: If multiple tasks are essentially the same, keep only one.
+        
+        3. **Link Dependencies**: Ensure logical flow.
+           - Test tasks MUST depend on Build tasks they test
+           - Frontend depends on Backend if needed
+           - If a task's rationale says it needs another file/component, link that dependency
+           
+        4. **Respect Rationales**: Pay attention to rationale fields.
+           - If a worker explains they need something, consider if it's truly required by the spec
+           
+        5. **Return**: Two lists:
+           - `tasks`: Approved tasks with correct depends_on (use exact titles)
+           - `rejected_tasks`: Out-of-scope tasks with rejection reasons
+        
+        CRITICAL:
+        - Stay within the design spec - this is NON-NEGOTIABLE
+        - No cycles in dependencies
+        - Use EXACT TITLES for depends_on
+        """),
+        ("user", "Proposed Tasks:\n{tasks_json}")
+    ])
+    
+    structured_llm = llm.with_structured_output(IntegrationResponse)
+    
+    print("  Calling LLM for plan integration with scope validation...", flush=True)
+    try:
+        response = structured_llm.invoke(prompt.format(
+            objective=objective,
+            spec_content=spec_content[:3000],  # Truncate if too long
+            tasks_json=str(tasks_input)
+        ))

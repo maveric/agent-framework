@@ -47,9 +47,16 @@ class IntegratedTaskDefinition(BaseModel):
     worker_profile: str = "code_worker"
 
 
+class RejectedTask(BaseModel):
+    """Task rejected during integration for being out of scope."""
+    title: str
+    reason: str = Field(description="Why this task was rejected")
+
+
 class IntegrationResponse(BaseModel):
     """LLM response for global plan integration."""
     tasks: List[IntegratedTaskDefinition]
+    rejected_tasks: List[RejectedTask] = Field(default_factory=list, description="Tasks rejected as out of scope")
 
 
 from langchain_core.runnables import RunnableConfig
@@ -241,6 +248,72 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                 if raw_task and raw_task.get("suggested_tasks"):
                     all_suggestions.extend(raw_task["suggested_tasks"])
                     tasks_with_suggestions.append(raw_task)
+        
+        
+        if all_suggestions:
+            print(f"Director: Validating {len(all_suggestions)} task suggestions against scope...", flush=True)
+            
+            # Validate suggestions to prevent scope creep
+            validated_suggestions = []
+            rejected_suggestions = []
+            
+            spec = state.get("spec", {})
+            
+            for suggestion in all_suggestions:
+                rationale = suggestion.get("rationale", "")
+                description = suggestion.get("description", "")
+                title = suggestion.get("title", "Untitled")
+                
+                # Check if suggestion references design spec (basic validation)
+                # Detailed rationale + spec reference = likely legitimate dependency
+                has_spec_reference = ("design_spec" in rationale.lower() or 
+                                     "spec" in description.lower() or
+                                     "design_spec.md" in rationale.lower())
+                                     
+                is_detailed = len(rationale) > 50  # Detailed rationale required
+                
+                if has_spec_reference and is_detailed:
+                    validated_suggestions.append(suggestion)
+                    print(f"  ✓ Approved: {title}", flush=True)
+                elif not is_detailed:
+                    # Likely from planner - accept (planners don't need detailed rationale)
+                    validated_suggestions.append(suggestion)
+                else:
+                    # Rejected - no spec reference in detailed rationale
+                    rejected_suggestions.append({
+                        "suggestion": suggestion,
+                        "source_task": suggestion.get("suggested_by_task"),
+                        "reason": "No reference to design_spec.md in rationale"
+                    })
+                    print(f"  ✗ Rejected: {title} - missing design spec reference", flush=True)
+            
+            # Send feedback for rejected suggestions via task_memories
+            for rejection in rejected_suggestions:
+                source_id = rejection.get("source_task")
+                if source_id:
+                    from langchain_core.messages import SystemMessage
+                    feedback = SystemMessage(
+                        content=f"DIRECTOR FEEDBACK: Your task suggestion '{rejection['suggestion'].get('title')}' was not approved.\n\n"
+                                f"Reason: {rejection['reason']}\n\n"
+                                f"To have suggestions approved, reference design_spec.md in your rationale and explain "
+                                f"why this is required for your current task (not just a nice-to-have).\n\n"
+                                f"Please continue your work using an alternative approach."
+                    )
+                    # Add to task_memories for the source task
+                    if "task_memories" not in state:
+                        state["task_memories"] = {}
+                    if source_id not in state["task_memories"]:
+                        state["task_memories"][source_id] = []
+                    state["task_memories"][source_id].append(feedback)
+                    print(f"  Sent rejection feedback to task {source_id}", flush=True)
+            
+            if not validated_suggestions:
+                print(f"Director: All {len(all_suggestions)} suggestions were rejected. No integration needed.", flush=True)
+            else:
+                print(f"Director: Integrating {len(validated_suggestions)} validated tasks (rejected {len(rejected_suggestions)})...", flush=True)
+                
+            # Use only validated suggestions for integration
+            all_suggestions = validated_suggestions
         
         if all_suggestions:
             print(f"Director: Integrating {len(all_suggestions)} tasks from {len(tasks_with_suggestions)} sources...", flush=True)
@@ -553,7 +626,8 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
             "component": s.get("component", "unknown"),
             "phase": s.get("phase", "build"),
             "description": desc,
-            "depends_on": s.get("depends_on", [])
+            "depends_on": s.get("depends_on", []),
+            "rationale": s.get("rationale", "")
         })
         
     prompt = ChatPromptTemplate.from_messages([
@@ -582,11 +656,67 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
         ("user", "Proposed Tasks:\n{tasks_json}")
     ])
     
+    
+    # Get design spec for scope context
+    spec = state.get("spec", {})
+    spec_content = spec.get("content", "No design specification")[:2000]  # Truncate if too long
+    objective = state.get("objective", "")
+    
     structured_llm = llm.with_structured_output(IntegrationResponse)
     
     print("  Calling LLM for plan integration...", flush=True)
+    # Get design spec for scope context
+    spec = state.get("spec", {})
+    spec_content = spec.get("content", "No design specification available")
+    objective = state.get("objective", "")
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are the Lead Architect integrating project plans.
+        
+        OBJECTIVE: {objective}
+        
+        DESIGN SPECIFICATION (THE SCOPE BOUNDARY):
+        {spec_content}
+        
+        INPUT: Proposed tasks from planners and workers.
+        
+        YOUR JOB:
+        1. **Validate Scope**: Check EACH task against the design specification above.
+        - REJECT tasks that add features not in the spec (nice-to-haves, optimizations, scope creep)
+        - APPROVE tasks that are clearly needed for the spec
+        - For rejected tasks, provide a clear reason
+        
+        2. **Deduplicate**: If multiple tasks are essentially the same, keep only one.
+        
+        3. **Link Dependencies**: Ensure logical flow.
+        - Test tasks MUST depend on Build tasks they test
+        - Frontend depends on Backend if needed
+        - If a task's rationale says it needs another file/component, link that dependency
+        
+        4. **Respect Rationales**: Pay attention to rationale fields.
+        - If a worker explains they need something, consider if it's truly required by the spec
+        
+        5. **Return**: Two lists:
+        - `tasks`: Approved tasks with correct depends_on (use exact titles)
+        - `rejected_tasks`: Out-of-scope tasks with rejection reasons
+        
+        CRITICAL:
+        - Stay within the design spec - this is NON-NEGOTIABLE
+        - No cycles in dependencies
+        - Use EXACT TITLES for depends_on
+        """),
+        ("user", "Proposed Tasks:\n{tasks_json}")
+    ])
+
+    structured_llm = llm.with_structured_output(IntegrationResponse)
+    
+    print("  Calling LLM for plan integration with scope validation...", flush=True)
     try:
-        response = structured_llm.invoke(prompt.format(tasks_json=str(tasks_input)))
+        response = structured_llm.invoke(prompt.format(
+            objective=objective,
+            spec_content=spec_content[:3000],  # Truncate if too long
+            tasks_json=str(tasks_input)
+        ))
     except Exception as e:
         print(f"  Integration LLM Error: {e}", flush=True)
         # Fallback: Return tasks as-is (converted to Task objects)
@@ -608,9 +738,35 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
             ))
         return fallback_tasks
 
+
     # Convert response to Task objects
     new_tasks = []
     title_to_id_map = {}
+    
+    # Handle rejected tasks - send feedback to source workers
+    if hasattr(response, 'rejected_tasks') and response.rejected_tasks:
+        print(f"  LLM rejected {len(response.rejected_tasks)} tasks as out of scope:", flush=True)
+        for rejected in response.rejected_tasks:
+            print(f"    ✗ {rejected.title}: {rejected.reason}", flush=True)
+            
+            # Find the source task that suggested this
+            for suggestion in suggestions:
+                if suggestion.get("title") == rejected.title or rejected.title in suggestion.get("description", ""):
+                    source_id = suggestion.get("suggested_by_task")
+                    if source_id:
+                        from langchain_core.messages import SystemMessage
+                        feedback = SystemMessage(
+                            content=f"DIRECTOR FEEDBACK (LLM Validation): Task suggestion '{rejected.title}' was rejected by the Lead Architect.\n\n"
+                                    f"Reason: {rejected.reason}\n\n"
+                                    f"The suggested task does not align with the design specification. "
+                                    f"Please continue your work within the defined scope or provide stronger justification if this is truly required."
+                        )
+                        if "task_memories" not in state:
+                            state["task_memories"] = {}
+                        if source_id not in state["task_memories"]:
+                            state["task_memories"][source_id] = []
+                        state["task_memories"][source_id].append(feedback)
+                    break
     
     # 0. Pre-populate map with EXISTING tasks (to allow linking to completed tasks)
     existing_tasks = state.get("tasks", [])
