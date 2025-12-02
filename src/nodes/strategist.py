@@ -140,131 +140,108 @@ def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dic
     mock_mode = state.get("mock_mode", False)
     workspace_path = state.get("_workspace_path")
     
+    task_memories = {}
+    
     for task in tasks:
         if task.get("status") == "awaiting_qa":
             task_id = task["id"]
-            print(f"Strategist: Evaluating {task_id}", flush=True)
+            print(f"QA: Evaluating task {task_id}", flush=True)
             
-            # Basic sanity checks
-            qa_passed = True
-            failure_reason = None
+            # Find test results file
+            test_results_path = None
             qa_verdict = None
+            test_content = ""
             
-            # Check 1: AAR exists
-            aar = task.get("aar")
-            if not aar:
-                qa_passed = False
-                failure_reason = "No AAR provided"
-                qa_verdict = {
-                    "passed": False,
-                    "feedback": failure_reason,
-                    "suggestions": ["Ensure worker returns valid AAR"]
-                }
+            # Get orch config from state
+            orch_config = state.get("orch_config")
+            objective = state.get("objective", "")
             
-            # Check 2: Files were modified (Only strict for BUILD tasks)
-            elif task.get("phase") == "build" and not aar.get("files_modified"):
-                qa_passed = False
-                failure_reason = "No files modified"
-                qa_verdict = {
-                    "passed": False,
-                    "feedback": failure_reason,
-                    "suggestions": ["Worker should modify files to complete task"]
-                }
-            
-            # Check 3: For TEST tasks, evaluate actual test results
-            elif task.get("phase") == "test":
-                # Try to read test results file from agents-work/test-results/
-                test_results_path = None
-                files_modified = aar.get("files_modified", [])
+            # Check for test results in files_modified (aar)
+            if task.get("aar") and task["aar"].get("files_modified"):
+                worktree_path = Path(workspace_path) / ".worktrees" / task_id
                 
-                # Look for test results in modified files
-                # Prefer agents-work/test-results/ location
-                for file in files_modified:
-                    if "agents-work/test-results" in file and file.endswith(".md"):
-                        if workspace_path:
-                            worktree_path = Path(workspace_path) / ".worktrees" / task_id
-                            # Handle both relative and absolute paths in files_modified
-                            if Path(file).is_absolute():
-                                test_results_path = Path(file)
-                            else:
-                                test_results_path = worktree_path / file
-                            break
-                
-                # Fallback 1: check for test_results.md in root (old location)
-                if not test_results_path:
-                    for file in files_modified:
-                        if "test" in file.lower() and file.endswith(".md"):
-                            if workspace_path:
-                                worktree_path = Path(workspace_path) / ".worktrees" / task_id
-                                if Path(file).is_absolute():
-                                    test_results_path = Path(file)
-                                else:
-                                    test_results_path = worktree_path / file
-                                break
-                                
-                # Read content
-                test_content = "No test results found in artifacts."
-                if test_results_path:
-                    try:
-                        if test_results_path.exists():
-                            test_content = test_results_path.read_text(encoding="utf-8")
+                for file in task["aar"]["files_modified"]:
+                    if "test" in file.lower() and file.endswith((".md", ".txt", ".log")):
+                        # Handle both relative and absolute paths
+                        if Path(file).is_absolute():
+                            test_results_path = Path(file)
                         else:
-                            test_content = f"Test result file listed but not found: {test_results_path}"
-                    except Exception as e:
-                        test_content = f"Error reading test results: {e}"
-                elif task.get("result_path"):
-                     # Fallback to result_path if it exists
-                     try:
-                         rp = Path(task["result_path"])
-                         if rp.exists():
-                             test_content = rp.read_text(encoding="utf-8")
-                     except:
-                         pass
-
-                # Call LLM for evaluation
-                print(f"  Evaluating test results ({len(test_content)} chars)...", flush=True)
-                qa_result = _evaluate_test_results_with_llm(task, test_content, state.get("objective", ""), config)
-                
+                            test_results_path = worktree_path / file
+                        break
+            
+            if test_results_path and test_results_path.exists():
+                try:
+                    test_content = test_results_path.read_text(encoding="utf-8")
+                    
+                    if not mock_mode:
+                        # Use LLM to evaluate test results
+                        qa_result = _evaluate_test_results_with_llm(task, test_content, objective, config)
+                        qa_verdict = {
+                            "passed": qa_result["passed"],
+                            "overall_feedback": qa_result["feedback"],
+                            "suggested_focus": ", ".join(qa_result["suggestions"])
+                        }
+                    else:
+                        # Mock QA always passes
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": "MOCK: QA skipped",
+                            "suggested_focus": ""
+                        }
+                except Exception as e:
+                    print(f"  [ERROR]: Failed to read test results: {e}", flush=True)
+                    qa_verdict = {
+                        "passed": False,
+                        "overall_feedback": f"Failed to read test results: {e}",
+                        "suggested_focus": "Fix test results file access"
+                    }
+            else:
+                # No test results found - fail QA
                 qa_verdict = {
-                    "passed": qa_result["passed"],
-                    "overall_feedback": qa_result["feedback"],
-                    "criterion_results": [], 
-                    "suggested_focus": ", ".join(qa_result["suggestions"])
+                    "passed": False,
+                    "overall_feedback": "Test task must produce test results file",
+                    "suggested_focus": "Create proper test results documentation"
                 }
-                
+            
+            # Update task status based on QA verdict
+            if qa_verdict and qa_verdict["passed"]:
+                print(f"  [QA PASS]", flush=True)
+                task["status"] = "complete"
                 task["qa_verdict"] = qa_verdict
                 
-                if qa_result["passed"]:
-                    print(f"  [QA PASS]", flush=True)
-                    task["status"] = "complete"
-                    
-                    # Merge to main if not in mock mode
-                    wt_manager = state.get("_wt_manager")
-                    if wt_manager and not mock_mode:
-                        try:
-                            result = wt_manager.merge_to_main(task_id)
-                            if result.success:
-                                print(f"  [MERGED]", flush=True)
-                            else:
-                                print(f"  [CONFLICT] Merge failed: {result.error_message}", flush=True)
-                                task["status"] = "failed"
-                                task["qa_verdict"]["passed"] = False
-                                task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE FAILURE: {result.error_message}"
-                        except Exception as e:
-                            print(f"  [MERGE ERROR]: {e}", flush=True)
+                # Merge to main
+                wt_manager = state.get("_wt_manager")
+                if wt_manager and not mock_mode:
+                    try:
+                        result = wt_manager.merge_to_main(task_id)
+                        if result.success:
+                            print(f"  [MERGED] Task {task_id} merged successfully", flush=True)
+                        else:
+                            print(f"  [MERGE CONFLICT]: {result.error_message}", flush=True)
                             task["status"] = "failed"
                             task["qa_verdict"]["passed"] = False
-                            task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
-                else:
-                    print(f"  [QA FAIL]: {qa_result['feedback']}", flush=True)
-                    task["status"] = "failed"
+                            task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {result.error_message}"
+                    except Exception as e:
+                        print(f"  [MERGE ERROR]: {e}", flush=True)
+                        task["status"] = "failed"
+                        task["qa_verdict"]["passed"] = False
+                        task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
             else:
-                print(f"  [QA FAIL]: {failure_reason}", flush=True)
+                print(f"  [QA FAIL]: {qa_verdict['overall_feedback'] if qa_verdict else 'Unknown error'}", flush=True)
                 task["status"] = "failed"
-                if qa_verdict:
-                    task["qa_verdict"] = qa_verdict
+                task["qa_verdict"] = qa_verdict
             
             task["updated_at"] = datetime.now().isoformat()
             updates.append(task)
-    
-    return {"tasks": updates} if updates else {}
+            
+            # Append QA logs to task memories
+            if qa_verdict:
+                qa_messages = [
+                    SystemMessage(content="QA Evaluation Process"),
+                    HumanMessage(content=f"Evaluating task {task_id} against criteria:\n" + "\n".join(task.get("acceptance_criteria", []))),
+                    HumanMessage(content=f"Test Results:\n{test_content[:500]}..." if test_content else "No test content"),
+                    SystemMessage(content=f"Verdict: {'PASS' if qa_verdict['passed'] else 'FAIL'}\nFeedback: {qa_verdict['overall_feedback']}")
+                ]
+                task_memories[task_id] = qa_messages
+
+    return {"tasks": updates, "task_memories": task_memories} if updates else {}

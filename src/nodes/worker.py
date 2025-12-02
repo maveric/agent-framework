@@ -127,7 +127,19 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
         
     task_dict["updated_at"] = datetime.now().isoformat()
     
-    return {"tasks": [task_dict]}
+    # Return tasks AND task_memories (logs)
+    # We need to extract the messages from the result if available
+    updates = {"tasks": [task_dict]}
+    
+    # If the result has messages (from the agent execution), pass them back
+    # The state key is "task_memories" which is a dict mapping task_id -> list of messages
+    if hasattr(result, "messages") and result.messages:
+        updates["task_memories"] = {task_id: result.messages}
+    elif hasattr(result, "aar") and result.aar and hasattr(result.aar, "messages"):
+        # Fallback if messages are attached to AAR (unlikely but possible in some flows)
+        updates["task_memories"] = {task_id: result.aar.messages}
+        
+    return updates
 
 
 def _get_handler(profile: WorkerProfile) -> Callable:
@@ -237,7 +249,7 @@ def _execute_react_loop(
     
 from state import OrchestratorState
 from orchestrator_types import (
-    Task, TaskStatus, WorkerProfile, WorkerResult, AAR,
+    Task, TaskStatus, WorkerProfile, WorkerResult, AAR, TaskPhase,
     _dict_to_task, task_to_dict, _aar_to_dict
 )
 from llm_client import get_llm
@@ -342,7 +354,10 @@ def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[st
         from orchestrator_types import _suggested_task_to_dict
         task_dict["suggested_tasks"] = [_suggested_task_to_dict(st) for st in result.suggested_tasks]
     
-    return {"tasks": [task_dict]}
+    # Capture task memories (LLM conversation history)
+    task_memories = {task_id: result.messages} if result.messages else {}
+
+    return {"tasks": [task_dict], "task_memories": task_memories}
 
 
 def _get_handler(profile: WorkerProfile) -> Callable:
@@ -439,30 +454,71 @@ def _execute_react_loop(
     last_message = messages[-1]
     
     # Identify modified files and suggested tasks from tool calls
+    # CRITICAL: Only count files as modified if the tool call SUCCEEDED
     files_modified = []
     suggested_tasks = []
+    explicitly_completed = False
+    completion_details = {}
+    
+    # Build a map of tool_call_id -> ToolMessage for success checking
+    tool_results = {}
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            tool_results[msg.tool_call_id] = msg
     
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
+                tool_call_id = tc.get("id")
+                
+                # Get the corresponding ToolMessage result
+                tool_result = tool_results.get(tool_call_id) if tool_call_id else None
+                
                 if tc["name"] in ["write_file", "append_file"]:
                     path = tc["args"].get("path")
                     if path:
-                        files_modified.append(path)
+                        # Only count as modified if the tool succeeded (no error in result)
+                        if tool_result:
+                            # Check if the result contains an error
+                            result_content = str(tool_result.content).lower()
+                            if "error" not in result_content and "field required" not in result_content:
+                                files_modified.append(path)
+                            else:
+                                print(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}", flush=True)
+                        else:
+                            # No result found - might be a partial execution, don't count it
+                            print(f"  [SKIP] No result found for {tc['name']} call to {path}", flush=True)
+                            
+                elif tc["name"] == "report_existing_implementation":
+                    explicitly_completed = True
+                    completion_details = tc["args"]
+                    print(f"  [LOG] Task marked as already implemented: {tc['args'].get('file_path')}", flush=True)
+                    
                 elif tc["name"] == "create_subtasks":
                     subtasks = tc["args"].get("subtasks", [])
                     print(f"  [LOG] Captured {len(subtasks)} suggested subtasks", flush=True)
                     
                     # Convert dicts to SuggestedTask objects
-                    from orchestrator_types import SuggestedTask, TaskPhase
+                    from orchestrator_types import SuggestedTask
                     import uuid
                     
                     for st in subtasks:
                         try:
+                            # Handle case where LLM returns a list of strings instead of dicts
+                            if isinstance(st, str):
+                                title = st
+                                desc = st
+                                st_data = {} # Empty dict for other fields
+                            elif isinstance(st, dict):
+                                title = st.get("title", "Untitled")
+                                desc = st.get("description", "No description")
+                                st_data = st
+                            else:
+                                print(f"  [WARNING] Skipping invalid subtask format: {type(st)}", flush=True)
+                                continue
+
                             # Prepend title to description so it's preserved for dependency resolution
                             # UPDATE: Appending instead of prepending to avoid confusing the LLM
-                            title = st.get("title", "Untitled")
-                            desc = st.get("description", "No description")
                             full_desc = f"{desc}\n\nTitle: {title}"
                             
                             # Generate a temporary ID if not provided
@@ -470,14 +526,14 @@ def _execute_react_loop(
                             
                             suggested_tasks.append(SuggestedTask(
                                 suggested_id=suggested_id,
-                                component=st.get("component", task.component),
-                                phase=TaskPhase(st.get("phase", "build")),
+                                component=st_data.get("component", task.component),
+                                phase=TaskPhase(st_data.get("phase", "build")),
                                 description=full_desc,
                                 rationale=f"Suggested by planner task {task.id}",
-                                depends_on=st.get("depends_on", []),
-                                acceptance_criteria=st.get("acceptance_criteria", []),
+                                depends_on=st_data.get("depends_on", []),
+                                acceptance_criteria=st_data.get("acceptance_criteria", []),
                                 suggested_by_task=task.id,
-                                priority=st.get("priority", 5)
+                                priority=st_data.get("priority", 5)
                             ))
                         except Exception as e:
                             print(f"  [ERROR] Failed to parse suggested task: {e}", flush=True)
@@ -487,7 +543,7 @@ def _execute_react_loop(
     
     # Fallback: If no files modified but task is complete, save the response to a file
     # This ensures we always have a commit and merge, preventing "empty worktree" issues for subsequent tasks
-    if not files_modified and result["messages"]:
+    if not files_modified and not explicitly_completed and result["messages"]:
         last_msg = result["messages"][-1]
         if isinstance(last_msg, AIMessage) and last_msg.content:
             content = str(last_msg.content)
@@ -514,10 +570,10 @@ def _execute_react_loop(
     print(f"  [LOG] Files modified: {files_modified}", flush=True)
     
     # Strict Success Check for BUILD tasks
-    # If a build task didn't modify any files (except the fallback response.md), it failed.
+    # If a build task didn't modify any files (except the fallback response.md) AND wasn't explicitly completed, it failed.
     if task.phase == TaskPhase.BUILD:
         meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
-        if not meaningful_files:
+        if not meaningful_files and not explicitly_completed:
             print(f"  [FAILURE] Build task {task.id} failed: No code files modified (only response.md).", flush=True)
             from orchestrator_types import AAR
             return WorkerResult(
@@ -527,18 +583,26 @@ def _execute_react_loop(
                     summary="Build task failed: No code files were modified.",
                     approach="ReAct agent execution",
                     challenges=["Agent failed to modify any project files"],
+                    decisions_made=[],
                     files_modified=files_modified
                 ),
-                suggested_tasks=suggested_tasks
+                suggested_tasks=suggested_tasks,
+                messages=result["messages"] if "messages" in result else []
             )
             
     # Generate AAR
     from orchestrator_types import AAR
+    
+    # If explicitly completed, use that for the summary
+    summary = str(last_message.content)[:200] if isinstance(last_message, AIMessage) else "Task completed"
+    if explicitly_completed:
+        summary = f"ALREADY IMPLEMENTED: {completion_details.get('implementation_summary', '')}"
+        
     aar = AAR(
-        summary=str(last_message.content)[:200] if isinstance(last_message, AIMessage) else "Task completed",
+        summary=summary,
         approach="ReAct agent execution",
         challenges=[],
-        decisions_made=[],
+        decisions_made=[f"Verified existing implementation in {completion_details.get('file_path')}: {completion_details.get('verification_details')}" ] if explicitly_completed else [],
         files_modified=files_modified
     )
     
@@ -546,7 +610,8 @@ def _execute_react_loop(
         status="complete",
         result_path=result_path,
         aar=aar,
-        suggested_tasks=suggested_tasks
+        suggested_tasks=suggested_tasks,
+        messages=result["messages"] if "messages" in result else []
     )
 
 
@@ -607,8 +672,16 @@ def _create_subtasks_wrapper(tool, worktree_path):
         return tool(subtasks)
     return create_subtasks_wrapper
 
-def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
-    """Bind tools to the current worktree path."""
+def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerProfile = None) -> List[Callable]:
+    """
+    Bind tools to the worktree context.
+    Wraps filesystem and execution tools to operate within the task's worktree.
+    
+    Args:
+        tools: List of tool functions/objects
+        state: Orchestrator state (containing worktree manager)
+        profile: Worker profile (optional, for permission checks)
+    """
     worktree_path = state.get("worktree_path") or state.get("_workspace_path")
     
     if not worktree_path:
@@ -664,6 +737,10 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
              else:
                  # Skip for Coders
                  pass
+        
+        elif tool.__name__ == "report_existing_implementation":
+            # Convert plain function to StructuredTool for proper LLM usage
+            bound_tools.append(StructuredTool.from_function(tool, name="report_existing_implementation"))
                 
         else:
             bound_tools.append(tool)
@@ -722,17 +799,46 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     return f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
 
 
+def report_existing_implementation(file_path: str, implementation_summary: str, verification_details: str) -> str:
+    """
+    Report that a PREVIOUS task already implemented the requested feature.
+    
+    **CRITICAL RULE**: This tool is ONLY for pre-existing code you FOUND in the codebase.
+    
+    DO NOT use this tool if:
+    - You just created or modified files in THIS session
+    - You wrote ANY code to complete the task
+    - You used write_file, append_file, or any file modification tools
+    
+    ONLY use this tool if:
+    - You explored the codebase and found that a PREVIOUS task already did your work
+    - The existing code fully satisfies your task requirements
+    - You made ZERO modifications to any files
+    
+    If you created files, your work needs to be committed. Do NOT call this tool.
+    
+    Args:
+        file_path: Path to the EXISTING file that already has the implementation
+        implementation_summary: Brief description of what the existing code does
+        verification_details: Explanation of why it meets YOUR task requirements
+        
+    Returns:
+        Status message
+    """
+    return "Implementation reported successfully."
+
+
 def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Coding tasks."""
     from tools import git_commit, git_status, git_diff, git_add
     
     # Use fewer tools to reduce token usage
     tools = [
-        read_file, write_file, list_directory, file_exists
+        read_file, write_file, list_directory, file_exists, report_existing_implementation
     ]
     
     # Bind tools to worktree
-    tools = _bind_tools(tools, state)
+    tools = _bind_tools(tools, state, WorkerProfile.CODER)
     
     # Stronger system prompt to force file creation
     system_prompt = """You are a software engineer. Implement the requested feature.
@@ -741,11 +847,16 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` in the project root. You MUST follow it exactly for API routes, data models, and file structure.
     2. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
     3. Read any plan files to understand the intended design and architecture.
-    3. You MUST use `write_file` to create or modify files.
-    4. DO NOT output code in the chat. Only use the tools.
-    5. You are working in a real file system. Your changes are persistent.
-    6. Use `list_directory` and `read_file` to explore the codebase first.
-    7. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
+    4. Use `list_directory` and `read_file` to explore the codebase FIRST.
+    5. **CHECK IF ALREADY IMPLEMENTED (BEFORE YOU START WORK)**:
+       - If a PREVIOUS task already completed your assigned work, use `report_existing_implementation`
+       - This tool is ONLY for pre-existing code that you FOUND, NOT code you just created
+       - **CRITICAL**: If YOU wrote files in THIS session, DO NOT call this tool - your work needs to be committed!
+       - Only use this to avoid duplicate work when another agent already finished the task
+    6. If the feature does NOT exist, use `write_file` to create or modify files.
+    7. DO NOT output code in the chat. Only use the tools.
+    8. You are working in a real file system. Your changes are persistent.
+    9. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
     
     Remember: agents-work/ has plans and test results. Your code goes in the project root.
     
@@ -766,6 +877,12 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - **NO EXTRAS**: Do NOT add Docker files, CI/CD configs, deployment scripts, monitoring, logging frameworks, or ANY extras
     - **STICK TO THE SPEC**: If design_spec.md says "CRUD API", build ONLY that. NOT: admin panels, authentication, rate limiting, etc.
     - **IF NOT IN TASK**: Don't build it. Period.
+    
+    **ALREADY IMPLEMENTED?**:
+    - If you find the code ALREADY EXISTS and meets requirements:
+    - Do NOT modify the file just to "touch" it.
+    - Use the `report_existing_implementation` tool to prove you checked it.
+    - Provide the file path and a summary of why it's correct.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
@@ -785,7 +902,7 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
         print(f"  [WARNING] Max planner limit reached ({MAX_PLANNERS}). Forcing direct task creation.", flush=True)
 
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
-    tools = _bind_tools(tools, state)
+    tools = _bind_tools(tools, state, WorkerProfile.PLANNER)
 
     # UNIFIED PLANNER PROMPT - All planners work the same way
     system_prompt = f"""You are a component planner.
@@ -856,7 +973,7 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     """Testing tasks."""
     # Tester now has create_subtasks to reject work and request fixes
     tools = [read_file, write_file, list_directory, run_python, run_shell, create_subtasks]
-    tools = _bind_tools(tools, state)
+    tools = _bind_tools(tools, state, WorkerProfile.TESTER)
     
     # Create a clean filename from task description
     task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
@@ -931,7 +1048,7 @@ def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] 
     """Research tasks."""
     # Note: Web tools not yet implemented/imported, falling back to basic tools
     tools = [read_file, list_directory] 
-    tools = _bind_tools(tools, state)
+    tools = _bind_tools(tools, state, WorkerProfile.RESEARCHER)
     
     system_prompt = """You are a researcher.
     Your goal is to gather information.
@@ -943,7 +1060,7 @@ def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] 
 def _write_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Writing tasks."""
     tools = [read_file, write_file, list_directory]
-    tools = _bind_tools(tools, state)
+    tools = _bind_tools(tools, state, WorkerProfile.WRITER)
     
     system_prompt = """You are a technical writer.
     Your goal is to write documentation.

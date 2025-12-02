@@ -255,6 +255,51 @@ class WorktreeManager:
         info.commits.append(commit_hash)
         
         return commit_hash
+
+    def commit_to_main(
+        self,
+        message: str,
+        files: List[str]
+    ) -> str:
+        """
+        Commit files directly to the main branch (workspace root).
+        Used for shared artifacts like design_spec.md.
+        """
+        # Ensure we are on main
+        subprocess.run(
+            ["git", "checkout", self.main_branch],
+            cwd=self.repo_path,
+            check=True,
+            capture_output=True
+        )
+        
+        # Add files
+        for f in files:
+            subprocess.run(
+                ["git", "add", f],
+                cwd=self.repo_path,
+                check=True,
+                capture_output=True
+            )
+            
+        # Commit
+        result = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=self.repo_path,
+            capture_output=True
+        )
+        
+        if result.returncode == 0:
+            # Get hash
+            rev_parse = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            return rev_parse.stdout.strip()
+            
+        return ""
     
     def merge_to_main(self, task_id: str) -> MergeResult:
         """

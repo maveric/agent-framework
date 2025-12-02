@@ -71,17 +71,38 @@ def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -
 
 def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
     """
-    Write content to a file. Creates or overwrites.
+    Write content to a file. Creates parent directories automatically if needed.
+    
+    CRITICAL: You MUST provide BOTH 'path' AND 'content' parameters!
     
     Args:
-        path: Relative path to the file
-        content: Content to write
+        path: (REQUIRED) Relative path to the file (e.g., "index.html", "src/app.py", "frontend/styles.css")
+        content: (REQUIRED) The actual file content to write. This CANNOT be empty!
         encoding: File encoding (default: utf-8)
-        root: Optional workspace root override
+        root: Optional workspace root override (internal use)
+    
+    Example Usage:
+        write_file("index.html", "<html><body>Hello</body></html>")
+        write_file("backend/app.py", "print('Hello World')")
+    
+    Common Errors:
+        - "content: Field required" → You forgot to provide the 'content' parameter!
+        - "Access denied" → Path is outside workspace (don't use absolute paths)
         
     Returns:
-        Success message
+        Success message with byte count
     """
+    # Explicit parameter validation with helpful errors
+    if not path:
+        raise ValueError("ERROR: 'path' parameter is required! You must specify where to write the file.")
+    
+    if content is None:
+        raise ValueError(
+            "ERROR: 'content' parameter is required! You cannot create an empty file.\n"
+            "You must provide the actual file content as a string.\n"
+            "Example: write_file('index.html', '<html>...</html>')"
+        )
+    
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
@@ -101,6 +122,7 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
         f.write(content)
         
     return f"Successfully wrote {len(content)} bytes to {path}"
+
 
 def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
     """

@@ -16,6 +16,7 @@ from orchestrator_types import (
 from llm_client import get_llm
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import uuid
 
 
@@ -171,6 +172,9 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
 
     # GLOBAL PLAN INTEGRATION (Sync & Link)
     
+    # Check for manual replan request
+    replan_requested = state.get("replan_requested", False)
+    
     # 1. Check for Active Planners (Blocking Condition)
     # We still want to wait for the initial planning phase to complete globally
     planner_tasks = [t for t in all_tasks if t.assigned_worker_profile == WorkerProfile.PLANNER]
@@ -178,6 +182,52 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
     
     if active_planners:
         print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
+    elif replan_requested:
+        # MANUAL REPLAN TRIGGER
+        print("Director: Manual replan requested. Re-integrating pending tasks...", flush=True)
+        
+        # Gather all pending tasks (PLANNED)
+        # We exclude COMPLETE, FAILED, and ACTIVE tasks from being reshuffled, 
+        # but we include them in the integration context so dependencies can point to them.
+        pending_tasks = [t for t in all_tasks if t.status == TaskStatus.PLANNED]
+        
+        if pending_tasks:
+            # Convert to dicts for the integrator
+            suggestions = [task_to_dict(t) for t in pending_tasks]
+            
+            try:
+                # Re-run integration
+                new_tasks = _integrate_plans(suggestions, state)
+                
+                # Update the pending tasks with new definitions (dependencies, etc.)
+                # We match by ID if possible, or replace if IDs changed (though _integrate_plans tries to preserve)
+                # Actually _integrate_plans generates NEW IDs usually. 
+                # To avoid duplicates, we should probably mark the old pending tasks as "replaced" or just update them in place.
+                # For simplicity in this v1, let's try to update them if titles match, or replace them.
+                
+                # Strategy: The integrator returns a list of Task objects.
+                # We need to update the state.
+                
+                # Since _integrate_plans returns NEW task objects with potentially new IDs,
+                # we need to be careful.
+                # Let's just append the new ones and mark the old pending ones as FAILED (or removed).
+                # BUT, removing tasks is hard in append-only log.
+                # BETTER STRATEGY: Update the EXISTING task objects in place if possible.
+                
+                # _integrate_plans uses title matching to map to existing IDs.
+                # So it SHOULD return tasks with the SAME IDs if the titles match.
+                
+                updates.extend([task_to_dict(t) for t in new_tasks])
+                
+                # Reset flag
+                # We can't easily "remove" the flag from state in LangGraph without a specific reducer.
+                # But we can set it to False in the update.
+                # Assuming the state schema allows overwriting.
+                # For now, we'll just print it. The state update needs to handle this.
+                # We'll return it in the result.
+                
+            except Exception as e:
+                print(f"Director Error: Replan failed: {e}", flush=True)
     else:
         # 2. Collect suggestions from ALL completed/failed tasks
         # (Not just planners, but any task that might have used create_subtasks, e.g. Testers)
@@ -208,7 +258,43 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                 import traceback
                 traceback.print_exc()
 
-    return {"tasks": updates} if updates else {}
+    # Capture Director logs
+    # We construct a synthetic message history for the Director's actions
+    director_messages = []
+    
+    # 1. Spec Creation Log
+    if 'spec_prompt' in locals() and 'spec_response' in locals():
+        director_messages.extend([
+            SystemMessage(content="Director: Creating Design Specification"),
+            HumanMessage(content=spec_prompt.format(objective=state.get("objective", ""))[0].content), # Approximate prompt
+            AIMessage(content=str(spec_response.content))
+        ])
+        
+    # 2. Decomposition Log
+    if 'decomp_prompt' in locals() and 'response' in locals():
+        director_messages.extend([
+            SystemMessage(content="Director: Decomposing Objective into Tasks"),
+            HumanMessage(content=f"Objective: {state.get('objective', '')}\n\nSpec Summary: {spec_summary if 'spec_summary' in locals() else '...'}"),
+            AIMessage(content=f"Created {len(tasks) if 'tasks' in locals() else 0} planner tasks.")
+        ])
+        
+    # 3. Integration Log
+    if 'all_suggestions' in locals() and all_suggestions:
+        director_messages.extend([
+            SystemMessage(content="Director: Integrating Plans"),
+            HumanMessage(content=f"Integrating {len(all_suggestions)} suggestions..."),
+            AIMessage(content=f"Integrated {len(new_tasks) if 'new_tasks' in locals() else 0} new tasks.")
+        ])
+
+    # Return updates and logs
+    result = {"tasks": updates, "replan_requested": False} if updates else {}
+    if director_messages:
+        # We use a special key "director" for these logs. 
+        # The frontend will need to be updated to display them, or we can attach them to a dummy task.
+        # For now, we just expose them in the state.
+        result["task_memories"] = {"director": director_messages}
+        
+    return result
 
 
 def _mock_decompose(objective: str) -> List[Task]:
@@ -303,15 +389,23 @@ CRITICAL INSTRUCTIONS:
 2. Create a comprehensive design specification that will guide all workers
 3. You have leeway to make architectural decisions that best serve the objective
 4. Focus on MVP - deliver the core functionality requested, avoid unnecessary extras
+5. **ALWAYS include dependency isolation** to prevent package pollution across projects
 
 OUTPUT:
 Write a design specification in markdown format with these sections:
 - **Overview**: Brief project summary
 - **Components**: List each component (Backend, Frontend, etc.)
+- **Dependency Isolation**: MANDATORY instructions for isolated environments
+  * Python: Use `python -m venv .venv` and activate it before installing packages
+  * Node.js: Use `npm install` (creates local node_modules)
+  * Other: Specify equivalent isolation mechanism
 - **API Routes** (if applicable): Methods, paths, request/response formats
 - **Data Models** (if applicable): Schemas, database tables, field types
 - **File Structure**: Where files should be created
 - **Technology Stack**: What frameworks/libraries to use
+- **.gitignore Requirements**: MANDATORY - must include: .venv/, venv/, node_modules/, __pycache__/, *.pyc, .env
+
+CRITICAL: Ensure dependency folders are in .gitignore to prevent worktree bloat.
 
 Be specific enough that workers can implement without ambiguity."""),
         ("user", "Objective: {objective}")
@@ -327,6 +421,18 @@ Be specific enough that workers can implement without ambiguity."""),
             spec_path = Path(workspace_path) / "design_spec.md"
             spec_path.write_text(spec_content, encoding="utf-8")
             print(f"  Written: design_spec.md", flush=True)
+            
+            # Commit to main to avoid merge conflicts later
+            wt_manager = state.get("_wt_manager")
+            if wt_manager and not state.get("mock_mode", False):
+                try:
+                    wt_manager.commit_to_main(
+                        message="Director: Add design specification",
+                        files=["design_spec.md"]
+                    )
+                    print(f"  Committed: design_spec.md", flush=True)
+                except Exception as e:
+                    print(f"  Warning: Failed to commit spec: {e}", flush=True)
     except Exception as e:
         print(f"  Warning: Failed to create spec: {e}", flush=True)
         spec_content = f"# Design Spec\n\nObjective: {objective}\n\nPlease create a minimal viable implementation."
@@ -458,9 +564,15 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
         YOUR JOB:
         1. **Deduplicate**: If multiple planners proposed the same task (e.g., "Create Database"), keep only one.
         2. **Link Dependencies**: Ensure logical flow across components.
+           - **CRITICAL RULE**: Test tasks MUST depend on the Build tasks they are testing.
            - Frontend tasks MUST depend on their corresponding Backend tasks.
-           - Test tasks MUST depend on the Build tasks they test.
         3. **Return**: The final, clean list of tasks with CORRECT `depends_on` lists (use exact titles).
+        
+        CHAIN OF THOUGHT (Internal):
+        - First, identify all BUILD tasks.
+        - Then, identify all TEST tasks.
+        - For each TEST task, find the BUILD task it verifies and add it to `depends_on`.
+        - For each FRONTEND task, find the BACKEND task it needs and add it to `depends_on`.
         
         CRITICAL:
         - Do not invent new tasks unless necessary for integration.

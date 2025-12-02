@@ -28,6 +28,13 @@ interface TaskGraphProps {
     onTaskClick?: (taskId: string) => void;
 }
 
+// Helper function to extract title from description
+const extractTitle = (description: string): string => {
+    // Look for "Title: <title>" pattern in the description
+    const titleMatch = description.match(/Title:\s*(.+?)(?:\n|$)/i);
+    return titleMatch ? titleMatch[1].trim() : description.split('\n')[0];
+};
+
 // Custom Node Component
 const TaskNode = ({ data }: { data: Task }) => {
     const statusColors = {
@@ -56,28 +63,30 @@ const TaskNode = ({ data }: { data: Task }) => {
         writer_worker: 'bg-rose-900/30 text-rose-300 border-rose-800/50',
     };
 
+    const title = extractTitle(data.description);
+
     return (
         <div className={`w-64 p-3 rounded-lg border-2 ${statusColors[data.status] || statusColors.planned} shadow-lg transition-all hover:shadow-xl`}>
             <Handle type="target" position={Position.Top} className="!bg-slate-500" />
 
             <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                    <StatusIcon className={`w-4 h-4 ${data.status === 'complete' ? 'text-green-400' :
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <StatusIcon className={`w-4 h-4 flex-shrink-0 ${data.status === 'complete' ? 'text-green-400' :
                         data.status === 'failed' ? 'text-red-400' :
                             data.status === 'active' ? 'text-blue-400' :
                                 'text-slate-400'
                         }`} />
-                    <span className="font-mono text-xs text-slate-300 truncate w-32" title={data.id}>
-                        {data.id}
+                    <span className="text-xs text-slate-200 font-medium truncate" title={`${title} (${data.id})`}>
+                        {title}
                     </span>
                 </div>
-                <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold flex-shrink-0 ml-2">
                     {data.phase}
                 </span>
             </div>
 
-            <div className="text-xs text-slate-200 line-clamp-2 mb-2 font-medium">
-                {data.description.split('\n')[0]}
+            <div className="text-[10px] text-slate-500 mb-2 font-mono">
+                {data.id}
             </div>
 
             <div className="flex items-center justify-between mt-2">
@@ -229,7 +238,7 @@ export function TaskGraph({ tasks, onTaskClick }: TaskGraphProps) {
     }, [initialEdges, hoveredNode, connectedEdges]);
 
     return (
-        <div className="h-[800px] w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
+        <div className="h-full w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
             <ReactFlow
                 nodes={nodes}
                 edges={edges}

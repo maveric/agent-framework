@@ -394,6 +394,30 @@ async def resume_run(run_id: str):
     await manager.broadcast_to_run(run_id, {"type": "state_update", "payload": {"status": "running"}})
     return {"status": "running"}
 
+@app.post("/api/runs/{run_id}/replan")
+async def replan_run(run_id: str):
+    """Trigger a re-planning of pending tasks."""
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    # Update the LangGraph state to set replan_requested=True
+    try:
+        orchestrator = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
+        
+        # Update state to trigger replan on next graph execution
+        orchestrator.update_state(config, {"replan_requested": True})
+        
+        logger.info(f"Replan requested for run {run_id}")
+        return {"status": "replan_requested"}
+        
+    except Exception as e:
+        logger.error(f"Failed to trigger replan: {e}")
+        import traceback
+        traceback.print_exc()  # Print full traceback to terminal
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)

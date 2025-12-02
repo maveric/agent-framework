@@ -321,6 +321,7 @@ class WorkerResult:
     # Optional enrichments
     insights: List[Insight] = field(default_factory=list)  # Reusable knowledge
     suggested_tasks: List[SuggestedTask] = field(default_factory=list)  # Scope changes (need approval)
+    messages: List[BaseMessage] = field(default_factory=list)  # LLM conversation history
     
     # Escalation — signals issues that need Director attention
     escalation: Optional[Escalation] = None
@@ -768,6 +769,7 @@ def worker_result_to_dict(w: WorkerResult) -> Dict[str, Any]:
         "checkpoint": _worker_checkpoint_to_dict(w.checkpoint) if w.checkpoint else None,
         "blocked_reason": w.blocked_reason,
         "failure_reason": w.failure_reason,
+        "messages": w.messages,
     }
 
 def _suggested_task_to_dict(s: SuggestedTask) -> Dict[str, Any]:
@@ -794,6 +796,7 @@ def dict_to_worker_result(data: Dict[str, Any]) -> WorkerResult:
         checkpoint=_dict_to_worker_checkpoint(data["checkpoint"]) if data.get("checkpoint") else None,
         blocked_reason=data.get("blocked_reason"),
         failure_reason=data.get("failure_reason"),
+        messages=data.get("messages", []),
     )
 
 def _dict_to_suggested_task(data: Dict[str, Any]) -> SuggestedTask:

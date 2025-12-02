@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { AlertCircle } from 'lucide-react';
 
 // Define the interface locally or import it if shared
@@ -54,9 +54,9 @@ export function TaskDetailsContent({ task, logs }: TaskDetailsContentProps) {
                             <div key={idx} className="space-y-1">
                                 <div className="flex items-center gap-2">
                                     <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${log.type === 'human' ? 'bg-blue-900/30 text-blue-400 border border-blue-800/50' :
-                                            log.type === 'ai' ? 'bg-purple-900/30 text-purple-400 border border-purple-800/50' :
-                                                log.type === 'tool' ? 'bg-amber-900/30 text-amber-400 border border-amber-800/50' :
-                                                    'bg-slate-800 text-slate-400'
+                                        log.type === 'ai' ? 'bg-purple-900/30 text-purple-400 border border-purple-800/50' :
+                                            log.type === 'tool' ? 'bg-amber-900/30 text-amber-400 border border-amber-800/50' :
+                                                'bg-slate-800 text-slate-400'
                                         }`}>
                                         {log.type === 'human' ? 'USER' : log.type === 'ai' ? 'ASSISTANT' : log.type.toUpperCase()}
                                     </span>
