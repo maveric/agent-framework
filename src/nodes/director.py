@@ -251,71 +251,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
         
         
         if all_suggestions:
-            print(f"Director: Validating {len(all_suggestions)} task suggestions against scope...", flush=True)
-            
-            # Validate suggestions to prevent scope creep
-            validated_suggestions = []
-            rejected_suggestions = []
-            
-            spec = state.get("spec", {})
-            
-            for suggestion in all_suggestions:
-                rationale = suggestion.get("rationale", "")
-                description = suggestion.get("description", "")
-                title = suggestion.get("title", "Untitled")
-                
-                # Check if suggestion references design spec (basic validation)
-                # Detailed rationale + spec reference = likely legitimate dependency
-                has_spec_reference = ("design_spec" in rationale.lower() or 
-                                     "spec" in description.lower() or
-                                     "design_spec.md" in rationale.lower())
-                                     
-                is_detailed = len(rationale) > 50  # Detailed rationale required
-                
-                if has_spec_reference and is_detailed:
-                    validated_suggestions.append(suggestion)
-                    print(f"  ✓ Approved: {title}", flush=True)
-                elif not is_detailed:
-                    # Likely from planner - accept (planners don't need detailed rationale)
-                    validated_suggestions.append(suggestion)
-                else:
-                    # Rejected - no spec reference in detailed rationale
-                    rejected_suggestions.append({
-                        "suggestion": suggestion,
-                        "source_task": suggestion.get("suggested_by_task"),
-                        "reason": "No reference to design_spec.md in rationale"
-                    })
-                    print(f"  ✗ Rejected: {title} - missing design spec reference", flush=True)
-            
-            # Send feedback for rejected suggestions via task_memories
-            for rejection in rejected_suggestions:
-                source_id = rejection.get("source_task")
-                if source_id:
-                    feedback = SystemMessage(
-                        content=f"DIRECTOR FEEDBACK: Your task suggestion '{rejection['suggestion'].get('title')}' was not approved.\n\n"
-                                f"Reason: {rejection['reason']}\n\n"
-                                f"To have suggestions approved, reference design_spec.md in your rationale and explain "
-                                f"why this is required for your current task (not just a nice-to-have).\n\n"
-                                f"Please continue your work using an alternative approach."
-                    )
-                    # Add to task_memories for the source task
-                    if "task_memories" not in state:
-                        state["task_memories"] = {}
-                    if source_id not in state["task_memories"]:
-                        state["task_memories"][source_id] = []
-                    state["task_memories"][source_id].append(feedback)
-                    print(f"  Sent rejection feedback to task {source_id}", flush=True)
-            
-            if not validated_suggestions:
-                print(f"Director: All {len(all_suggestions)} suggestions were rejected. No integration needed.", flush=True)
-            else:
-                print(f"Director: Integrating {len(validated_suggestions)} validated tasks (rejected {len(rejected_suggestions)})...", flush=True)
-                
-            # Use only validated suggestions for integration
-            all_suggestions = validated_suggestions
-        
-        if all_suggestions:
-            print(f"Director: Integrating {len(all_suggestions)} tasks from {len(tasks_with_suggestions)} sources...", flush=True)
+            print(f"Director: Integrating {len(all_suggestions)} task suggestions...", flush=True)
             
             try:
                 new_tasks = _integrate_plans(all_suggestions, state)
@@ -679,28 +615,37 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
         
         INPUT: Proposed tasks from planners and workers.
         
-        YOUR JOB:
-        1. **Validate Scope**: Check EACH task against the design specification above.
-        - REJECT tasks that add features not in the spec (nice-to-haves, optimizations, scope creep)
-        - APPROVE tasks that are clearly needed for the spec
-        - For rejected tasks, provide a clear reason
+        YOUR JOB - IN THIS EXACT ORDER:
+        1. **Deduplicate**: Merge duplicate or nearly-identical tasks.
         
-        2. **Deduplicate**: If multiple tasks are essentially the same, keep only one.
+        2. **Validate Scope**: Check EACH task against the design specification.
+           - REJECT tasks that are not in the spec (accessibility, CI/CD, extensive testing utilities, etc.)
+           - APPROVE tasks that implement the spec
+           - Be strict - only what's in the spec gets built
+           
+        3. **Identify Gaps**: After rejecting out-of-scope tasks, check for broken dependencies.
+           - Did rejection create orphaned tasks?
+           - Are there missing links between components? (e.g., backend ↔ frontend integration)
+           - Do tests depend on non-existent tasks?
+           
+        4. **Fill Gaps (YOU HAVE AUTHORITY)**: Create minimal necessary tasks to bridge gaps.
+           - Example: If backend and frontend exist but no integration test, create one
+           - Example: If frontend depends on rejected API utility, create minimal API connection task
+           - Keep it minimal - ONLY what's needed for dependencies to work
+           
+        5. **Link Dependencies**: Ensure logical flow.
+           - Test tasks depend on Build tasks they test
+           - Frontend depends on Backend if needed
+           - Integration tests depend on both components
+           
+        6. **Return**: Two lists:
+           - `tasks`: Approved + gap-filling tasks with correct depends_on
+           - `rejected_tasks`: Out-of-scope tasks with reasons
         
-        3. **Link Dependencies**: Ensure logical flow.
-        - Test tasks MUST depend on Build tasks they test
-        - Frontend depends on Backend if needed
-        - If a task's rationale says it needs another file/component, link that dependency
-        
-        4. **Respect Rationales**: Pay attention to rationale fields.
-        - If a worker explains they need something, consider if it's truly required by the spec
-        
-        5. **Return**: Two lists:
-        - `tasks`: Approved tasks with correct depends_on (use exact titles)
-        - `rejected_tasks`: Out-of-scope tasks with rejection reasons
-        
-        CRITICAL:
-        - Stay within the design spec - this is NON-NEGOTIABLE
+        CRITICAL RULES:
+        - Design spec is LAW - reject anything not in it
+        - After rejection, you MUST check for gaps
+        - You MAY create minimal bridge tasks to fix broken dependencies
         - No cycles in dependencies
         - Use EXACT TITLES for depends_on
         """),
