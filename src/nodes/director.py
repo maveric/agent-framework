@@ -35,6 +35,22 @@ class DecompositionResponse(BaseModel):
     tasks: List[TaskDefinition]
 
 
+class IntegratedTaskDefinition(BaseModel):
+    """Task definition with resolved string dependencies."""
+    title: str = Field(description="Task title")
+    component: str = Field(description="Component name")
+    phase: str = Field(description="plan, build, or test")
+    description: str
+    acceptance_criteria: List[str]
+    depends_on: List[str] = Field(description="List of EXACT TITLES of other tasks this depends on")
+    worker_profile: str = "code_worker"
+
+
+class IntegrationResponse(BaseModel):
+    """LLM response for global plan integration."""
+    tasks: List[IntegratedTaskDefinition]
+
+
 from langchain_core.runnables import RunnableConfig
 
 def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
@@ -90,7 +106,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                         phase=TaskPhase.BUILD,
                         status=TaskStatus.PLANNED,
                         assigned_worker_profile=WorkerProfile.CODER,  # Default to Coder for fixes
-                        description=f"Fix issues in {task.component} reported by QA.\n\nQA Feedback:\n{feedback}",
+                        description=f"Fix issues in {task.component} reported by QA.\n\nQA FEEDBACK (MUST ADDRESS):\n{feedback}",
                         acceptance_criteria=[
                             "Address all QA feedback points",
                             "Ensure code compiles/runs",
@@ -117,10 +133,19 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                     task.retry_count = retry_count + 1
                     task.updated_at = datetime.now()
                     
-                    # Include QA feedback in the task for context if available
+                    # Include QA feedback OR AAR failure reason in description
+                    failure_reason = ""
                     if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
-                        feedback = task.qa_verdict.overall_feedback
-                        print(f"  Previous failure: {feedback[:100]}", flush=True)
+                        failure_reason = f"QA FEEDBACK: {task.qa_verdict.overall_feedback}"
+                    elif task.aar and task.aar.summary:
+                         failure_reason = f"PREVIOUS FAILURE: {task.aar.summary}"
+                    
+                    if failure_reason:
+                        print(f"  Previous failure: {failure_reason[:100]}", flush=True)
+                        # Append to description if not already there to avoid duplication
+                        if "PREVIOUS FAILURE:" not in task.description and "QA FEEDBACK:" not in task.description:
+                             task.description += f"\n\n{failure_reason}"
+                    
                     updates.append(task_to_dict(task))
             else:
                 print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
@@ -144,84 +169,44 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             elif task.id not in [t["id"] for t in state.get("tasks", [])]:
                 updates.append(task_to_dict(task))
 
-        # Check for suggested tasks (Hierarchical Planning) from AWAITING_QA tasks
-        # Note: We check this even if status didn't change, because the worker might have just finished
-        if task.status == TaskStatus.AWAITING_QA:
-            # We need to access the raw task dict from state to get 'suggested_tasks'
-            # because _dict_to_task might not have preserved it if it's not in the Task dataclass yet
-            # (Wait, we didn't add suggested_tasks to Task dataclass, but it IS in the dict in state)
-            raw_task = next((t for t in tasks if t["id"] == task.id), None)
-            suggested_tasks_data = raw_task.get("suggested_tasks", []) if raw_task else []
+    # GLOBAL PLAN INTEGRATION (Sync & Link)
+    
+    # 1. Check for Active Planners (Blocking Condition)
+    # We still want to wait for the initial planning phase to complete globally
+    planner_tasks = [t for t in all_tasks if t.assigned_worker_profile == WorkerProfile.PLANNER]
+    active_planners = [t for t in planner_tasks if t.status not in [TaskStatus.COMPLETE, TaskStatus.FAILED]]
+    
+    if active_planners:
+        print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
+    else:
+        # 2. Collect suggestions from ALL completed/failed tasks
+        # (Not just planners, but any task that might have used create_subtasks, e.g. Testers)
+        all_suggestions = []
+        tasks_with_suggestions = []
+        
+        for task in all_tasks:
+            # We only process suggestions from tasks that are done running
+            if task.status in [TaskStatus.COMPLETE, TaskStatus.FAILED]:
+                raw_task = next((t for t in tasks if t["id"] == task.id), None)
+                if raw_task and raw_task.get("suggested_tasks"):
+                    all_suggestions.extend(raw_task["suggested_tasks"])
+                    tasks_with_suggestions.append(raw_task)
+        
+        if all_suggestions:
+            print(f"Director: Integrating {len(all_suggestions)} tasks from {len(tasks_with_suggestions)} sources...", flush=True)
             
-            if suggested_tasks_data:
-                print(f"Director: Found {len(suggested_tasks_data)} suggested tasks from {task.id}", flush=True)
+            try:
+                new_tasks = _integrate_plans(all_suggestions, state)
+                updates.extend([task_to_dict(t) for t in new_tasks])
                 
-                # We need to do this properly. Let's collect them first.
-                new_tasks_to_create = []
-                title_to_id_map = {}
-                
-                for st_data in suggested_tasks_data:
-                    new_task_id = f"task_{uuid.uuid4().hex[:8]}"
-                    title = st_data.get("description", "Untitled") # Use description as title for mapping
-                    title_to_id_map[title] = new_task_id
-                    
-                    new_tasks_to_create.append({
-                        "id": new_task_id,
-                        "data": st_data
-                    })
-                    
-                for item in new_tasks_to_create:
-                    new_id = item["id"]
-                    st_data = item["data"]
-                    
-                    # Resolve dependencies
-                    raw_deps = st_data.get("depends_on", [])
-                    resolved_deps = []
-                    for dep in raw_deps:
-                        if dep in title_to_id_map:
-                            resolved_deps.append(title_to_id_map[dep])
-                        else:
-                            # It might be an existing task ID or just a string we can't resolve
-                            # For now, keep it if it looks like an ID, otherwise warn
-                            if dep.startswith("task_"):
-                                resolved_deps.append(dep)
-                            else:
-                                print(f"  Warning: Could not resolve dependency '{dep}' for new task", flush=True)
-                    
-                    # Determine profile
-                    phase_str = st_data.get("phase", "build").lower()
-                    phase = TaskPhase.BUILD
-                    if phase_str == "test": phase = TaskPhase.TEST
-                    elif phase_str == "plan": phase = TaskPhase.PLAN
-                    
-                    profile = WorkerProfile.CODER
-                    if phase == TaskPhase.TEST: profile = WorkerProfile.TESTER
-                    elif phase == TaskPhase.PLAN: profile = WorkerProfile.PLANNER
-                        
-                    new_task = Task(
-                        id=new_id,
-                        component=st_data.get("component", task.component),
-                        phase=phase,
-                        status=TaskStatus.PLANNED,
-                        assigned_worker_profile=profile,
-                        description=st_data.get("description", "No description"),
-                        acceptance_criteria=st_data.get("acceptance_criteria", []),
-                        depends_on=resolved_deps,
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
-                    )
-                    
-                    print(f"  Created task {new_id}: {new_task.description[:50]}...", flush=True)
-                    updates.append(task_to_dict(new_task))
-                
-                # Clear suggested tasks so we don't process them again
-                # We can't easily modify the state dict here directly to remove it, 
-                # but since we are generating new tasks, the next director run won't see them as "new" suggestions 
-                # unless we have a way to mark them processed.
-                # Actually, if we don't clear them, we'll create duplicates every loop!
-                # We must update the parent task to remove suggested_tasks.
-                raw_task["suggested_tasks"] = [] # Clear it
-                updates.append(raw_task) # Add parent task update
+                # Clear suggestions so we don't re-process
+                for raw_t in tasks_with_suggestions:
+                    raw_t["suggested_tasks"] = []
+                    updates.append(raw_t)
+            except Exception as e:
+                print(f"Director Error: Integration failed: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
 
     return {"tasks": updates} if updates else {}
 
@@ -290,7 +275,12 @@ def _mock_decompose(objective: str) -> List[Task]:
 
 
 def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, Any]) -> List[Task]:
-    """Use LLM to decompose objective into tasks."""
+    """
+    Director: High-level decomposition + spec creation.
+    
+    The Director (using the smartest model) has leeway to decide what's best.
+    Creates the design_spec.md and delegates to 1-5 component planners.
+    """
     # Get orchestrator config from state (has user's model settings)
     orch_config = state.get("orch_config")
     if not orch_config:
@@ -298,91 +288,117 @@ def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, 
         orch_config = OrchestratorConfig()
     
     model_config = orch_config.director_model
+    workspace_path = state.get("_workspace_path")
     
     llm = get_llm(model_config)
-    structured_llm = llm.with_structured_output(DecompositionResponse)
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", """Decompose the objective into 2-5 tasks following these phases:
-- PLAN phase: Design, architecture, planning tasks (use planner_worker)
-- BUILD phase: Implementation, coding tasks (use code_worker)
-- TEST phase: Testing, validation, QA tasks (use test_worker)
+    # STEP 1: Write design specification
+    print("Director: Creating design specification...", flush=True)
+    
+    spec_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a Lead Architect creating a design specification.
 
-IMPORTANT: Include at least one TEST phase task to validate the implementation."""),
+CRITICAL INSTRUCTIONS:
+1. Analyze the objective and determine the necessary components (e.g., Backend, Frontend, Database, Testing)
+2. Create a comprehensive design specification that will guide all workers
+3. You have leeway to make architectural decisions that best serve the objective
+4. Focus on MVP - deliver the core functionality requested, avoid unnecessary extras
+
+OUTPUT:
+Write a design specification in markdown format with these sections:
+- **Overview**: Brief project summary
+- **Components**: List each component (Backend, Frontend, etc.)
+- **API Routes** (if applicable): Methods, paths, request/response formats
+- **Data Models** (if applicable): Schemas, database tables, field types
+- **File Structure**: Where files should be created
+- **Technology Stack**: What frameworks/libraries to use
+
+Be specific enough that workers can implement without ambiguity."""),
         ("user", "Objective: {objective}")
     ])
     
     try:
-        response = structured_llm.invoke(prompt.format(objective=objective))
+        spec_response = llm.invoke(spec_prompt.format(objective=objective))
+        spec_content = str(spec_response.content)
+        
+        # Write spec to workspace
+        if workspace_path:
+            from pathlib import Path
+            spec_path = Path(workspace_path) / "design_spec.md"
+            spec_path.write_text(spec_content, encoding="utf-8")
+            print(f"  Written: design_spec.md", flush=True)
+    except Exception as e:
+        print(f"  Warning: Failed to create spec: {e}", flush=True)
+        spec_content = f"# Design Spec\n\nObjective: {objective}\n\nPlease create a minimal viable implementation."
+    
+    # STEP 2: Decompose into 1-5 component planner tasks
+    print("Director: Creating component planner tasks...", flush=True)
+    
+    structured_llm = llm.with_structured_output(DecompositionResponse)
+    
+    decomp_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are the Director decomposing a project into component planners.
+
+CRITICAL INSTRUCTIONS:
+1. Create 1-5 PLANNER tasks, one for each major component (e.g., Backend, Frontend, Testing)
+2. Each task should have phase="plan" and worker_profile="planner_worker"
+3. Do NOT create build or test tasks - planners will create those
+4. Keep it minimal - only create planners for components that are truly necessary
+5. Component examples: "backend", "frontend", "database", "testing", "api"
+
+OUTPUT:
+Create planner tasks following this schema."""),
+        ("user", """Objective: {objective}
+
+Design Spec Summary:
+{spec_summary}
+
+Create 1-5 planner tasks to delegate component planning.""")
+    ])
+    
+    try:
+        # Use first 500 chars of spec as summary
+        spec_summary = spec_content[:500] + "..." if len(spec_content) > 500 else spec_content
+        
+        response = structured_llm.invoke(decomp_prompt.format(
+            objective=objective,
+            spec_summary=spec_summary
+        ))
+        
         tasks = []
         for t_def in response.tasks:
-            # Map string phase to enum
-            phase_map = {
-                "plan": TaskPhase.PLAN,
-                "build": TaskPhase.BUILD,
-                "test": TaskPhase.TEST
-            }
-            phase = phase_map.get(t_def.phase.lower(), TaskPhase.BUILD)
-            
-            # Map worker profile string to enum
-            profile_map = {
-                "planner_worker": WorkerProfile.PLANNER,
-                "code_worker": WorkerProfile.CODER,
-                "test_worker": WorkerProfile.TESTER,
-                "research_worker": WorkerProfile.RESEARCHER,
-                "writer_worker": WorkerProfile.WRITER
-            }
-            worker_profile = profile_map.get(t_def.worker_profile, WorkerProfile.CODER)
+            # Ensure it's a planner task
+            if t_def.phase.lower() != "plan":
+                print(f"  Warning: Director tried to create {t_def.phase} task, converting to 'plan'", flush=True)
             
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
                 component=t_def.component,
-                phase=phase,
+                phase=TaskPhase.PLAN,
                 status=TaskStatus.PLANNED,
-                assigned_worker_profile=worker_profile,
-                description=t_def.description,
+                assigned_worker_profile=WorkerProfile.PLANNER,
+                description=f"{t_def.description}\n\nREFERENCE: design_spec.md for architecture details.",
                 acceptance_criteria=t_def.acceptance_criteria,
-                depends_on=[],  # Will be populated after all tasks created
+                depends_on=[],
                 created_at=datetime.now(),
                 updated_at=datetime.now()
             )
             tasks.append(task)
         
-        # Infer dependencies based on phases:
-        # - BUILD tasks depend on all PLAN tasks in same component
-        # - TEST tasks depend on all BUILD tasks in same component
-        for task in tasks:
-            if task.phase == TaskPhase.BUILD:
-                # Depend on all PLAN tasks in same component
-                task.depends_on = [
-                    t.id for t in tasks 
-                    if t.phase == TaskPhase.PLAN and t.component == task.component
-                ]
-            elif task.phase == TaskPhase.TEST:
-                # Depend on all BUILD tasks in same component
-                task.depends_on = [
-                    t.id for t in tasks 
-                    if t.phase == TaskPhase.BUILD and t.component == task.component
-                ]
-                # If no BUILD tasks in component, depend on PLAN tasks
-                if not task.depends_on:
-                    task.depends_on = [
-                        t.id for t in tasks 
-                        if t.phase == TaskPhase.PLAN and t.component == task.component
-                    ]
-        
+        print(f"  Created {len(tasks)} planner task(s)", flush=True)
         return tasks
+        
     except Exception as e:
-        print(f"Decomposition error: {e}")
-        # Fallback: single task
+        print(f"Decomposition error: {e}, using fallback", flush=True)
+        # Fallback: single planner for the entire project
         return [Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
             component="main",
-            phase=TaskPhase.BUILD,
+            phase=TaskPhase.PLAN,
             status=TaskStatus.PLANNED,
-            assigned_worker_profile=WorkerProfile.CODER,
-            description=objective,
-            acceptance_criteria=["Complete objective"],
+            assigned_worker_profile=WorkerProfile.PLANNER,
+            description=f"Plan implementation for: {objective}\n\nREFERENCE: design_spec.md for architecture details.",
+            acceptance_criteria=["Create implementation plan", "Define build and test tasks"],
             depends_on=[],
             created_at=datetime.now(),
             updated_at=datetime.now()
@@ -401,3 +417,159 @@ def _evaluate_readiness(task: Task, all_tasks: List[Task]) -> TaskStatus:
             return TaskStatus.PLANNED
     
     return TaskStatus.READY
+
+
+def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -> List[Task]:
+    """
+    Integrate proposed tasks from multiple planners into a cohesive plan.
+    Resolves cross-component dependencies.
+    """
+    # Get LLM
+    orch_config = state.get("orch_config")
+    if not orch_config:
+        from config import OrchestratorConfig
+        orch_config = OrchestratorConfig()
+    
+    model_config = orch_config.director_model
+    llm = get_llm(model_config)
+    
+    # Prepare input for LLM
+    tasks_input = []
+    for s in suggestions:
+        # Extract title if embedded in description
+        desc = s.get("description", "")
+        title = s.get("title", "Untitled")
+        if "Title: " in desc and title == "Untitled":
+             title = desc.split("Title: ")[-1].strip()
+             
+        tasks_input.append({
+            "title": title,
+            "component": s.get("component", "unknown"),
+            "phase": s.get("phase", "build"),
+            "description": desc,
+            "depends_on": s.get("depends_on", [])
+        })
+        
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are the Lead Architect integrating project plans.
+        
+        INPUT: A list of proposed tasks from different component planners (Frontend, Backend, etc.).
+        
+        YOUR JOB:
+        1. **Deduplicate**: If multiple planners proposed the same task (e.g., "Create Database"), keep only one.
+        2. **Link Dependencies**: Ensure logical flow across components.
+           - Frontend tasks MUST depend on their corresponding Backend tasks.
+           - Test tasks MUST depend on the Build tasks they test.
+        3. **Return**: The final, clean list of tasks with CORRECT `depends_on` lists (use exact titles).
+        
+        CRITICAL:
+        - Do not invent new tasks unless necessary for integration.
+        - Ensure every task has a valid dependency path (no cycles).
+        - Use the EXACT TITLES for dependencies.
+        """),
+        ("user", "Proposed Tasks:\n{tasks_json}")
+    ])
+    
+    structured_llm = llm.with_structured_output(IntegrationResponse)
+    
+    print("  Calling LLM for plan integration...", flush=True)
+    try:
+        response = structured_llm.invoke(prompt.format(tasks_json=str(tasks_input)))
+    except Exception as e:
+        print(f"  Integration LLM Error: {e}", flush=True)
+        # Fallback: Return tasks as-is (converted to Task objects)
+        # This prevents the pipeline from crashing, though dependencies might be broken
+        print("  Fallback: Converting suggestions directly without integration.", flush=True)
+        fallback_tasks = []
+        for s in suggestions:
+            t_id = f"task_{uuid.uuid4().hex[:8]}"
+            fallback_tasks.append(Task(
+                id=t_id,
+                component=s.get("component", "unknown"),
+                phase=TaskPhase(s.get("phase", "build")),
+                status=TaskStatus.PLANNED,
+                assigned_worker_profile=WorkerProfile.CODER, # Default
+                description=s.get("description", ""),
+                depends_on=[], # Lost dependencies in fallback
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            ))
+        return fallback_tasks
+
+    # Convert response to Task objects
+    new_tasks = []
+    title_to_id_map = {}
+    
+    # 0. Pre-populate map with EXISTING tasks (to allow linking to completed tasks)
+    existing_tasks = state.get("tasks", [])
+    for t in existing_tasks:
+        t_desc = t.get("description", "")
+        t_title = ""
+        if "Title: " in t_desc:
+            t_title = t_desc.split("Title: ")[-1].strip()
+        else:
+            t_title = t_desc.split("\n")[0].strip()
+        
+        if t_title:
+            title_to_id_map[t_title.lower()] = t["id"]
+    
+    # 1. Create IDs and Map Titles for NEW tasks
+    for t_def in response.tasks:
+        new_id = f"task_{uuid.uuid4().hex[:8]}"
+        title_to_id_map[t_def.title.lower()] = new_id
+        
+    # 2. Create Task Objects with Resolved Dependencies
+    for t_def in response.tasks:
+        new_id = title_to_id_map[t_def.title.lower()]
+        
+        resolved_deps = []
+        for dep in t_def.depends_on:
+            dep_lower = dep.lower().strip()
+            
+            # Exact match (new or existing)
+            if dep_lower in title_to_id_map:
+                resolved_deps.append(title_to_id_map[dep_lower])
+            else:
+                # Fuzzy match
+                best_match = None
+                best_score = 0
+                for known_title, known_id in title_to_id_map.items():
+                    if dep_lower in known_title or known_title in dep_lower:
+                        score = len(known_title)
+                        if score > best_score:
+                            best_score = score
+                            best_match = known_id
+                
+                if best_match:
+                    resolved_deps.append(best_match)
+                else:
+                    print(f"    Warning: Could not resolve dependency '{dep}' for '{t_def.title}'", flush=True)
+        
+        # Determine profile
+        profile = WorkerProfile.CODER
+        phase = TaskPhase.BUILD
+        
+        p_str = t_def.phase.lower()
+        if p_str == "test": 
+            phase = TaskPhase.TEST
+            profile = WorkerProfile.TESTER
+        elif p_str == "plan":
+            phase = TaskPhase.PLAN
+            profile = WorkerProfile.PLANNER
+        
+        new_task = Task(
+            id=new_id,
+            component=t_def.component,
+            phase=phase,
+            status=TaskStatus.PLANNED,
+            assigned_worker_profile=profile,
+            description=f"{t_def.description}\n\nTitle: {t_def.title}",
+            acceptance_criteria=t_def.acceptance_criteria,
+            depends_on=resolved_deps,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        new_tasks.append(new_task)
+        
+    print(f"  Integrated {len(new_tasks)} tasks into the graph.", flush=True)
+    return new_tasks

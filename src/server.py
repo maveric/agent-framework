@@ -297,6 +297,33 @@ async def create_run(request: CreateRunRequest, background_tasks: BackgroundTask
     
     return {"run_id": run_id}
 
+def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
+    """Serialize LangChain messages to dicts."""
+    if not messages:
+        return []
+    
+    serialized = []
+    for msg in messages:
+        # Basic fields
+        m_dict = {
+            "type": msg.type,
+            "content": msg.content,
+        }
+        
+        # Add specific fields based on type
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            m_dict["tool_calls"] = msg.tool_calls
+            
+        if hasattr(msg, "tool_call_id"):
+            m_dict["tool_call_id"] = msg.tool_call_id
+            
+        if hasattr(msg, "name") and msg.name:
+            m_dict["name"] = msg.name
+            
+        serialized.append(m_dict)
+        
+    return serialized
+
 @app.get("/api/runs/{run_id}")
 async def get_run(run_id: str):
     # Try to refresh from DB if not in memory
@@ -316,6 +343,13 @@ async def get_run(run_id: str):
         state_snapshot = global_checkpointer.get(config)
         if state_snapshot and "channel_values" in state_snapshot:
             state = state_snapshot["channel_values"]
+            
+            # Serialize task memories
+            task_memories = {}
+            raw_memories = state.get("task_memories", {})
+            for task_id, messages in raw_memories.items():
+                task_memories[task_id] = _serialize_messages(messages)
+            
             return {
                 **run_data,
                 "spec": state.get("spec", {}),
@@ -325,10 +359,13 @@ async def get_run(run_id: str):
                 "design_log": state.get("design_log", []),
                 "guardian": state.get("guardian", {}),
                 "workspace_path": state.get("_workspace_path", ""),
-                "model_config": _serialize_orch_config(state.get("orch_config"))
+                "model_config": _serialize_orch_config(state.get("orch_config")),
+                "task_memories": task_memories
             }
     except Exception as e:
         logger.error(f"Error getting run details: {e}")
+        import traceback
+        traceback.print_exc()
 
     return {
         **run_data,
@@ -337,7 +374,8 @@ async def get_run(run_id: str):
         "tasks": [],
         "insights": [],
         "design_log": [],
-        "guardian": {}
+        "guardian": {},
+        "task_memories": {}
     }
 
 @app.post("/api/runs/{run_id}/pause")

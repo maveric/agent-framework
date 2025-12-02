@@ -72,7 +72,7 @@ class OrchestratorConfig:
     webhook_config: WebhookConfig = field(default_factory=WebhookConfig)
     
     # Execution limits
-    max_concurrent_workers: int = 3
+    max_concurrent_workers: int = 5  # Limit parallel LLM calls for rate limits
     max_iterations_per_task: int = 10
     max_total_iterations: int = 100
     

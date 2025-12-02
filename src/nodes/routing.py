@@ -45,47 +45,126 @@ def route_after_director(state: OrchestratorState):
         print("No ready tasks, ending run", flush=True)
         return "__end__"
     
-    # Dispatch first ready task to worker
-    task_id = ready_tasks[0]["id"]
+    # Dispatch ALL ready tasks to workers in parallel
+    # BUT respect max_concurrent_workers limit to avoid LLM rate limits
+    from datetime import datetime
     
-    # Create worktree for this task (if not in mock mode)
-    wt_manager = state.get("_wt_manager")
-    if wt_manager and not state.get("mock_mode", False):
-        try:
-            info = wt_manager.create_worktree(task_id)
-            print(f"Created worktree: {info.worktree_path}", flush=True)
-        except Exception as e:
-            print(f"Warning: Failed to create worktree: {e}", flush=True)
+    # Get max concurrent limit from config (default 5)
+    orch_config = state.get("orch_config")
+    max_concurrent = getattr(orch_config, "max_concurrent_workers", 5) if orch_config else 5
     
-    print(f"Dispatching task: {task_id}", flush=True)
-    return [Send("worker", {"task_id": task_id, **state})]
+    # Count currently active tasks
+    active_count = sum(1 for t in tasks if t.get("status") == "active")
+    available_slots = max_concurrent - active_count
+    
+    if available_slots <= 0:
+        print(f"  Max concurrent workers ({max_concurrent}) reached, waiting...", flush=True)
+        return "__end__"  # Will retry on next director cycle
+    
+    # Limit ready tasks to available slots
+    tasks_to_dispatch = ready_tasks[:available_slots]
+    
+    print(f"  Dispatching {len(tasks_to_dispatch)}/{len(ready_tasks)} ready tasks (max_concurrent={max_concurrent}, active={active_count})", flush=True)
+    
+    updated_tasks = []
+    sends = []
+    
+    for t in tasks:
+        task_updated = False
+        # Check if this task is ready and should be dispatched
+        for ready_task in tasks_to_dispatch:  # Only dispatch limited subset
+            if t["id"] == ready_task["id"]:
+                # Update to ACTIVE status
+                t["status"] = "active"
+                t["started_at"] = datetime.now().isoformat()
+                task_updated = True
+                
+                # Create worktree for this task (if not in mock mode)
+                wt_manager = state.get("_wt_manager")
+                if wt_manager and not state.get("mock_mode", False):
+                    try:
+                        info = wt_manager.create_worktree(t["id"])
+                        print(f"Created worktree: {info.worktree_path}", flush=True)
+                    except Exception as e:
+                        print(f"Warning: Failed to create worktree: {e}", flush=True)
+                
+                print(f"Dispatching task: {t['id']}", flush=True)
+                break
+        
+        updated_tasks.append(t)
+    
+    # Create Send objects for limited tasks (respecting concurrency limit)
+    for ready_task in tasks_to_dispatch:
+        sends.append(Send("worker", {"task_id": ready_task["id"], "tasks": updated_tasks, **state}))
+    
+    # Return all sends to dispatch tasks in parallel
+    return sends
 
 
-def route_after_worker(state: OrchestratorState) -> Literal["strategist", "director"]:
+def route_after_worker(state: OrchestratorState):
     """
     Route after worker completes.
     
-    Only TEST phase tasks go to Strategist for QA.
-    PLAN and BUILD tasks return directly to Director to avoid echo chamber.
+    Dispatches ALL test tasks in awaiting_qa to Strategist in parallel.
+    Marks non-test tasks (plan/build) as complete and returns to Director.
     """
-    # Get the task that just completed
     tasks = state.get("tasks", [])
-    # Find most recently updated task in awaiting_qa status
     qa_tasks = [t for t in tasks if t.get("status") == "awaiting_qa"]
     
     if not qa_tasks:
         return "director"
     
-    # Get the most recent one (last updated)
-    task = max(qa_tasks, key=lambda t: t.get("updated_at", ""))
+    # Separate test tasks from non-test tasks
+    test_tasks = []
+    updated_tasks = []
     
-    # Check phase - only TEST tasks go to QA
-    phase = task.get("phase", "")
-    if phase == "test":
-        print(f"  Routing to QA (TEST phase)", flush=True)
-        return "strategist"
+    for t in tasks:
+        if t.get("status") == "awaiting_qa":
+            phase = t.get("phase", "")
+            if phase == "test":
+                # Route to strategist for QA
+                test_tasks.append(t)
+                updated_tasks.append(t)
+            else:
+                # Non-test tasks (plan/build) skip QA but MUST be merged
+                print(f"  Task {t['id'][:8]} ({phase}) skipping QA - merging to main...", flush=True)
+                
+                # Merge to main
+                wt_manager = state.get("_wt_manager")
+                merge_success = False
+                if wt_manager and not state.get("mock_mode", False):
+                    try:
+                        result = wt_manager.merge_to_main(t["id"])
+                        if result.success:
+                            print(f"  [MERGED] Task {t['id'][:8]} merged successfully", flush=True)
+                            merge_success = True
+                        else:
+                            print(f"  [MERGE FAILED] Task {t['id'][:8]}: {result.error_message}", flush=True)
+                            t["status"] = "failed"
+                            # Add failure reason to description or AAR?
+                            if "aar" in t and t["aar"]:
+                                t["aar"]["summary"] += f"\n\nMERGE FAILURE: {result.error_message}"
+                    except Exception as e:
+                        print(f"  [MERGE ERROR] Task {t['id'][:8]}: {e}", flush=True)
+                        t["status"] = "failed"
+                else:
+                    # Mock mode or no manager
+                    merge_success = True
+                
+                if merge_success:
+                    t["status"] = "complete"
+                
+                updated_tasks.append(t)
+        else:
+            updated_tasks.append(t)
+    
+    # If we have test tasks, dispatch them ALL to strategist in parallel
+    if test_tasks:
+        print(f"  Dispatching {len(test_tasks)} test task(s) to QA in parallel", flush=True)
+        sends = []
+        for test_task in test_tasks:
+            sends.append(Send("strategist", {"task_id": test_task["id"], "tasks": updated_tasks, **state}))
+        return sends
     else:
-        # PLAN and BUILD tasks skip QA, mark as complete and return to director
-        print(f"  Skipping QA ({phase} phase) - marking complete", flush=True)
-        task["status"] = "complete"
+        # All non-test tasks were marked complete, return to director
         return "director"

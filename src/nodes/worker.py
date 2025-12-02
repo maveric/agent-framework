@@ -16,7 +16,7 @@ from langgraph.prebuilt import create_react_agent
 
 from state import OrchestratorState
 from orchestrator_types import (
-    Task, TaskStatus, WorkerProfile, WorkerResult, AAR,
+    Task, TaskStatus, TaskPhase, WorkerProfile, WorkerResult, AAR,
     _dict_to_task, task_to_dict, _aar_to_dict
 )
 from llm_client import get_llm
@@ -119,6 +119,12 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
     task_dict["status"] = "awaiting_qa" if result.status == "complete" else "failed"
     task_dict["result_path"] = result.result_path
     task_dict["aar"] = _aar_to_dict(result.aar) if result.aar else None
+    
+    # Pass suggested tasks to state (for Director to process)
+    if result.suggested_tasks:
+        from orchestrator_types import _suggested_task_to_dict
+        task_dict["suggested_tasks"] = [_suggested_task_to_dict(st) for st in result.suggested_tasks]
+        
     task_dict["updated_at"] = datetime.now().isoformat()
     
     return {"tasks": [task_dict]}
@@ -308,15 +314,20 @@ def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[st
                 if commit_hash:
                     print(f"  Committed: {commit_hash[:8]}", flush=True)
                     
-                    # Merge to main
-                    try:
-                        merge_result = wt_manager.merge_to_main(task_id)
-                        if merge_result.success:
-                            print(f"  Merged to main: {task_id}", flush=True)
-                        else:
-                            print(f"  Warning: Merge failed: {merge_result.error_message}", flush=True)
-                    except Exception as e:
-                        print(f"  Warning: Merge exception: {e}", flush=True)
+                    # MERGE LOGIC:
+                    # - PLAN/BUILD tasks: Merge immediately (no QA needed)
+                    # - TEST tasks: Wait for QA approval (merge happens in strategist_node)
+                    if task.phase in [TaskPhase.PLAN, TaskPhase.BUILD]:
+                        try:
+                            merge_result = wt_manager.merge_to_main(task_id)
+                            if merge_result.success:
+                                print(f"  Merged to main: {task_id}", flush=True)
+                            else:
+                                print(f"  Warning: Merge failed: {merge_result.error_message}", flush=True)
+                        except Exception as e:
+                            print(f"  Warning: Merge exception: {e}", flush=True)
+                    else:
+                        print(f"  Skipping merge (TEST phase - awaiting QA)", flush=True)
             except Exception as e:
                 print(f"  Warning: Failed to commit: {e}", flush=True)
     
@@ -448,6 +459,12 @@ def _execute_react_loop(
                     
                     for st in subtasks:
                         try:
+                            # Prepend title to description so it's preserved for dependency resolution
+                            # UPDATE: Appending instead of prepending to avoid confusing the LLM
+                            title = st.get("title", "Untitled")
+                            desc = st.get("description", "No description")
+                            full_desc = f"{desc}\n\nTitle: {title}"
+                            
                             # Generate a temporary ID if not provided
                             suggested_id = f"suggested_{uuid.uuid4().hex[:8]}"
                             
@@ -455,7 +472,7 @@ def _execute_react_loop(
                                 suggested_id=suggested_id,
                                 component=st.get("component", task.component),
                                 phase=TaskPhase(st.get("phase", "build")),
-                                description=st.get("description", st.get("title", "No description")),
+                                description=full_desc,
                                 rationale=f"Suggested by planner task {task.id}",
                                 depends_on=st.get("depends_on", []),
                                 acceptance_criteria=st.get("acceptance_criteria", []),
@@ -495,6 +512,25 @@ def _execute_react_loop(
     workspace_path = state.get("_workspace_path")
     result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
     print(f"  [LOG] Files modified: {files_modified}", flush=True)
+    
+    # Strict Success Check for BUILD tasks
+    # If a build task didn't modify any files (except the fallback response.md), it failed.
+    if task.phase == TaskPhase.BUILD:
+        meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
+        if not meaningful_files:
+            print(f"  [FAILURE] Build task {task.id} failed: No code files modified (only response.md).", flush=True)
+            from orchestrator_types import AAR
+            return WorkerResult(
+                status="failed",
+                result_path=result_path,
+                aar=AAR(
+                    summary="Build task failed: No code files were modified.",
+                    approach="ReAct agent execution",
+                    challenges=["Agent failed to modify any project files"],
+                    files_modified=files_modified
+                ),
+                suggested_tasks=suggested_tasks
+            )
             
     # Generate AAR
     from orchestrator_types import AAR
@@ -622,8 +658,12 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any]) -> List[Callable]:
                 bound_tools.append(StructuredTool.from_function(wrapper, name="run_shell"))
         
         elif tool.__name__ == "create_subtasks":
-             # No binding needed for this one, just pass it through
-             bound_tools.append(tool)
+             # Only allow Planners and Testers to create subtasks
+             if profile in [WorkerProfile.PLANNER, WorkerProfile.TESTER]:
+                 bound_tools.append(tool)
+             else:
+                 # Skip for Coders
+                 pass
                 
         else:
             bound_tools.append(tool)
@@ -645,6 +685,41 @@ def _mock_execution(task: Task) -> WorkerResult:
             files_modified=["mock_output.py"]
         )
     )
+
+
+# =============================================================================
+# SHARED TOOL: create_subtasks (used by planners and testers)
+# =============================================================================
+
+def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
+    """
+    Create a list of subtasks to be executed by other workers.
+    Available to: planner_worker, test_worker
+    
+    Args:
+        subtasks: List of dicts, each containing:
+            - title: str
+            - description: str
+            - phase: "build" | "test" | "plan" | "research"
+            - component: str (e.g., "backend", "frontend")
+            - depends_on: List[str] (optional, titles of other subtasks this depends on)
+            - worker_profile: "code_worker" | "test_worker" | "planner_worker" (optional, default based on phase)
+    
+    Returns:
+        Status message or error
+    """
+    # ENFORCE LIMITS TO PREVENT TASK EXPLOSION
+    # Note: This limits each CALL to create_subtasks, not total tasks.
+    # A planner can call this multiple times if needed for complex projects.
+    MAX_SUBTASKS_PER_CALL = 15
+    
+    if len(subtasks) > MAX_SUBTASKS_PER_CALL:
+        return f"ERROR: Too many subtasks ({len(subtasks)}). Maximum allowed is {MAX_SUBTASKS_PER_CALL}. Break into smaller logical groups or prioritize the most critical tasks."
+    
+    if len(subtasks) == 0:
+        return "ERROR: No subtasks provided. You must create at least one subtask."
+    
+    return f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
 
 
 def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
@@ -684,6 +759,13 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
       4. Kills the subprocess
       5. Prints the results
     - ALWAYS ensure your commands exit.
+    
+    **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
+    - **NO SCOPE EXPANSION**: You have ZERO authority to add features not in your task description
+    - **IMPLEMENT ONLY WHAT'S ASSIGNED**: Only write code for the specific feature/component in your task
+    - **NO EXTRAS**: Do NOT add Docker files, CI/CD configs, deployment scripts, monitoring, logging frameworks, or ANY extras
+    - **STICK TO THE SPEC**: If design_spec.md says "CRUD API", build ONLY that. NOT: admin panels, authentication, rate limiting, etc.
+    - **IF NOT IN TASK**: Don't build it. Period.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)
@@ -692,72 +774,88 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
 def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Planning tasks."""
     
-    # Define the tool locally to avoid circular imports or global scope issues
-    def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
-        """
-        Create a list of subtasks to be executed by other workers.
-        
-        Args:
-            subtasks: List of dicts, each containing:
-                - title: str
-                - description: str
-                - phase: "build" | "test" | "research"
-                - component: str (e.g., "backend", "frontend")
-                - depends_on: List[str] (optional, titles of other subtasks this depends on)
-        """
-        import os
-        
-        # Enforce Design by Contract: Check if design_spec.md exists
-        # Planner writes it in their worktree before calling this
-        # We must check the worktree path, not the CWD
-        worktree_path = state.get("worktree_path")
-        
-        # Construct the full path to the spec file
-        spec_path = "design_spec.md"
-        if worktree_path:
-            spec_path = os.path.join(worktree_path, "design_spec.md")
-            
-        if not os.path.exists(spec_path):
-            return "ERROR: You MUST write 'design_spec.md' to the project root BEFORE creating subtasks. This is a strict requirement."
-
-        return f"Created {len(subtasks)} subtasks."
+    # PREVENT PLANNER EXPLOSION: Count existing planners
+    existing_tasks = state.get("tasks", [])
+    planner_count = sum(1 for t in existing_tasks 
+                       if (hasattr(t, 'assigned_worker_profile') and t.assigned_worker_profile == WorkerProfile.PLANNER)
+                       or (isinstance(t, dict) and t.get('assigned_worker_profile') == 'planner_worker'))
+    
+    MAX_PLANNERS = 10  # Hard limit: should be plenty
+    if planner_count >= MAX_PLANNERS:
+        print(f"  [WARNING] Max planner limit reached ({MAX_PLANNERS}). Forcing direct task creation.", flush=True)
 
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
     tools = _bind_tools(tools, state)
 
-    # Create a clean filename from task description
-    task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
-    task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
+    # UNIFIED PLANNER PROMPT - All planners work the same way
+    system_prompt = f"""You are a component planner.
+
+**TOOL USAGE RULES**:
+- Use `list_directory(".")` to see the project root (NOT list_directory("/") - that's invalid)
+- Use relative paths: "design_spec.md" or "agents-work/plans/" (NOT "/design_spec.md")  
+- Use `read_file()` for FILES only, use `list_directory()` for directories
+
+Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
     
-    system_prompt = f"""You are a technical architect.
-    Your goal is to create a detailed implementation plan AND break it down into executable subtasks.
+CRITICAL INSTRUCTIONS:
+1. **READ THE SPEC FIRST**: Check `design_spec.md` in the project root - this is YOUR CONTRACT
+2. Explore the codebase using `list_directory` and `read_file`
+3. Write your plan to `agents-work/plans/plan-{{component}}.md` using `write_file`
+4. **CREATE BUILD AND TEST TASKS**: Use `create_subtasks` to define concrete work items
+   - Create BUILD tasks with `phase="build"` and `worker_profile="code_worker"`
+   - Create TEST tasks with `phase="test"` and `worker_profile="test_worker"`
+   - **DO NOT** create sub-planner tasks (`phase="plan"`) - you are the planner!
+   - Break work into small, manageable chunks (5-15 tasks maximum)
+   - Define dependencies using `depends_on` (use task titles)
+   - **DEPENDENCY EXAMPLES** (MANDATORY):
+     * "Implement API endpoints" depends_on=["Set up Flask app", "Create database models"]
+     * ALL test tasks MUST depend on their build tasks: depends_on=["Build task title"]
+     * Integration tests depend on ALL features: depends_on=["Feature A", "Feature B", ...]
+     * If task is truly independent, use depends_on=[] (empty list)
+5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
+6. **CRITICAL**: Include at least ONE TEST task to validate your component
+7. DO NOT output the plan in the chat - use tools only
+
+**ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
+- **NO SCOPE EXPANSION**: You have ZERO authority to expand scope beyond design_spec.md
+- **STICK TO THE SPEC**: Only create tasks that implement what's in design_spec.md
+- **NO EXTRAS**: Do NOT add Docker, CI/CD, deployment, monitoring, logging, analytics, or ANY "nice-to-haves"
+- **NO "BEST PRACTICES" ADDITIONS**: Do not add infrastructure that "would be good in production"
+- **MINIMUM VIABLE**: Create ONLY the tasks needed for core functionality in the spec
+- **EXAMPLE**: If spec says "REST API with CRUD", create ONLY: models, routes, basic validation. NOT: caching, rate limiting, webhooks, admin panel, etc.
+- **IF IN DOUBT**: Leave it out. The Director has already decided the scope. Your job is execution only.
+
+Remember: The spec is law. You execute, you don't expand.
+"""
     
-    CRITICAL INSTRUCTIONS:
-    1. Explore the codebase first using `list_directory` and `read_file`.
-    2. **DESIGN BY CONTRACT**: Before creating subtasks, you MUST write a specification file.
-       - **FILENAME**: `design_spec.md` (EXACTLY this name).
-       - **LOCATION**: Project root directory (e.g., `./design_spec.md`).
-       - **CONTENT**:
-         - API Routes (methods, paths, parameters, responses)
-         - Data Models (JSON schemas, database tables)
-         - File Structure (where files should go)
-       - This ensures the Frontend and Backend workers agree on the contract.
-    3. You MUST write your high-level plan to `agents-work/plans/plan-{task_desc}.md` using `write_file`.
-    4. AFTER writing the spec and plan, you MUST use `create_subtasks` to define the concrete work items.
-       - Break the work down into small, manageable chunks.
-       - **MANDATORY**: In the description of every subtask, explicitly reference the spec file (e.g., "Implement API according to `design_spec.md`").
-       - Define dependencies between them using `depends_on`.
-       - Assign the correct worker profile.
-    5. DO NOT output the plan in the chat.
-    6. Keep chat responses concise.
-    """
+    result = _execute_react_loop(task, tools, system_prompt, state, config)
     
-    return _execute_react_loop(task, tools, system_prompt, state, config)
+    # VALIDATION: Planners MUST create tasks
+    if not result.suggested_tasks or len(result.suggested_tasks) == 0:
+        print(f"  [ERROR] Planner {task.id} completed without creating any tasks!", flush=True)
+        # Return failed result
+        from orchestrator_types import AAR
+        return WorkerResult(
+            status="failed",
+            result_path=result.result_path,
+            aar=AAR(
+                summary="FAILED: Planner did not create any tasks. Must call create_subtasks.",
+                approach="N/A",
+                challenges=["Did not call create_subtasks"],
+                decisions_made=[],
+                files_modified=result.aar.files_modified if result.aar else []
+            ),
+            suggested_tasks=[]
+        )
+    
+    print(f"  [SUCCESS] Planner created {len(result.suggested_tasks)} tasks", flush=True)
+    return result
 
 
 def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Testing tasks."""
-    tools = [read_file, write_file, list_directory, run_python, run_shell]
+    # Tester now has create_subtasks to reject work and request fixes
+    tools = [read_file, write_file, list_directory, run_python, run_shell, create_subtasks]
     tools = _bind_tools(tools, state)
     
     # Create a clean filename from task description
@@ -817,6 +915,13 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     
     The agents-work/ folder is for agent artifacts, NOT project code.
     Write test files to the project root, but test RESULTS to agents-work/test-results/.
+    
+    **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
+    - **TEST ONLY WHAT'S ASSIGNED**: Only test the specific feature/component in your task description
+    - **NO SCOPE EXPANSION**: Do NOT add integration tests, performance tests, security tests, or coverage reports unless explicitly requested
+    - **NO INFRASTRUCTURE TESTING**: Do NOT test deployment, CI/CD, monitoring, or any infrastructure not in the task
+    - **STICK TO THE TASK**: If task says "test CRUD API", test ONLY that. NOT: authentication, rate limiting, caching, etc.
+    - **IF NOT IN TASK**: Don't test it. Period.
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)

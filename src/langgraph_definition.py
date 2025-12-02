@@ -152,7 +152,7 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
         }
     }
     result = orchestrator.invoke(initial_state, config={
-        "recursion_limit": 100,
+        "recursion_limit": 150,  # Circuit breaker to prevent runaway token costs
         "configurable": {
             "thread_id": thread_id,
             "mock_mode": config.mock_mode if config else False

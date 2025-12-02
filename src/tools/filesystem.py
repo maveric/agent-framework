@@ -25,10 +25,19 @@ def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
     """Ensure path is within workspace."""
     workspace_root = _get_workspace_root(root)
     try:
-        # Resolve absolute path
-        target = (workspace_root / path).resolve()
+        # Normalize the path:
+        # 1. Strip leading slashes to prevent absolute path escapes
+        # 2. Convert Path to handle '.', '..', etc.
+        normalized_path = path.lstrip('/\\')
+        
+        # Resolve absolute path relative to workspace
+        target = (workspace_root / normalized_path).resolve()
+        
         # Check if it starts with workspace root
-        return str(target).startswith(str(workspace_root))
+        workspace_str = str(workspace_root.resolve())
+        target_str = str(target)
+        
+        return target_str.startswith(workspace_str)
     except Exception:
         return False
 
@@ -47,9 +56,15 @@ def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
-    target_path = _get_workspace_root(root) / path
+    # Normalize path (strip leading slashes)
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
+    
     if not target_path.exists():
         return f"File not found: {path}"
+    
+    if target_path.is_dir():
+        return f"Error: {path} is a directory, not a file. Use list_directory instead."
         
     with open(target_path, "r", encoding=encoding) as f:
         return f.read()
@@ -69,8 +84,10 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
     """
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
-        
-    target_path = _get_workspace_root(root) / path
+    
+    # Normalize path (strip leading slashes)
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
     
     # Create parent directories if needed
     try:
@@ -100,8 +117,10 @@ def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional
     """
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
-        
-    target_path = _get_workspace_root(root) / path
+    
+    # Normalize path (strip leading slashes)
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
     if not target_path.exists():
         return f"File not found: {path}"
         
@@ -125,9 +144,11 @@ def list_directory(path: str = ".", recursive: bool = False, pattern: str = "*",
     """
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
-        
+    
+    # Normalize path (strip leading slashes)
+    normalized_path = path.lstrip('/\\')
     workspace_root = _get_workspace_root(root)
-    target_path = workspace_root / path
+    target_path = workspace_root / normalized_path
     if not target_path.exists():
         return f"Directory not found: {path}"
         
@@ -182,8 +203,10 @@ def delete_file(path: str, confirm: bool, root: Optional[Path] = None) -> str:
         
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
-        
-    target_path = _get_workspace_root(root) / path
+    
+    # Normalize path (strip leading slashes)
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
     if not target_path.exists():
         return f"File not found: {path}"
         
