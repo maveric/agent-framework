@@ -291,7 +291,6 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             for rejection in rejected_suggestions:
                 source_id = rejection.get("source_task")
                 if source_id:
-                    from langchain_core.messages import SystemMessage
                     feedback = SystemMessage(
                         content=f"DIRECTOR FEEDBACK: Your task suggestion '{rejection['suggestion'].get('title')}' was not approved.\n\n"
                                 f"Reason: {rejection['reason']}\n\n"
@@ -754,7 +753,6 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
                 if suggestion.get("title") == rejected.title or rejected.title in suggestion.get("description", ""):
                     source_id = suggestion.get("suggested_by_task")
                     if source_id:
-                        from langchain_core.messages import SystemMessage
                         feedback = SystemMessage(
                             content=f"DIRECTOR FEEDBACK (LLM Validation): Task suggestion '{rejected.title}' was rejected by the Lead Architect.\n\n"
                                     f"Reason: {rejected.reason}\n\n"
