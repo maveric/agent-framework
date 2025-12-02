@@ -731,11 +731,11 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
                 bound_tools.append(StructuredTool.from_function(wrapper, name="run_shell"))
         
         elif tool.__name__ == "create_subtasks":
-             # Only allow Planners and Testers to create subtasks
-             if profile in [WorkerProfile.PLANNER, WorkerProfile.TESTER]:
+             # Allow Planners, Testers, and Coders to create subtasks
+             if profile in [WorkerProfile.PLANNER, WorkerProfile.TESTER, WorkerProfile.CODER]:
                  bound_tools.append(tool)
              else:
-                 # Skip for Coders
+                 # Skip for other profiles
                  pass
         
         elif tool.__name__ == "report_existing_implementation":
@@ -877,6 +877,26 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - **NO EXTRAS**: Do NOT add Docker files, CI/CD configs, deployment scripts, monitoring, logging frameworks, or ANY extras
     - **STICK TO THE SPEC**: If design_spec.md says "CRUD API", build ONLY that. NOT: admin panels, authentication, rate limiting, etc.
     - **IF NOT IN TASK**: Don't build it. Period.
+    
+    **REQUESTING MISSING DEPENDENCIES**:
+    - If you discover missing files/work that BLOCKS YOUR CURRENT TASK, you may use `create_subtasks`
+    - **ONLY FOR IN-SCOPE BLOCKERS**: The missing item must be:
+      * Required by design_spec.md
+      * Needed to complete YOUR assigned task
+      * NOT a "nice-to-have" or optimization
+    - **DETAILED RATIONALE REQUIRED**: In the `rationale` field, explain:
+      * What you were trying to implement
+      * What specific file/component is missing
+      * Why you cannot complete your task without it
+      * Evidence it's in scope (reference design_spec.md)
+    - **EXAMPLES**:
+      * ✅ GOOD: "Need backend/models.py to define API routes. design_spec.md requires User model for /api/users endpoint."
+      * ❌ BAD: "Should add Redis caching for better performance"
+      * ❌ BAD: "Need authentication system" (too broad, not your task)
+    - **CONSTRAINTS**:
+      * Do NOT suggest nice-to-haves, performance optimizations, or scope expansion
+      * Do NOT suggest tasks unrelated to YOUR current assignment
+      * If rejected by Director, find an alternative approach or work around it
     
     **ALREADY IMPLEMENTED?**:
     - If you find the code ALREADY EXISTS and meets requirements:
