@@ -1,0 +1,67 @@
+================================================
+STRATEGIST.PY FIX - Add Progress Messages
+Location: Line 245 (right after task_memories assignment, before return)
+================================================
+
+FIND THIS (lines 237-247):
+            # Append QA logs to task memories
+            if qa_verdict:
+                qa_messages = [
+                    SystemMessage(content="QA Evaluation Process"),
+                    HumanMessage(content=f"Evaluating task {task_id} against criteria:\n" + "\n".join(task.get("acceptance_criteria", []))),
+                    HumanMessage(content=f"Test Results:\n{test_content[:500]}..." if test_content else "No test content"),
+                    SystemMessage(content=f"Verdict: {'PASS' if qa_verdict['passed'] else 'FAIL'}\nFeedback: {qa_verdict['overall_feedback']}")
+                ]
+                task_memories[task_id] = qa_messages
+
+    return {"tasks": updates, "task_memories": task_memories} if updates else {}
+
+
+ADD THIS CODE BETWEEN THE task_memories ASSIGNMENT AND THE return STATEMENT:
+
+    # PENDING REORG: Show countdown after task completion
+    pending_reorg = state.get("pending_reorg", False)
+    if pending_reorg and updates:
+        # Count remaining active tasks
+        all_tasks_raw = state.get("tasks", [])
+        from orchestrator_types import _dict_to_task, TaskStatus
+        all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
+        # Count active tasks, excluding the ones we just updated
+        updated_ids = {u["id"] for u in updates}
+        remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
+        
+        completed_id = updates[0]["id"][:8]
+        print(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.", flush=True)
+
+
+SO THE FINAL CODE SHOULD LOOK LIKE:
+
+            # Append QA logs to task memories
+            if qa_verdict:
+                qa_messages = [
+                    SystemMessage(content="QA Evaluation Process"),
+                    HumanMessage(content=f"Evaluating task {task_id} against criteria:\n" + "\n".join(task.get("acceptance_criteria", []))),
+                    HumanMessage(content=f"Test Results:\n{test_content[:500]}..." if test_content else "No test content"),
+                    SystemMessage(content=f"Verdict: {'PASS' if qa_verdict['passed'] else 'FAIL'}\nFeedback: {qa_verdict['overall_feedback']}")
+                ]
+                task_memories[task_id] = qa_messages
+
+    # PENDING REORG: Show countdown after task completion
+    pending_reorg = state.get("pending_reorg", False)
+    if pending_reorg and updates:
+        # Count remaining active tasks
+        all_tasks_raw = state.get("tasks", [])
+        from orchestrator_types import _dict_to_task, TaskStatus
+        all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
+        # Count active tasks, excluding the ones we just updated
+        updated_ids = {u["id"] for u in updates}
+        remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
+        
+        completed_id = updates[0]["id"][:8]
+        print(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.", flush=True)
+
+    return {"tasks": updates, "task_memories": task_memories} if updates else {}
+
+================================================
+NOTE: The indentation is important - this block should be at the same level as the return statement (no indentation)
+================================================

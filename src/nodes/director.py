@@ -294,6 +294,42 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             AIMessage(content=f"Integrated {len(new_tasks) if 'new_tasks' in locals() else 0} new tasks.")
         ])
 
+
+
+    # PENDING REORG: Block new task starts, wait for active tasks, then reorg
+    pending_reorg = state.get("pending_reorg", False)
+    if pending_reorg:
+        active_tasks = [t for t in all_tasks if t.status == TaskStatus.ACTIVE]
+        
+        if active_tasks:
+            # Still have active tasks - block new task dispatch
+            print(f"Director: Reorg pending. Waiting on {len(active_tasks)} active tasks to finish. No new tasks started.", flush=True)
+            # Don't update tasks or dispatch - just return with flag still set
+            return {"pending_reorg": True}  # Keep flag set
+        else:
+            # All active tasks done - execute reorg NOW
+            print("Director: All tasks complete. Executing reorg now...", flush=True)
+            
+            # Gather all PLANNED tasks for reorganization
+            planned_tasks = [t for t in all_tasks if t.status == TaskStatus.PLANNED]
+            
+            if planned_tasks:
+                suggestions = [task_to_dict(t) for t in planned_tasks]
+                try:
+                    new_tasks = _integrate_plans(suggestions, state)
+                    updates.extend([task_to_dict(t) for t in new_tasks])
+                    print(f"Director: Reorganized {len(new_tasks)} tasks", flush=True)
+                except Exception as e:
+                    print(f"Director Error: Reorg failed: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+            
+            # Clear the flag - reorg complete
+            result = {"tasks": updates, "pending_reorg": False} if updates else {"pending_reorg": False}
+            if director_messages:
+                result["task_memories"] = {"director": director_messages}
+            return result
+    
     # Return updates and logs
     result = {"tasks": updates, "replan_requested": False} if updates else {}
     if director_messages:
@@ -303,6 +339,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
         result["task_memories"] = {"director": director_messages}
         
     return result
+
 
 
 def _mock_decompose(objective: str) -> List[Task]:
@@ -632,11 +669,16 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
            - Example: If backend and frontend exist but no integration test, create one
            - Example: If frontend depends on rejected API utility, create minimal API connection task
            - Keep it minimal - ONLY what's needed for dependencies to work
-           
-        5. **Link Dependencies**: Ensure logical flow.
-           - Test tasks depend on Build tasks they test
-           - Frontend depends on Backend if needed
-           - Integration tests depend on both components
+        
+        5. **Link Dependencies**: Create a SINGLE unified dependency tree.
+           - **NO SILOS**: Frontend, Backend, and Tests must be interconnected
+           - **Backend first**: Frontend MUST depend on backend API being built
+           - **Tests last**: ALL test tasks MUST depend on what they're testing
+           - **Integration tests**: MUST depend on BOTH frontend AND backend completion
+           - **CRITICAL**: Every task must trace back to root - no independent trees
+           - Example flow: Backend DB → Backend API → Frontend → Integration Tests
+           - If you see disconnected trees, ADD dependency links to connect them
+
            
         6. **Return**: Two lists:
            - `tasks`: Approved + gap-filling tasks with correct depends_on

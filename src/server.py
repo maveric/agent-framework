@@ -400,33 +400,22 @@ async def replan_run(run_id: str):
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
     
-    # Update the LangGraph state to set replan_requested=True
     try:
         orchestrator = get_orchestrator_graph()
         config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
         
-        # Update state to trigger replan
-        orchestrator.update_state(config, {"replan_requested": True})
+        # Set pending_reorg flag - director will handle blocking and waiting
+        orchestrator.update_state(config, {"pending_reorg": True})
         
-        # CRITICAL: Must invoke the graph to actually process the flag
-        # update_state only modifies state, doesn't trigger execution
-        logger.info(f"Replan requested for run {run_id}, invoking director...")
-        
-        # Stream one step to trigger the director
-        for event in orchestrator.stream(None, config, stream_mode="updates"):
-            # Just need one director execution
-            if "director" in event:
-                logger.info("Director processed replan request")
-                break
-        
-        logger.info(f"Replan completed for run {run_id}")
-        return {"status": "replan_completed"}
+        logger.info(f"Pending reorg flag set for run {run_id}. Director will block new tasks and wait for active tasks to complete.")
+        return {"status": "reorg_pending"}
         
     except Exception as e:
-        logger.error(f"Failed to trigger replan: {e}")
+        logger.error(f"Failed to set pending_reorg flag: {e}")
         import traceback
-        traceback.print_exc()  # Print full traceback to terminal
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

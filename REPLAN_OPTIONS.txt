@@ -1,0 +1,56 @@
+================================================
+REPLAN BUTTON ENHANCEMENT OPTIONS
+================================================
+
+CURRENT BEHAVIOR:
+- Sets replan_requested=True
+- Invokes graph stream
+- Director reprocesses pending tasks
+- BUT: Doesn't stop running work
+
+USER NEED:
+"Almost like 'stop what you're doing, the human is interjecting'" 
+- Within ~1 minute
+- Interrupt and restructure immediately
+
+OPTION 1: Cancel Running Tasks (Aggressive)
+---------------------------------------------
+In server.py replan endpoint, before invoking director:
+1. Get all ACTIVE tasks from state
+2. Change their status to PLANNED (reset them)
+3. Then invoke director to reorg everything
+
+Pros: Fast, truly interrupts
+Cons: Loses in-progress work
+
+OPTION 2: Mark for Reconsider (Gentle)
+---------------------------------------------
+Add a "pending_reorg" flag to running tasks
+Let them finish current work
+Director will reorg when they complete
+
+Pros: Doesn't lose work
+Cons: Slower, not immediate
+
+OPTION 3: Hybrid (Recommended)
+---------------------------------------------
+1. Leave almost-done tasks alone (>80% through)
+2. Cancel recently-started tasks (<20% through)
+3. Mark middle tasks for reorg on completion
+
+Pros: Balanced
+Cons: More complex
+
+RECOMMENDATION:
+Go with OPTION 1 for now - user wants speed.
+We can add safeguards later.
+
+Implementation:
+1. In /api/runs/{run_id}/replan endpoint
+2. Before calling orchestrator.stream()
+3. Get current state, find ACTIVE tasks
+4. Use orchestrator.update_state() to reset them to PLANNED
+5. Then invoke director
+
+Want me to implement this?
+================================================

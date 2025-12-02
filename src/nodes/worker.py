@@ -504,19 +504,12 @@ def _execute_react_loop(
                     
                     for st in subtasks:
                         try:
-                            # Handle case where LLM returns a list of strings instead of dicts
-                            if isinstance(st, str):
-                                title = st
-                                desc = st
-                                st_data = {} # Empty dict for other fields
-                            elif isinstance(st, dict):
-                                title = st.get("title", "Untitled")
-                                desc = st.get("description", "No description")
-                                st_data = st
-                            else:
-                                print(f"  [WARNING] Skipping invalid subtask format: {type(st)}", flush=True)
+                            # STRICT VALIDATION: Only accept proper dict format
+                            if not isinstance(st, dict):
+                                print(f"  [ERROR] Invalid subtask format: expected dict, got {type(st).__name__}. Subtask will be skipped.", flush=True)
+                                print(f"  [ERROR] LLM must call create_subtasks with a LIST of DICTS, not strings or other types.", flush=True)
                                 continue
-
+                                
                             # Prepend title to description so it's preserved for dependency resolution
                             # UPDATE: Appending instead of prepending to avoid confusing the LLM
                             full_desc = f"{desc}\n\nTitle: {title}"

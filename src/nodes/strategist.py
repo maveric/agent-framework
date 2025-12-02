@@ -243,5 +243,19 @@ def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dic
                     SystemMessage(content=f"Verdict: {'PASS' if qa_verdict['passed'] else 'FAIL'}\nFeedback: {qa_verdict['overall_feedback']}")
                 ]
                 task_memories[task_id] = qa_messages
+            
+    # PENDING REORG: Show countdown after task completion
+    pending_reorg = state.get("pending_reorg", False)
+    if pending_reorg and updates:
+        # Count remaining active tasks
+        all_tasks_raw = state.get("tasks", [])
+        from orchestrator_types import _dict_to_task, TaskStatus
+        all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
+        # Count active tasks, excluding the ones we just updated
+        updated_ids = {u["id"] for u in updates}
+        remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
+        
+        completed_id = updates[0]["id"][:8]
+        print(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.", flush=True)  
 
     return {"tasks": updates, "task_memories": task_memories} if updates else {}

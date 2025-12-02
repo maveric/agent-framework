@@ -222,8 +222,11 @@ class OrchestratorState(TypedDict, total=False):
     # Filesystem (last-write-wins merge)
     filesystem_index: Dict[str, str]
     
-    # Control
+    # Control flags
     guardian: Dict[str, Any]
+    replan_requested: bool  # Manual replan trigger (old method)
+    pending_reorg: bool  # Smart replan - blocks new tasks while active tasks finish
+    
     # Internal state
     _wt_manager: Any  # WorktreeManager instance
     _workspace_path: str  # Path to workspace root
