@@ -197,6 +197,56 @@ def _serialize_orch_config(config):
 # ENDPOINTS
 # =============================================================================
 
+async def ensure_run_in_index(run_id: str) -> bool:
+    """
+    Ensure run is in runs_index by looking it up in database if needed.
+    
+    This allows API endpoints to work with CLI-initiated runs that aren't
+    in the in-memory runs_index.
+    
+    Returns:
+        True if run found (already in index or added from DB), False if not found.
+    """
+    # Already in index
+    if run_id in runs_index:
+        return True
+    
+    # Try to find in database
+    try:
+        get_orchestrator_graph()
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        thread_ids = [row[0] for row in cursor.fetchall()]
+        
+        for thread_id in thread_ids:
+            config = {"configurable": {"thread_id": thread_id}}
+            state_snapshot = global_checkpointer.get(config)
+            
+            if state_snapshot and "channel_values" in state_snapshot:
+                state = state_snapshot["channel_values"]
+                found_run_id = state.get("run_id", thread_id)
+                
+                if found_run_id == run_id:
+                    # Found it! Add to index
+                    runs_index[run_id] = {
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "objective": state.get("objective", ""),
+                        "status": "running",
+                        "created_at": state.get("created_at", ""),
+                        "updated_at": state.get("updated_at", ""),
+                        "task_counts": {},
+                        "tags": state.get("tags", [])
+                    }
+                    logger.info(f"Added CLI-initiated run {run_id} to index (thread: {thread_id})")
+                    return True
+        
+        return False
+            
+    except Exception as e:
+        logger.error(f"Error looking up run in database: {e}")
+        return False
+
 @app.get("/api/runs", response_model=List[RunSummary])
 async def list_runs():
     # Query the DB for all threads
@@ -427,7 +477,8 @@ async def replan_run(run_id: str):
 @app.get("/api/runs/{run_id}/interrupts")
 async def get_interrupts(run_id: str):
     """Check if run is paused waiting for human input."""
-    if run_id not in runs_index:
+    # Ensure run is in index (may be CLI-initiated)
+    if not await ensure_run_in_index(run_id):
         raise HTTPException(status_code=404, detail="Run not found")
     
     try:
@@ -461,7 +512,8 @@ async def get_interrupts(run_id: str):
 @app.post("/api/runs/{run_id}/resolve")
 async def resolve_interrupt(run_id: str, resolution: HumanResolution, background_tasks: BackgroundTasks):
     """Resume execution with human decision."""
-    if run_id not in runs_index:
+    # Ensure run is in index (may be CLI-initiated)
+    if not await ensure_run_in_index(run_id):
         raise HTTPException(status_code=404, detail="Run not found")
     
     try:
