@@ -477,11 +477,64 @@ def _execute_react_loop(
         # Increased recursion limit to prevent "Sorry, need more steps" error
         result = agent.invoke(inputs, config={"recursion_limit": 150})
     except Exception as e:
-        # Log token info if it's a rate limit error
-        if "812" in str(e) or "token" in str(e).lower():
-            print(f"  DEBUG: Token error - inspecting agent state", flush=True)
-            # print(f"  DEBUG: Inputs had {total_chars} chars", flush=True)
-        raise
+        # Handle errors gracefully - return AAR instead of crashing
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        # Detect specific error types
+        is_rate_limit = "rate_limit" in error_msg.lower() or "429" in error_msg
+        is_tool_error = "access denied" in error_msg.lower() or "outside workspace" in error_msg.lower()
+        
+        print(f"  [AGENT ERROR] {error_type}: {error_msg[:200]}", flush=True)
+        
+        # Create appropriate AAR based on error type
+        from orchestrator_types import AAR
+        if is_rate_limit:
+            aar = AAR(
+                summary=f"Task failed due to API rate limit. The LLM provider returned a 429 error.",
+                approach="ReAct agent execution interrupted by rate limit",
+                challenges=[
+                    f"Rate limit error: {error_msg[:500]}",
+                    "Too many API calls in short time period",
+                    "Consider: reducing task complexity, using cheaper model, or waiting before retry"
+                ],
+                decisions_made=["Terminated execution due to rate limit"],
+                files_modified=[]
+            )
+        elif is_tool_error:
+            aar = AAR(
+                summary=f"Task failed due to tool usage error: {error_msg[:200]}",
+                approach="ReAct agent execution interrupted by tool error",
+                challenges=[
+                    f"Tool error: {error_msg[:500]}",
+                    "Agent attempted invalid operation (e.g., accessing outside workspace)",
+                    "This indicates either: tool misuse by agent, or overly restrictive tool validation"
+                ],
+                decisions_made=["Terminated execution due to tool error"],
+                files_modified=[]
+            )
+        else:
+            aar = AAR(
+                summary=f"Task failed with unexpected error: {error_type}",
+                approach="ReAct agent execution interrupted by exception",
+                challenges=[
+                    f"{error_type}: {error_msg[:500]}",
+                    "Unexpected error during agent execution"
+                ],
+                decisions_made=["Terminated execution due to error"],
+                files_modified=[]
+            )
+        
+        workspace_path = state.get("_workspace_path")
+        result_path = log_llm_response(task.id, {"messages": []}, [], status="failed", workspace_path=workspace_path)
+        
+        return WorkerResult(
+            status="failed",
+            result_path=result_path,
+            aar=aar,
+            suggested_tasks=[],
+            messages=[]
+        )
     
     # Extract results
     messages = result["messages"]
