@@ -120,6 +120,12 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                         if "MISSING TEST RESULTS FILE" not in task.description:
                             task.description += f"\n\nPREVIOUS FAILURE: {feedback}"
                         
+                        # Immediately evaluate readiness for instant retry
+                        new_status = _evaluate_readiness(task, all_tasks)
+                        if new_status == TaskStatus.READY:
+                            print(f"  Phoenix: Task {task.id} immediately READY for retry", flush=True)
+                            task.status = new_status
+                        
                         updates.append(task_to_dict(task))
                     else:
                         # ACTUAL TEST EXECUTION FAILURE: Spawn a BUILD task to fix code issues
@@ -153,6 +159,11 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                         task.status = TaskStatus.PLANNED
                         task.retry_count = retry_count + 1
                         task.updated_at = datetime.now()
+                        
+                        # Evaluate readiness (will be PLANNED since it now depends on fix_task)
+                        # But good to be explicit about status
+                        task.status = _evaluate_readiness(task, all_tasks)
+                        
                         updates.append(task_to_dict(task))
                     
                 else:
@@ -173,6 +184,12 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                         # Append to description if not already there to avoid duplication
                         if "PREVIOUS FAILURE:" not in task.description and "QA FEEDBACK:" not in task.description:
                              task.description += f"\n\n{failure_reason}"
+                    
+                    # Immediately evaluate readiness for instant retry
+                    new_status = _evaluate_readiness(task, all_tasks)
+                    if new_status == TaskStatus.READY:
+                        print(f"  Phoenix: Task {task.id} immediately READY for retry", flush=True)
+                        task.status = new_status
                     
                     updates.append(task_to_dict(task))
             else:
