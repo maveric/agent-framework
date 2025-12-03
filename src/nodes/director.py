@@ -450,7 +450,14 @@ Write a design specification in markdown format with these sections:
 - **Technology Stack**: What frameworks/libraries to use
 - **.gitignore Requirements**: MANDATORY - must include: .venv/, venv/, node_modules/, __pycache__/, *.pyc, .env
 
-CRITICAL: Ensure dependency folders are in .gitignore to prevent worktree bloat.
+  * **CRITICAL**: Create .gitignore that excludes:
+    - .venv/ or venv/
+    - node_modules/
+    - __pycache__/
+    - *.pyc
+    - *.db (if using SQLite for development)
+    - Any other generated files
+  * This prevents worktree pollution and keeps git operations fast
 
 Be specific enough that workers can implement without ambiguity."""),
         ("user", "Objective: {objective}")
@@ -488,24 +495,63 @@ Be specific enough that workers can implement without ambiguity."""),
     structured_llm = llm.with_structured_output(DecompositionResponse)
     
     decomp_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are the Director decomposing a project into component planners.
+    ("system", """You are the Director decomposing a project into FEATURE-LEVEL planners.
 
-CRITICAL INSTRUCTIONS:
-1. Create 1-5 PLANNER tasks, one for each major component (e.g., Backend, Frontend, Testing)
-2. Each task should have phase="plan" and worker_profile="planner_worker"
-3. Do NOT create build or test tasks - planners will create those
-4. Keep it minimal - only create planners for components that are truly necessary
-5. Component examples: "backend", "frontend", "database", "testing", "api"
+CRITICAL INSTRUCTIONS - FEATURE-BASED DECOMPOSITION:
+
+1. **FIRST: Check if infrastructure planner is needed**
+   - Does design spec require: Flask setup, database init, React config, etc?
+   - If YES: Create "Set up [project] infrastructure" planner as FIRST task
+   
+2. **THEN: Create planners for user-facing features**
+   - Think "User can..." or "System provides..."
+   - Order logically: foundational features before dependent ones
+   - Example: "User can add items" before "User can delete items"
+   
+3. **FINALLY: Create validation planner** 
+   - "System validates with [test framework]"
+   - Always last
+
+FEATURE PLANNER EXAMPLES:
+
+✅ INFRASTRUCTURE (if needed, always FIRST):
+- Component: "infrastructure", Description: "Set up kanban application infrastructure"
+- Component: "infrastructure", Description: "Initialize React dashboard with routing"
+
+✅ USER FEATURES (in logical order):
+- Component: "add-items", Description: "User can add items to the system"
+- Component: "view-items", Description: "User can view items in organized layout"
+- Component: "modify-items", Description: "User can modify item properties"
+- Component: "delete-items", Description: "User can delete items"
+
+✅ VALIDATION (always LAST):
+- Component: "validation", Description: "System validates core functionality with Playwright"
+
+❌ NEVER DO THIS:
+- Component: "backend" (too technical, not feature-based)
+- Component: "frontend" (too technical, not feature-based)
+- Component: "testing" (testing is part of features)
+- Component: "database" (unless it's the infrastructure planner)
+
+RULES:
+- Create 1-7 planner tasks (infra + features + validation)
+- Each task should have phase="plan" and worker_profile="planner_worker"
+- Do NOT create build or test tasks - planners will create those
+- Component name should be the feature slug (e.g., "add-items", "infrastructure")
+- Features should be user-facing capabilities, NOT technical components
 
 OUTPUT:
-Create planner tasks following this schema."""),
-        ("user", """Objective: {objective}
+Create planner tasks following this schema. Order them: infrastructure → features → validation."""),
+    ("user", """Objective: {objective}
 
 Design Spec Summary:
 {spec_summary}
 
-Create 1-5 planner tasks to delegate component planning.""")
-    ])
+Create feature-level planner tasks based on the design spec. Remember:
+- Infrastructure first (if needed)
+- User features in logical order
+- Validation last""")
+])
     
     try:
         # Use first 500 chars of spec as summary
@@ -612,6 +658,11 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
         2. **Link Dependencies**: Ensure logical flow across components.
            - **CRITICAL RULE**: Test tasks MUST depend on the Build tasks they are testing.
            - Frontend tasks MUST depend on their corresponding Backend tasks.
+           - **Commit granularity**: Each task should be one atomic commit
+           - **Parallel when possible**: Tasks within same feature can run parallel if deps allow
+           - **Example flow**: 
+            * Database schema → API endpoint → UI component → Integration test
+                * NOT: All backend → All frontend → All tests
         3. **Return**: The final, clean list of tasks with CORRECT `depends_on` lists (use exact titles).
         
         CHAIN OF THOUGHT (Internal):

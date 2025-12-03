@@ -837,17 +837,39 @@ def _mock_execution(task: Task) -> WorkerResult:
 
 def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     """
-    Create a list of subtasks to be executed by other workers.
-    Available to: planner_worker, test_worker
+    Create COMMIT-LEVEL subtasks to be executed by other workers.
+    
+    IMPORTANT: Think in terms of GIT COMMITS, not components!
+    Each task should represent ONE atomic, reviewable change.
     
     Args:
         subtasks: List of dicts, each containing:
-            - title: str
-            - description: str
-            - phase: "build" | "test" | "plan" | "research"
-            - component: str (e.g., "backend", "frontend")
-            - depends_on: List[str] (optional, titles of other subtasks this depends on)
-            - worker_profile: "code_worker" | "test_worker" | "planner_worker" (optional, default based on phase)
+            - title: str (concise, commit-message-style)
+            - description: str (what changes, why, acceptance criteria)
+            - phase: "build" | "test" (NOT separate - build includes inline tests)
+            - component: str (optional, use feature name instead of "backend"/"frontend")
+            - depends_on: List[str] (titles of tasks this depends on)
+            - worker_profile: "code_worker" | "test_worker" (default based on phase)
+    
+    EXAMPLES OF GOOD TASKS:
+    {
+      "title": "Create tasks table in SQLite database",
+      "description": "Set up database schema with id, title, status columns. Include migration script and verification query.",
+      "phase": "build",
+      "depends_on": []
+    },
+    {
+      "title": "Implement GET /api/tasks endpoint",
+      "description": "Create Flask route to return all tasks as JSON. Include unit test for happy path and empty state.",
+      "phase": "build",
+      "depends_on": ["Create tasks table in SQLite database"]
+    },
+    {
+      "title": "Playwright test: Add and view task",
+      "description": "E2E test that adds a task via UI and verifies it appears in correct column.",
+      "phase": "test",
+      "depends_on": ["Implement POST /api/tasks endpoint", "Add task creation UI component"]
+    }
     
     Returns:
         Status message or error
@@ -1005,17 +1027,31 @@ CRITICAL INSTRUCTIONS:
 1. **READ THE SPEC FIRST**: Check `design_spec.md` in the project root - this is YOUR CONTRACT
 2. Explore the codebase using `list_directory` and `read_file`
 3. Write your plan to `agents-work/plans/plan-{{component}}.md` using `write_file`
-4. **CREATE BUILD AND TEST TASKS**: Use `create_subtasks` to define concrete work items
-   - Create BUILD tasks with `phase="build"` and `worker_profile="code_worker"`
-   - Create TEST tasks with `phase="test"` and `worker_profile="test_worker"`
-   - **DO NOT** create sub-planner tasks (`phase="plan"`) - you are the planner!
-   - Break work into small, manageable chunks (5-15 tasks maximum)
-   - Define dependencies using `depends_on` (use task titles)
-   - **DEPENDENCY EXAMPLES** (MANDATORY):
-     * "Implement API endpoints" depends_on=["Set up Flask app", "Create database models"]
-     * ALL test tasks MUST depend on their build tasks: depends_on=["Build task title"]
-     * Integration tests depend on ALL features: depends_on=["Feature A", "Feature B", ...]
-     * If task is truly independent, use depends_on=[] (empty list)
+4. **CREATE COMMIT-LEVEL TASKS**: Use `create_subtasks` to define atomic, reviewable changes:
+   
+   GRANULARITY: Think in terms of GIT COMMITS
+   - ✅ GOOD: "Implement POST /api/tasks endpoint with validation"
+   - ✅ GOOD: "Add drag-drop UI for task movement"
+   - ✅ GOOD: "Add Playwright test for task creation flow"
+   - ❌ TOO BIG: "Build entire backend API"
+   - ❌ TOO SMALL: "Add import statement"
+   
+   Each task should:
+   - Implement ONE atomic, testable change
+   - Be reviewable as a standalone PR
+   - Include its own verification (unit test in same commit, or integration test right after)
+   - Have 3-6 clear acceptance criteria
+   
+   BUILD TESTING INTO YOUR TASKS:
+   - Don't separate "build" from "test" - test what you build
+   - Unit tests: Include in same task as code
+   - Integration tests: Separate task that depends on the feature tasks
+   - E2E tests: Final task after feature is complete
+   
+   DEPENDENCIES:
+   - Link tasks in logical build order
+   - Database/models → API endpoints → UI → Integration tests
+   - Tasks within same feature can run parallel if independent
 5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
 6. **CRITICAL**: Include at least ONE TEST task to validate your component
 7. DO NOT output the plan in the chat - use tools only
@@ -1030,6 +1066,18 @@ CRITICAL INSTRUCTIONS:
 - **IF IN DOUBT**: Leave it out. The Director has already decided the scope. Your job is execution only.
 
 Remember: The spec is law. You execute, you don't expand.
+
+TASK QUALITY REQUIREMENTS:
+1. **Commit-level granularity**: Reviewable as one PR
+2. **Self-contained**: Includes build + verification
+3. **Clear scope**: 3-6 specific acceptance criteria
+4. **Logical order**: Dependencies make sense in development flow
+
+AVOID THESE PATTERNS:
+- ❌ Creating "backend" vs "frontend" silos
+- ❌ Separating all building from all testing
+- ❌ Tasks too large (>100 LOC changes) or too small (trivial changes)
+- ❌ Vague criteria like "make it work"
 """
     
     result = _execute_react_loop(task, tools, system_prompt, state, config)
