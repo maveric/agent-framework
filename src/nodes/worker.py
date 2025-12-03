@@ -1132,6 +1132,14 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
 - Use `list_directory(".")` to see the project root (NOT list_directory("/") - that's invalid)
 - Use relative paths: "design_spec.md" or "agents-work/plans/" (NOT "/design_spec.md")  
 - Use `read_file()` for FILES only, use `list_directory()` for directories
+- Use `run_python()` to execute Python code
+- Use `run_shell()` to execute shell commands
+    NOTE:
+        Platform - {PLATFORM}
+        CRITICAL - SHELL COMMAND SYNTAX:
+        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
+
 
 Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
     
@@ -1279,7 +1287,7 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
       ```
     **CRITICAL INSTRUCTION**:
     The agents-work/ folder is for agent artifacts, NOT project code.
-    Write test files to the project root, but test RESULTS must be written to to agents-work/test-results/test-{task_desc}.md.
+    Write test files to the project root, but test RESULTS **must** be written to to agents-work/test-results/test-{task_desc}.md or your task will not pass QA.
     
     **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
     - **TEST ONLY WHAT'S ASSIGNED**: Only test the specific feature/component in your task description
@@ -1287,6 +1295,11 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - **NO INFRASTRUCTURE TESTING**: Do NOT test deployment, CI/CD, monitoring, or any infrastructure not in the task
     - **STICK TO THE TASK**: If task says "test CRUD API", test ONLY that. NOT: authentication, rate limiting, caching, etc.
     - **IF NOT IN TASK**: Don't test it. Period.
+    NOTE:
+        Platform - {PLATFORM}
+        CRITICAL - SHELL COMMAND SYNTAX:
+        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)

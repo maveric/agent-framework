@@ -9,10 +9,14 @@ Implementation of code execution tools.
 import subprocess
 import sys
 import os
+import platform
 from typing import Dict, Any
 
+PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
+
+
 def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
-    """
+    f"""
     Execute Python code in a separate process.
     
     Args:
@@ -22,6 +26,13 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
         
     Returns:
         Combined stdout and stderr
+
+    NOTE:
+        Platform - {PLATFORM}
+        CRITICAL - SHELL COMMAND SYNTAX:
+        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
+
     """
     # Prepare environment with CWD in PYTHONPATH
     env = os.environ.copy()
@@ -59,7 +70,7 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
         return f"Error executing code: {str(e)}"
 
 def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
-    """
+    f"""
     Execute shell command.
     
     Args:
@@ -69,6 +80,12 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
         
     Returns:
         Combined stdout and stderr
+
+    NOTE:
+        Platform - {PLATFORM}
+        CRITICAL - SHELL COMMAND SYNTAX:
+        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
     """
     # Security: Whitelist allowed commands
     ALLOWED_COMMANDS = ["ls", "dir", "cat", "type", "echo", "grep", "find", "mkdir", "rmdir", "python", "python3", "pip", "npm", "node"]

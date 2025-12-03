@@ -11,10 +11,12 @@ import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from .safe_wrapper import safe_tool
+import platform
 
 # Security: Restrict operations to the workspace root
 # This will be overridden by passing workspace_path in tool calls
 WORKSPACE_ROOT = Path(os.getcwd())
+PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
 
 def _get_workspace_root(root: Optional[Path] = None) -> Path:
     """Get workspace root from argument or default."""
@@ -44,7 +46,7 @@ def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
 
 @safe_tool
 def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
-    """
+    f"""
     Read the contents of a file.
     
     Args:
@@ -54,6 +56,9 @@ def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -
     
     Returns:
         File contents as string
+
+    NOTE:
+        Platform - {PLATFORM}
     """
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
@@ -73,7 +78,7 @@ def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -
 
 @safe_tool
 def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
-    """
+    f"""
     Write content to a file. Creates parent directories automatically if needed.
     
     CRITICAL: You MUST provide BOTH 'path' AND 'content' parameters!
@@ -94,6 +99,9 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
         
     Returns:
         Success message with byte count
+
+    NOTE:
+        Platform - {PLATFORM}
     """
     # Explicit parameter validation with helpful errors
     if not path:
@@ -129,7 +137,7 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
 
 @safe_tool
 def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
-    """
+    f"""
     Append content to an existing file.
     
     Args:
@@ -140,6 +148,9 @@ def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional
         
     Returns:
         Success message
+
+    NOTE:
+        Platform - {PLATFORM}
     """
     if not _is_safe_path(path, root):
         raise ValueError(f"Access denied: {path} is outside workspace")
