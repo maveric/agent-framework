@@ -437,6 +437,12 @@ def _execute_react_loop(
     
     print(f"  Starting ReAct agent...", flush=True)
     
+    # LOOP DETECTION: Track consecutive tool calls to detect infinite loops
+    # This catches patterns like: write_file → write_file → write_file (20x)
+    consecutive_tool_tracker = {}  # {tool_name: count}
+    last_tool_name = None
+    LOOP_THRESHOLD = 10
+    
     # Invoke agent
     # We use a recursion limit to prevent infinite loops
     try:
@@ -452,6 +458,35 @@ def _execute_react_loop(
     # Extract results
     messages = result["messages"]
     last_message = messages[-1]
+    
+    # LOOP DETECTION: Check for repetitive tool calls
+    tool_call_sequence = []
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tool_name = tc.get("name")
+                if tool_name:
+                    tool_call_sequence.append(tool_name)
+    
+    # Count consecutive calls
+    if tool_call_sequence:
+        from collections import Counter
+        # Look for runs of the same tool
+        max_consecutive = 1
+        current_tool = None
+        current_count = 0
+        
+        for tool in tool_call_sequence:
+            if tool == current_tool:
+                current_count += 1
+                max_consecutive = max(max_consecutive, current_count)
+            else:
+                current_tool = tool
+                current_count = 1
+        
+        if max_consecutive >= LOOP_THRESHOLD:
+            print(f"  [WARNING] Loop detected: '{current_tool}' called {max_consecutive} times consecutively", flush=True)
+            print(f"  [WARNING] This often indicates the LLM is stuck in a pattern (e.g., creating wrapper scripts)", flush=True)
     
     # Identify modified files and suggested tasks from tool calls
     # CRITICAL: Only count files as modified if the tool call SUCCEEDED
