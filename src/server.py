@@ -52,11 +52,19 @@ class RunSummary(BaseModel):
     workspace_path: Optional[str] = None
 
 class HumanResolution(BaseModel):
-    action: str
-    feedback: Optional[str] = None
-    modified_criteria: Optional[List[str]] = None
+    action: str  # 'retry', 'abandon', or 'spawn_new_task'
+    
+    # For 'retry' action
     modified_description: Optional[str] = None
-    input_data: Optional[Dict[str, Any]] = None
+    modified_criteria: Optional[List[str]] = None
+    
+    # For 'spawn_new_task' action
+    new_description: Optional[str] = None
+    new_component: Optional[str] = None
+    new_phase: Optional[str] = None
+    new_worker_profile: Optional[str] = None
+    new_criteria: Optional[List[str]] = None
+    new_dependencies: Optional[List[str]] = None
 
 # =============================================================================
 # WEBSOCKET MANAGER
@@ -411,7 +419,80 @@ async def replan_run(run_id: str):
         return {"status": "replan_requested"}
         
     except Exception as e:
-        logger.error(f"Failed to set pending_reorg flag: {e}")
+        logger.error(f"Failed to set replan_requested flag: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/runs/{run_id}/interrupts")
+async def get_interrupts(run_id: str):
+    """Check if run is paused waiting for human input."""
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    try:
+        orchestrator = get_orchestrator_graph()
+        thread_id = runs_index[run_id]["thread_id"]
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Get current state snapshot
+        state_snapshot = global_checkpointer.get(config)
+        
+        if state_snapshot:
+            # Check for __interrupt__ field in tasks channel
+            channel_values = state_snapshot.get("channel_values", {})
+            tasks_data = channel_values.get("tasks", {})
+            
+            # LangGraph stores interrupts in the tasks channel
+            if hasattr(tasks_data, "__interrupt__"):
+                interrupts = tasks_data.__interrupt__
+                if interrupts:
+                    return {
+                        "interrupted": True,
+                        "data": interrupts[-1]  # Most recent interrupt
+                    }
+        
+        return {"interrupted": False}
+        
+    except Exception as e:
+        logger.error(f"Error checking interrupts: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/runs/{run_id}/resolve")
+async def resolve_interrupt(run_id: str, resolution: HumanResolution, background_tasks: BackgroundTasks):
+    """Resume execution with human decision."""
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    try:
+        from langgraph.types import Command
+        
+        orchestrator = get_orchestrator_graph()
+        thread_id = runs_index[run_id]["thread_id"]
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Resume with Command - the resolution dict becomes the return value of interrupt()
+        # Run in background to avoid blocking the API response
+        def resume_execution():
+            try:
+                orchestrator.invoke(
+                    Command(resume=resolution.dict()),
+                    config=config
+                )
+                logger.info(f"Resumed run {run_id} with action: {resolution.action}")
+            except Exception as e:
+                logger.error(f"Error during resume execution: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        background_tasks.add_task(resume_execution)
+        
+        return {"status": "resuming", "action": resolution.action}
+        
+    except Exception as e:
+        logger.error(f"Error resuming run: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

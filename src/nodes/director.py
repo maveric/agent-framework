@@ -17,6 +17,7 @@ from llm_client import get_llm
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langgraph.types import interrupt
 import uuid
 
 
@@ -193,17 +194,84 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                     
                     updates.append(task_to_dict(task))
             else:
-                print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), marking as permanently failed", flush=True)
-                # Update task status to ABANDONED (terminal state recognized by routing)
-                # This prevents infinite retrying and signals the task is unrecoverable
-                task.status = TaskStatus.ABANDONED
-                task.updated_at = datetime.now()
-                # Mark that we've already processed this max-retry failure
-                # by ensuring retry_count is set high enough to skip next time
-                task.retry_count = MAX_RETRIES + 1  
-                updates.append(task_to_dict(task))
-                # Skip further processing of this task in this director cycle
-                continue
+                # HUMAN-IN-THE-LOOP: Request intervention for max retry exceeded
+                print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), requesting human intervention", flush=True)
+                
+                # Prepare interrupt payload with all task context
+                interrupt_data = {
+                    "type": "task_exceeded_retries",
+                    "task_id": task.id,
+                    "task_description": task.description,
+                    "component": task.component,
+                    "phase": task.phase.value,
+                    "retry_count": retry_count,
+                    "failure_reason": task.aar.summary if task.aar else "No details available",
+                    "acceptance_criteria": task.acceptance_criteria,
+                    "files_modified": task.aar.files_modified if task.aar else [],
+                    "assigned_worker_profile": task.assigned_worker_profile.value,
+                    "depends_on": task.depends_on
+                }
+                
+                # Pause execution and wait for human resolution
+                resolution = interrupt(interrupt_data)
+                
+                # Process human decision
+                if resolution and resolution.get("action") == "retry":
+                    print(f"  Human approved retry for task {task.id}", flush=True)
+                    task.retry_count = 0  # Reset retry counter
+                    task.status = TaskStatus.PLANNED
+                    
+                    # Apply modifications if provided
+                    if resolution.get("modified_description"):
+                        task.description = resolution["modified_description"]
+                    if resolution.get("modified_criteria"):
+                        task.acceptance_criteria = resolution["modified_criteria"]
+                    
+                    task.updated_at = datetime.now()
+                    updates.append(task_to_dict(task))
+                    
+                elif resolution and resolution.get("action") == "spawn_new_task":
+                    print(f"  Human requested new task to replace {task.id}", flush=True)
+                    
+                    # Mark original as abandoned
+                    task.status = TaskStatus.ABANDONED
+                    task.updated_at = datetime.now()
+                    updates.append(task_to_dict(task))
+                    
+                    # Create new task from resolution data
+                    new_task_id = f"task_{uuid.uuid4().hex[:8]}"
+                    new_task = Task(
+                        id=new_task_id,
+                        component=resolution.get("new_component", task.component),
+                        phase=TaskPhase(resolution.get("new_phase", task.phase.value)),
+                        status=TaskStatus.PLANNED,
+                        assigned_worker_profile=WorkerProfile(resolution.get("new_worker_profile", task.assigned_worker_profile.value)),
+                        description=resolution["new_description"],
+                        acceptance_criteria=resolution.get("new_criteria", task.acceptance_criteria),
+                        depends_on=resolution.get("new_dependencies", []),
+                        created_at=datetime.now(),
+                        updated_at=datetime.now()
+                    )
+                    updates.append(task_to_dict(new_task))
+                    
+                    # Note: New task will trigger replan automatically via normal dependency evaluation
+                    continue
+                    
+                elif resolution and resolution.get("action") == "abandon":
+                    print(f"  Human abandoned task {task.id}", flush=True)
+                    task.status = TaskStatus.ABANDONED
+                    task.updated_at = datetime.now()
+                    updates.append(task_to_dict(task))
+                    continue
+                    
+                else:
+                    # No valid resolution provided - default to abandoned
+                    print(f"  No valid resolution, abandoning task {task.id}", flush=True)
+                    task.status = TaskStatus.ABANDONED
+                    task.retry_count = MAX_RETRIES + 1
+                    task.updated_at = datetime.now()
+                    updates.append(task_to_dict(task))
+                    continue
         
         # Standard readiness evaluation for planned tasks
         elif task.status == TaskStatus.PLANNED:
