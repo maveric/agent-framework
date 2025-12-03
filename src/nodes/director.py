@@ -99,41 +99,61 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             if retry_count < MAX_RETRIES:
                 print(f"Phoenix: Retrying task {task.id} (attempt {retry_count + 1}/{MAX_RETRIES})", flush=True)
                 
-                # SPECIAL HANDLING: If TEST task failed QA, spawn a FIX task
+                # SPECIAL HANDLING: If TEST task failed QA, check if it's a code issue or test worker error
                 # Note: task.qa_verdict is a QAVerdict object, not a dict
                 if task.phase == TaskPhase.TEST and task.qa_verdict and not task.qa_verdict.passed:
                     feedback = task.qa_verdict.overall_feedback
-                    print(f"  QA Failure detected. Spawning fix task.", flush=True)
-                    print(f"  Feedback: {feedback[:100]}...", flush=True)
                     
-                    # Create a new BUILD task to fix the issues
-                    fix_task_id = f"task_{uuid.uuid4().hex[:8]}"
-                    fix_task = Task(
-                        id=fix_task_id,
-                        component=task.component,
-                        phase=TaskPhase.BUILD,
-                        status=TaskStatus.PLANNED,
-                        assigned_worker_profile=WorkerProfile.CODER,  # Default to Coder for fixes
-                        description=f"Fix issues in {task.component} reported by QA.\n\nQA FEEDBACK (MUST ADDRESS):\n{feedback}",
-                        acceptance_criteria=[
-                            "Address all QA feedback points",
-                            "Ensure code compiles/runs",
-                            "Verify fix before re-testing"
-                        ],
-                        depends_on=task.depends_on.copy(),  # Depend on what the test depended on
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
-                    )
+                    # Detect if this is a TEST WORKER ERROR (missing test results file)
+                    # vs an actual TEST EXECUTION FAILURE (code bugs found)
+                    is_test_worker_error = "MISSING TEST RESULTS FILE" in feedback
                     
-                    # Add the fix task
-                    updates.append(task_to_dict(fix_task))
-                    
-                    # Update the TEST task to depend on the fix task
-                    task.depends_on.append(fix_task_id)
-                    task.status = TaskStatus.PLANNED
-                    task.retry_count = retry_count + 1
-                    task.updated_at = datetime.now()
-                    updates.append(task_to_dict(task))
+                    if is_test_worker_error:
+                        # TEST WORKER ERROR: Just retry the TEST task itself
+                        # The test worker needs to write the results file - no code fix needed
+                        print(f"  QA Failure: Test worker error (missing results file). Retrying TEST task.", flush=True)
+                        task.status = TaskStatus.PLANNED
+                        task.retry_count = retry_count + 1
+                        task.updated_at = datetime.now()
+                        
+                        # Append feedback to description so test worker sees it on retry
+                        if "MISSING TEST RESULTS FILE" not in task.description:
+                            task.description += f"\n\nPREVIOUS FAILURE: {feedback}"
+                        
+                        updates.append(task_to_dict(task))
+                    else:
+                        # ACTUAL TEST EXECUTION FAILURE: Spawn a BUILD task to fix code issues
+                        print(f"  QA Failure: Test execution failed. Spawning fix task.", flush=True)
+                        print(f"  Feedback: {feedback[:100]}...", flush=True)
+                        
+                        # Create a new BUILD task to fix the issues
+                        fix_task_id = f"task_{uuid.uuid4().hex[:8]}"
+                        fix_task = Task(
+                            id=fix_task_id,
+                            component=task.component,
+                            phase=TaskPhase.BUILD,
+                            status=TaskStatus.PLANNED,
+                            assigned_worker_profile=WorkerProfile.CODER,  # Default to Coder for fixes
+                            description=f"Fix issues in {task.component} reported by QA.\n\nQA FEEDBACK (MUST ADDRESS):\n{feedback}",
+                            acceptance_criteria=[
+                                "Address all QA feedback points",
+                                "Ensure code compiles/runs",
+                                "Verify fix before re-testing"
+                            ],
+                            depends_on=task.depends_on.copy(),  # Depend on what the test depended on
+                            created_at=datetime.now(),
+                            updated_at=datetime.now()
+                        )
+                        
+                        # Add the fix task
+                        updates.append(task_to_dict(fix_task))
+                        
+                        # Update the TEST task to depend on the fix task
+                        task.depends_on.append(fix_task_id)
+                        task.status = TaskStatus.PLANNED
+                        task.retry_count = retry_count + 1
+                        task.updated_at = datetime.now()
+                        updates.append(task_to_dict(task))
                     
                 else:
                     # Standard retry (reset to PLANNED)
@@ -450,7 +470,7 @@ Write a design specification in markdown format with these sections:
 - **Technology Stack**: What frameworks/libraries to use
 - **.gitignore Requirements**: MANDATORY - must include: .venv/, venv/, node_modules/, __pycache__/, *.pyc, .env
 
-  * **CRITICAL**: Create .gitignore that excludes:
+  * **CRITICAL**: Make sure the design spec includes a .gitignore that excludes:
     - .venv/ or venv/
     - node_modules/
     - __pycache__/
