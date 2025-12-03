@@ -72,8 +72,8 @@ def log_llm_request(
         ],
         "tools": [
             {
-                "name": getattr(t, '__name__', str(t)),
-                "doc": (getattr(t, '__doc__', '')[:200] + "...") if getattr(t, '__doc__', '') and len(getattr(t, '__doc__', '')) > 200 else getattr(t, '__doc__', '')
+                "name": getattr(t, 'name', getattr(t, '__name__', 'unknown')),
+                "description": getattr(t, 'description', getattr(t, '__doc__', 'No description')[:200] if getattr(t, '__doc__', '') else 'No description')
             }
             for t in tools
         ],

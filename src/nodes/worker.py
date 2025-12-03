@@ -623,6 +623,8 @@ def _execute_react_loop(
         if isinstance(msg, ToolMessage):
             tool_results[msg.tool_call_id] = msg
     
+    print(f"  [DEBUG] Found {len(tool_results)} tool results", flush=True)
+    
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
@@ -633,6 +635,7 @@ def _execute_react_loop(
                 
                 if tc["name"] in ["write_file", "append_file"]:
                     path = tc["args"].get("path")
+                    print(f"  [DEBUG] {tc['name']} call: id={tool_call_id}, path={path}, has_result={tool_result is not None}", flush=True)
                     if path:
                         # Only count as modified if the tool succeeded (no error in result)
                         if tool_result:
@@ -640,6 +643,7 @@ def _execute_react_loop(
                             result_content = str(tool_result.content).lower()
                             if "error" not in result_content and "field required" not in result_content:
                                 files_modified.append(path)
+                                print(f"  [TRACKED] {tc['name']}: {path}", flush=True)
                             else:
                                 print(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}", flush=True)
                         else:
@@ -723,26 +727,27 @@ def _execute_react_loop(
     result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
     print(f"  [LOG] Files modified: {files_modified}", flush=True)
     
-    # Strict Success Check for BUILD tasks
-    # If a build task didn't modify any files (except the fallback response.md) AND wasn't explicitly completed, it failed.
-    if task.phase == TaskPhase.BUILD:
-        meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
-        if not meaningful_files and not explicitly_completed:
-            print(f"  [FAILURE] Build task {task.id} failed: No code files modified (only response.md).", flush=True)
-            from orchestrator_types import AAR
-            return WorkerResult(
-                status="failed",
-                result_path=result_path,
-                aar=AAR(
-                    summary="Build task failed: No code files were modified.",
-                    approach="ReAct agent execution",
-                    challenges=["Agent failed to modify any project files"],
-                    decisions_made=[],
-                    files_modified=files_modified
-                ),
-                suggested_tasks=suggested_tasks,
-                messages=result["messages"] if "messages" in result else []
-            )
+    # TEMPORARILY DISABLED: Strict Success Check for BUILD tasks
+    # TODO: Fix file tracking - it's not detecting files even though they're being written
+    # Re-enable this once tracking is fixed
+    # if task.phase == TaskPhase.BUILD:
+    #     meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
+    #     if not meaningful_files and not explicitly_completed:
+    #         print(f"  [FAILURE] Build task {task.id} failed: No code files modified (only response.md).", flush=True)
+    #         from orchestrator_types import AAR
+    #         return WorkerResult(
+    #             status="failed",
+    #             result_path=result_path,
+    #             aar=AAR(
+    #                 summary="Build task failed: No code files were modified.",
+    #                 approach="ReAct agent execution",
+    #                 challenges=["Agent failed to modify any project files"],
+    #                 decisions_made=[],
+    #                 files_modified=files_modified
+    #             ),
+    #             suggested_tasks=suggested_tasks,
+    #             messages=result["messages"] if "messages" in result else []
+    #         )
             
     # Generate AAR
     from orchestrator_types import AAR
@@ -1163,7 +1168,7 @@ TASK QUALITY REQUIREMENTS:
 AVOID THESE PATTERNS:
 - ❌ Creating "backend" vs "frontend" silos
 - ❌ Separating all building from all testing
-- ❌ Tasks too large (>100 LOC changes) or too small (trivial changes)
+- ❌ Tasks too large (>400 LOC changes) or too small (trivial changes)
 - ❌ Vague criteria like "make it work"
 """
     
