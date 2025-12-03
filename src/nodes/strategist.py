@@ -219,12 +219,23 @@ def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dic
                         "suggested_focus": "Fix test results file access"
                     }
             else:
-                # No test results found - fail QA
+                # No test results found - FAIL with specific feedback for Phoenix retry
+                # This allows the agent to fix it without creating a new task
+                expected_path = f"agents-work/test-results/test-{task.get('component', task_id)}.md"
                 qa_verdict = {
                     "passed": False,
-                    "overall_feedback": "Test task must produce test results file",
-                    "suggested_focus": "Create proper test results documentation"
+                    "overall_feedback": (
+                        f"MISSING TEST RESULTS FILE: No test results documentation found.\n\n"
+                        f"REQUIRED ACTION:\n"
+                        f"1. Create the file: {expected_path}\n"
+                        f"2. Include the actual test output (command output, assertions, results)\n"
+                        f"3. Do NOT just write 'tests passed' - include ACTUAL output\n\n"
+                        f"The test results file must exist in agents-work/test-results/ and contain "
+                        f"the actual output of your tests. This is mandatory for QA evaluation."
+                    ),
+                    "suggested_focus": "Write test results to agents-work/test-results/"
                 }
+                print(f"  [QA FAIL]: Missing test results file at {expected_path}", flush=True)
             
             # Update task status based on QA verdict
             if qa_verdict and qa_verdict["passed"]:

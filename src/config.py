@@ -56,10 +56,18 @@ class OrchestratorConfig:
         model_name="minimax/minimax-m2",
         temperature=0.5
     ))
+
+    planner_model: ModelConfig = field(default_factory=lambda: ModelConfig(
+        # provider="anthropic",
+        # model_name="claude-3-5-sonnet-20241022",
+        provider="openai",
+        model_name="gpt-4.1",
+        temperature=0.5
+    ))
     
     # Per-worker-profile model configurations (optional - falls back to worker_model)
     # These allow different models for different worker types
-    planner_model: Optional[ModelConfig] = None  # For planning tasks - can use smarter model
+    # planner_model: Optional[ModelConfig] = None  # For planning tasks - can use smarter model
     coder_model: Optional[ModelConfig] = None    # For build tasks - can use faster model
     tester_model: Optional[ModelConfig] = None   # For test tasks - can use faster model
     researcher_model: Optional[ModelConfig] = None  # For research tasks

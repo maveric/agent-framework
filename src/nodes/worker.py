@@ -1177,17 +1177,6 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - You MUST create a markdown file in `agents-work/test-results/` named `test-{task_desc}.md`.
     - This file MUST contain the actual output of your tests.
     - If this file is missing, QA WILL FAIL.
-    
-    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
-    - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
-    - If you need to test a server, use the **TEST HARNESS PATTERN**:
-      Write a Python script that:
-      1. Starts the server in a subprocess (`subprocess.Popen`)
-      2. Waits for it to be ready (poll localhost)
-      3. Sends requests to test it
-      4. Kills the subprocess
-      5. Prints the results
-    - ALWAYS ensure your commands exit.
 
     **BROWSER/UI TESTING**:
     - Use `playwright` (python) for browser automation.
@@ -1204,9 +1193,9 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
           # Verify state: assert page.is_visible(".task-card")
           browser.close()
       ```
-    
+    **CRITICAL INSTRUCTION**:
     The agents-work/ folder is for agent artifacts, NOT project code.
-    Write test files to the project root, but test RESULTS to agents-work/test-results/.
+    Write test files to the project root, but test RESULTS must be written to to agents-work/test-results/test-{task_desc}.md.
     
     **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
     - **TEST ONLY WHAT'S ASSIGNED**: Only test the specific feature/component in your task description
