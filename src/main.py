@@ -167,8 +167,17 @@ def main():
         )
         
         print(f"\n{'='*60}")
-        print("RUN COMPLETE")
-        print(f"{'='*60}")
+        
+        # Check if paused vs actually complete
+        if result.get("_paused_for_hitl"):
+            print("⏸️  RUN PAUSED FOR HUMAN INPUT")
+            print(f"{'='*60}")
+            print("\n💡 Open the dashboard to resolve:")
+            print("   http://localhost:3000")
+            print("\n   The run will resume after you provide input.")
+        else:
+            print("✅ RUN COMPLETE")
+            print(f"{'='*60}")
         
         tasks = result.get('tasks', [])
         print(f"Total tasks: {len(tasks)}")
