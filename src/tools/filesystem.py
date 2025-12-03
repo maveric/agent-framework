@@ -10,6 +10,7 @@ import os
 import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from .safe_wrapper import safe_tool
 
 # Security: Restrict operations to the workspace root
 # This will be overridden by passing workspace_path in tool calls
@@ -41,6 +42,7 @@ def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
     except Exception:
         return False
 
+@safe_tool
 def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
     """
     Read the contents of a file.
@@ -69,6 +71,7 @@ def read_file(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -
     with open(target_path, "r", encoding=encoding) as f:
         return f.read()
 
+@safe_tool
 def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
     """
     Write content to a file. Creates parent directories automatically if needed.
@@ -124,6 +127,7 @@ def write_file(path: str, content: str, encoding: str = "utf-8", root: Optional[
     return f"Successfully wrote {len(content)} bytes to {path}"
 
 
+@safe_tool
 def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
     """
     Append content to an existing file.
@@ -151,6 +155,7 @@ def append_file(path: str, content: str, encoding: str = "utf-8", root: Optional
         
     return f"Successfully appended to {path}"
 
+@safe_tool
 def list_directory(path: str = ".", recursive: bool = False, pattern: str = "*", root: Optional[Path] = None) -> List[str]:
     """
     List files and directories.
@@ -193,6 +198,7 @@ def list_directory(path: str = ".", recursive: bool = False, pattern: str = "*",
         
     return sorted(results)
 
+@safe_tool
 def file_exists(path: str, root: Optional[Path] = None) -> bool:
     """
     Check if a file or directory exists.
@@ -208,6 +214,7 @@ def file_exists(path: str, root: Optional[Path] = None) -> bool:
         return False
     return (_get_workspace_root(root) / path).exists()
 
+@safe_tool
 def delete_file(path: str, confirm: bool, root: Optional[Path] = None) -> str:
     """
     Delete a file.
