@@ -197,6 +197,11 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                 # HUMAN-IN-THE-LOOP: Request intervention for max retry exceeded
                 print(f"Phoenix: Task {task.id} exceeded max retries ({MAX_RETRIES}), requesting human intervention", flush=True)
                 
+                # Update status to indicate waiting for human input
+                task.status = TaskStatus.WAITING_HUMAN
+                task.updated_at = datetime.now()
+                updates.append(task_to_dict(task))
+                
                 # Prepare interrupt payload with all task context
                 interrupt_data = {
                     "type": "task_exceeded_retries",

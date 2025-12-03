@@ -22,12 +22,13 @@ def route_after_director(state: OrchestratorState):
         return "__end__"
     
     # Check if all tasks are complete (failed tasks can be retried by Phoenix)
+    # WAITING_HUMAN tasks are paused for human intervention, also terminal
     all_complete = all(
-        t.get("status") in ["complete", "abandoned"] 
+        t.get("status") in ["complete", "abandoned", "waiting_human"] 
         for t in tasks
     )
     if all_complete:
-        print("\nAll tasks complete!", flush=True)
+        print("\nAll tasks complete or awaiting human intervention!", flush=True)
         return "__end__"
     
     # Find ready tasks
