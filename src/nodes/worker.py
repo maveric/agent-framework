@@ -1013,9 +1013,10 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     """Coding tasks."""
     from tools import git_commit, git_status, git_diff, git_add
     
-    # Use fewer tools to reduce token usage
+    # Tools for code workers - includes execution for verification
     tools = [
-        read_file, write_file, list_directory, file_exists, report_existing_implementation
+        read_file, write_file, list_directory, file_exists, 
+        run_python, run_shell, report_existing_implementation
     ]
     
     # Bind tools to worktree
