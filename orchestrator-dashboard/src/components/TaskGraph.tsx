@@ -16,7 +16,7 @@ import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle } fr
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'awaiting_qa';
     phase: string;
     component: string;
     assigned_worker_profile?: string;
@@ -44,6 +44,7 @@ const TaskNode = ({ data }: { data: Task }) => {
         ready: 'border-slate-500 bg-slate-800',
         planned: 'border-slate-700 bg-slate-900',
         blocked: 'border-orange-500 bg-orange-900/20',
+        awaiting_qa: 'border-orange-400 bg-orange-900/20',
     };
 
     const StatusIcon = {
@@ -53,6 +54,7 @@ const TaskNode = ({ data }: { data: Task }) => {
         ready: Clock,
         planned: PauseCircle,
         blocked: StopCircle,
+        awaiting_qa: Clock,
     }[data.status] || PauseCircle;
 
     const workerColors: Record<string, string> = {

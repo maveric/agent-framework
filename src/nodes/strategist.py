@@ -88,41 +88,64 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
         HumanMessage(content=user_prompt)
     ]
     
-    try:
-        response = llm.invoke(messages)
-        content = str(response.content)
-        
-        # Parse response
-        lines = content.strip().split('\n')
-        verdict = "FAIL"
-        feedback = "Unable to parse LLM response"
-        suggestions = []
-        
-        for line in lines:
-            # Robust parsing: handle bolding (**VERDICT:**) and case sensitivity
-            clean_line = line.replace("*", "").strip()
-            if "VERDICT:" in clean_line.upper():
-                verdict = "PASS" if "PASS" in clean_line.upper() else "FAIL"
-            elif "FEEDBACK:" in clean_line.upper():
-                feedback = clean_line.split("FEEDBACK:", 1)[1].strip()
-            elif "SUGGESTIONS:" in clean_line.upper():
-                sugg_text = clean_line.split("SUGGESTIONS:", 1)[1].strip()
-                if sugg_text and sugg_text.lower() != "none":
-                    suggestions = [s.strip() for s in sugg_text.split(",")]
-        
-        if feedback == "Unable to parse LLM response":
-            # If parsing failed, include the raw content for debugging
-            feedback = f"Unable to parse LLM response. Raw output:\n{content[:500]}..."
+    # RETRY LOGIC: LLM sometimes returns malformed responses
+    # Retry up to 3 times before giving up
+    MAX_RETRIES = 3
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = llm.invoke(messages)
+            content = str(response.content)
+            
+            # Parse response
+            lines = content.strip().split('\n')
+            verdict = "FAIL"
+            feedback = "Unable to parse LLM response"
+            suggestions = []
+            
+            for line in lines:
+                # Robust parsing: handle bolding (**VERDICT:**) and case sensitivity
+                clean_line = line.replace("*", "").strip()
+                if "VERDICT:" in clean_line.upper():
+                    verdict = "PASS" if "PASS" in clean_line.upper() else "FAIL"
+                elif "FEEDBACK:" in clean_line.upper():
+                    feedback = clean_line.split("FEEDBACK:", 1)[1].strip()
+                elif "SUGGESTIONS:" in clean_line.upper():
+                    sugg_text = clean_line.split("SUGGESTIONS:", 1)[1].strip()
+                    if sugg_text and sugg_text.lower() != "none":
+                        suggestions = [s.strip() for s in sugg_text.split(",")]
+            
+            # Check if parsing succeeded
+            if feedback != "Unable to parse LLM response":
+                # Success! Return the parsed result
+                return {
+                    "passed": verdict == "PASS",
+                    "feedback": feedback,
+                    "suggestions": suggestions
+                }
+            else:
+                # Parsing failed - retry
+                if attempt < MAX_RETRIES - 1:
+                    print(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...", flush=True)
+                    continue
+                else:
+                    # Final attempt failed, include raw output
+                    print(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts", flush=True)
+                    feedback = f"Unable to parse LLM response after {MAX_RETRIES} attempts. Raw output:\n{content[:500]}..."
+                    return {
+                        "passed": False,
+                        "feedback": feedback,
+                        "suggestions": []
+                    }
+                    
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                print(f"  [QA RETRY] LLM evaluation exception (attempt {attempt + 1}/{MAX_RETRIES}): {e}", flush=True)
+                continue
+            else:
+                print(f"  [QA ERROR]: LLM evaluation failed after {MAX_RETRIES} attempts: {e}", flush=True)
+                return {
 
-        
-        return {
-            "passed": verdict == "PASS",
-            "feedback": feedback,
-            "suggestions": suggestions
-        }
-    except Exception as e:
-        print(f"  [QA ERROR]: LLM evaluation failed: {e}", flush=True)
-        return {
             "passed": False,
             "feedback": f"QA evaluation error: {str(e)}",
             "suggestions": ["Fix QA evaluation system"]
