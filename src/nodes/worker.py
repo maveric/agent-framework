@@ -258,8 +258,14 @@ def _execute_react_loop(
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
-                if tc["name"] in ["write_file", "append_file"]:
-                    files_modified.append(tc["args"].get("path"))
+                tool_name = tc.get("name", "")
+                if tool_name in ["write_file", "append_file"]:
+                    file_path = tc.get("args", {}).get("path")
+                    if file_path:
+                        files_modified.append(file_path)
+                        print(f"  [TRACKED] write_file: {file_path}", flush=True)
+                    else:
+                        print(f"  [WARNING] write_file call missing path: {tc}", flush=True)
     
 from state import OrchestratorState
 from orchestrator_types import (
