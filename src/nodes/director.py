@@ -62,11 +62,112 @@ class IntegrationResponse(BaseModel):
 
 from langchain_core.runnables import RunnableConfig
 
+
+def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dict[str, Any]:
+    """
+    Process human resolution after interrupt resume.
+    
+    Called when graph resumes with Command(resume=resolution_data).
+    Handles three actions: retry, spawn_new_task, abandon.
+    """
+    tasks = [_dict_to_task(t) for t in state.get("tasks", [])]
+    updates = []
+    
+    task_id = resolution.get("task_id")
+    task = next((t for t in tasks if t.id == task_id), None)
+    
+    if not task:
+        print(f"  ERROR: Task {task_id} not found for resolution", flush=True)
+        return {"tasks": [task_to_dict(t) for t in tasks]}
+    
+    action = resolution.get("action")
+    
+    if action == "retry":
+        print(f"  Human approved retry for task {task.id}", flush=True)
+        
+        # Reset task for retry
+        task.status = TaskStatus.PLANNED
+        task.retry_count = 0
+        task.updated_at = datetime.now()
+        
+        # Apply optional modifications
+        if resolution.get("modified_description"):
+            task.description = resolution["modified_description"]
+            print(f"  Applied modified description", flush=True)
+        
+        if resolution.get("modified_criteria"):
+            task.acceptance_criteria = resolution["modified_criteria"]
+            print(f"  Applied modified criteria", flush=True)
+        
+        # Update this task in place
+        for i, t in enumerate(tasks):
+            if t.id == task_id:
+                tasks[i] = task
+                break
+    
+    elif action == "spawn_new_task":
+        print(f"  Human requested new task to replace {task.id}", flush=True)
+        
+        # Mark original as abandoned
+        task.status = TaskStatus.ABANDONED
+        task.updated_at = datetime.now()
+        
+        # Update original task
+        for i, t in enumerate(tasks):
+            if t.id == task_id:
+                tasks[i] = task
+                break
+        
+        # Create new task from resolution data
+        new_task = Task(
+            id=f"task_{uuid.uuid4().hex[:8]}",
+            component=resolution.get("new_component", task.component),
+            phase=TaskPhase(resolution.get("new_phase", task.phase.value)),
+            status=TaskStatus.PLANNED,
+            assigned_worker_profile=WorkerProfile(resolution.get("new_worker_profile", task.assigned_worker_profile.value)),
+            description=resolution["new_description"],
+            acceptance_criteria=resolution.get("new_criteria", task.acceptance_criteria),
+            depends_on=resolution.get("new_dependencies", []),
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            retry_count=0
+        )
+        
+        tasks.append(new_task)
+        print(f"  Created new task: {new_task.id}", flush=True)
+    
+    elif action == "abandon":
+        print(f"  Human abandoned task {task.id}", flush=True)
+        task.status = TaskStatus.ABANDONED
+        task.updated_at = datetime.now()
+        
+        # Update this task
+        for i, t in enumerate(tasks):
+            if t.id == task_id:
+                tasks[i] = task
+                break
+    
+    else:
+        print(f"  ERROR: Unknown action '{action}'", flush=True)
+    
+    # Return all tasks (including updated ones)
+    return {"tasks": [task_to_dict(t) for t in tasks]}
+
+
 def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
     """
     Director: Task decomposition and readiness evaluation.
     """
     tasks = state.get("tasks", [])
+    
+    # HITL: Check if we're resuming from an interrupt
+    # When Command(resume=value) is called, LangGraph restarts the node from the beginning
+    # and passes the resume value which becomes the return value of interrupt()
+    if config and config.get("configurable", {}).get("__pregel_resuming"):
+        resume_value = config.get("configurable", {}).get("__pregel_resume")
+        if resume_value:
+            print(f"Director: Resuming from interrupt, processing human resolution", flush=True)
+            return _process_human_resolution(state, resume_value)
     
     # Get configuration
     mock_mode = state.get("mock_mode", False)
@@ -217,66 +318,16 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                     "depends_on": task.depends_on
                 }
                 
-                # Pause execution and wait for human resolution
-                resolution = interrupt(interrupt_data)
+                # CRITICAL: This interrupt() call PAUSES the graph execution HERE
+                # The graph will NOT continue past this point until human provides resolution
+                # When resumed with Command(resume=resolution), the director_node will restart
+                # from the beginning and _process_human_resolution() will handle it
+                interrupt(interrupt_data)
                 
-                # Process human decision
-                if resolution and resolution.get("action") == "retry":
-                    print(f"  Human approved retry for task {task.id}", flush=True)
-                    task.retry_count = 0  # Reset retry counter
-                    task.status = TaskStatus.PLANNED
-                    
-                    # Apply modifications if provided
-                    if resolution.get("modified_description"):
-                        task.description = resolution["modified_description"]
-                    if resolution.get("modified_criteria"):
-                        task.acceptance_criteria = resolution["modified_criteria"]
-                    
-                    task.updated_at = datetime.now()
-                    updates.append(task_to_dict(task))
-                    
-                elif resolution and resolution.get("action") == "spawn_new_task":
-                    print(f"  Human requested new task to replace {task.id}", flush=True)
-                    
-                    # Mark original as abandoned
-                    task.status = TaskStatus.ABANDONED
-                    task.updated_at = datetime.now()
-                    updates.append(task_to_dict(task))
-                    
-                    # Create new task from resolution data
-                    new_task_id = f"task_{uuid.uuid4().hex[:8]}"
-                    new_task = Task(
-                        id=new_task_id,
-                        component=resolution.get("new_component", task.component),
-                        phase=TaskPhase(resolution.get("new_phase", task.phase.value)),
-                        status=TaskStatus.PLANNED,
-                        assigned_worker_profile=WorkerProfile(resolution.get("new_worker_profile", task.assigned_worker_profile.value)),
-                        description=resolution["new_description"],
-                        acceptance_criteria=resolution.get("new_criteria", task.acceptance_criteria),
-                        depends_on=resolution.get("new_dependencies", []),
-                        created_at=datetime.now(),
-                        updated_at=datetime.now()
-                    )
-                    updates.append(task_to_dict(new_task))
-                    
-                    # Note: New task will trigger replan automatically via normal dependency evaluation
-                    continue
-                    
-                elif resolution and resolution.get("action") == "abandon":
-                    print(f"  Human abandoned task {task.id}", flush=True)
-                    task.status = TaskStatus.ABANDONED
-                    task.updated_at = datetime.now()
-                    updates.append(task_to_dict(task))
-                    continue
-                    
-                else:
-                    # No valid resolution provided - default to abandoned
-                    print(f"  No valid resolution, abandoning task {task.id}", flush=True)
-                    task.status = TaskStatus.ABANDONED
-                    task.retry_count = MAX_RETRIES + 1
-                    task.updated_at = datetime.now()
-                    updates.append(task_to_dict(task))
-                    continue
+                # Note: Code after interrupt() will NOT execute in this invocation
+                # The function effectively "returns" here and waits for resume
+                # So we don't need any processing code here - it's handled on resume
+                continue
         
         # Standard readiness evaluation for planned tasks
         elif task.status == TaskStatus.PLANNED:
