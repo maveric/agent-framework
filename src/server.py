@@ -435,22 +435,20 @@ async def get_interrupts(run_id: str):
         thread_id = runs_index[run_id]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
         
-        # Get current state snapshot
-        state_snapshot = global_checkpointer.get(config)
+        # Get current state snapshot (correct LangGraph API)
+        snapshot = orchestrator.get_state(config)
         
-        if state_snapshot:
-            # Check for __interrupt__ field in tasks channel
-            channel_values = state_snapshot.get("channel_values", {})
-            tasks_data = channel_values.get("tasks", {})
-            
-            # LangGraph stores interrupts in the tasks channel
-            if hasattr(tasks_data, "__interrupt__"):
-                interrupts = tasks_data.__interrupt__
-                if interrupts:
-                    return {
-                        "interrupted": True,
-                        "data": interrupts[-1]  # Most recent interrupt
-                    }
+        # Check if graph is paused (snapshot.next is non-empty when waiting)
+        if snapshot.next:
+            # Check for dynamic interrupt - this is where LangGraph stores interrupt() payloads
+            # Based on user research and LangGraph docs
+            if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
+                # Extract the interrupt data we passed to interrupt()
+                interrupt_data = snapshot.tasks[0].interrupts[0].value
+                return {
+                    "interrupted": True,
+                    "data": interrupt_data
+                }
         
         return {"interrupted": False}
         
@@ -615,6 +613,28 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
         traceback.print_exc()
         runs_index[run_id]["status"] = "failed"
         await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+    
+    finally:
+        # CRITICAL: Check if run is paused after stream ends
+        # This detects interrupts that occur during execution
+        try:
+            snapshot = orchestrator.get_state(run_config)
+            
+            if snapshot.next:  # Graph is paused/interrupted
+                runs_index[run_id]["status"] = "interrupted"
+                logger.info(f"Run {run_id} paused for HITL intervention")
+                
+                # Broadcast interrupt notification to frontend
+                await manager.broadcast_to_run(run_id, {
+                    "type": "interrupted",
+                    "payload": {"status": "interrupted"}
+                })
+            else:
+                # Run actually completed
+                logger.info(f"Run {run_id} completed successfully")
+                
+        except Exception as e:
+            logger.error(f"Error checking final state: {e}")
 
 if __name__ == "__main__":
     import uvicorn
