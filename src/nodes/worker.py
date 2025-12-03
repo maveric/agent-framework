@@ -469,6 +469,10 @@ def _execute_react_loop(
                     tool_call_sequence.append(tool_name)
     
     # Count consecutive calls
+    loop_detected = False
+    loop_tool = None
+    loop_count = 0
+    
     if tool_call_sequence:
         from collections import Counter
         # Look for runs of the same tool
@@ -479,14 +483,45 @@ def _execute_react_loop(
         for tool in tool_call_sequence:
             if tool == current_tool:
                 current_count += 1
-                max_consecutive = max(max_consecutive, current_count)
+                if current_count > max_consecutive:
+                    max_consecutive = current_count
+                    loop_tool = current_tool
+                    loop_count = current_count
             else:
                 current_tool = tool
                 current_count = 1
         
         if max_consecutive >= LOOP_THRESHOLD:
-            print(f"  [WARNING] Loop detected: '{current_tool}' called {max_consecutive} times consecutively", flush=True)
-            print(f"  [WARNING] This often indicates the LLM is stuck in a pattern (e.g., creating wrapper scripts)", flush=True)
+            loop_detected = True
+            print(f"  [LOOP DETECTED] '{loop_tool}' called {loop_count} times consecutively", flush=True)
+            print(f"  [LOOP DETECTED] Task failed - LLM stuck in repetitive pattern", flush=True)
+            
+            # FAIL THE TASK with clear feedback for retry
+            from orchestrator_types import AAR
+            workspace_path = state.get("_workspace_path")
+            result_path = log_llm_response(task.id, result, [], status="failed", workspace_path=workspace_path)
+            
+            return WorkerResult(
+                status="failed",
+                result_path=result_path,
+                aar=AAR(
+                    summary=f"LOOP DETECTED: Task failed due to repetitive tool usage. The LLM called '{loop_tool}' {loop_count} times in a row.",
+                    approach="ReAct agent execution - interrupted due to loop",
+                    challenges=[
+                        f"Loop pattern detected: {loop_tool} called {loop_count} times consecutively",
+                        "This often indicates wrapper scripts calling wrapper scripts",
+                        "Task may be too complex and needs to be broken down into smaller subtasks",
+                        "Or: Approach needs to be simplified to avoid recursion"
+                    ],
+                    decisions_made=[
+                        "Terminated execution to prevent infinite loop",
+                        "Recommend breaking task into smaller pieces or using simpler approach"
+                    ],
+                    files_modified=[]
+                ),
+                suggested_tasks=[],
+                messages=result["messages"] if "messages" in result else []
+            )
     
     # Identify modified files and suggested tasks from tool calls
     # CRITICAL: Only count files as modified if the tool call SUCCEEDED
