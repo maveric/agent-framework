@@ -178,7 +178,21 @@ def _execute_react_loop(
     if not orch_config:
         orch_config = OrchestratorConfig()
     
-    model_config = orch_config.worker_model
+    # Select model based on worker profile
+    # This allows different models for planning vs coding vs testing
+    profile = task.assigned_worker_profile
+    
+    from orchestrator_types import WorkerProfile
+    model_map = {
+        WorkerProfile.PLANNER: getattr(orch_config, 'planner_model', None),
+        WorkerProfile.CODER: getattr(orch_config, 'coder_model', None),
+        WorkerProfile.TESTER: getattr(orch_config, 'tester_model', None),
+        WorkerProfile.RESEARCHER: getattr(orch_config, 'researcher_model', None),
+        WorkerProfile.WRITER: getattr(orch_config, 'writer_model', None),
+    }
+    
+    # Use profile-specific model, or fall back to worker_model
+    model_config = model_map.get(profile) or orch_config.worker_model
     
     # Setup LLM with worker model config and limit max tokens
     from config import ModelConfig
@@ -398,7 +412,21 @@ def _execute_react_loop(
     if not orch_config:
         orch_config = OrchestratorConfig()
     
-    model_config = orch_config.worker_model
+    # Select model based on worker profile
+    # This allows different models for planning vs coding vs testing
+    profile = task.assigned_worker_profile
+    
+    from orchestrator_types import WorkerProfile
+    model_map = {
+        WorkerProfile.PLANNER: getattr(orch_config, 'planner_model', None),
+        WorkerProfile.CODER: getattr(orch_config, 'coder_model', None),
+        WorkerProfile.TESTER: getattr(orch_config, 'tester_model', None),
+        WorkerProfile.RESEARCHER: getattr(orch_config, 'researcher_model', None),
+        WorkerProfile.WRITER: getattr(orch_config, 'writer_model', None),
+    }
+    
+    # Use profile-specific model, or fall back to worker_model
+    model_config = model_map.get(profile) or orch_config.worker_model
     
     # Setup LLM with worker model config and limit max tokens
     from config import ModelConfig
