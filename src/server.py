@@ -404,11 +404,11 @@ async def replan_run(run_id: str):
         orchestrator = get_orchestrator_graph()
         config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
         
-        # Set pending_reorg flag - director will handle blocking and waiting
-        orchestrator.update_state(config, {"pending_reorg": True})
+        # Set replan_requested flag - director will handle blocking and waiting
+        orchestrator.update_state(config, {"replan_requested": True})
         
-        logger.info(f"Pending reorg flag set for run {run_id}. Director will block new tasks and wait for active tasks to complete.")
-        return {"status": "reorg_pending"}
+        logger.info(f"Replan requested for run {run_id}. Director will re-integrate pending tasks.")
+        return {"status": "replan_requested"}
         
     except Exception as e:
         logger.error(f"Failed to set pending_reorg flag: {e}")
