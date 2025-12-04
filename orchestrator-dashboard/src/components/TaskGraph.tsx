@@ -10,7 +10,7 @@ import ReactFlow, {
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
-import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle } from 'lucide-react';
+import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, RefreshCw } from 'lucide-react';
 
 // Reuse Task interface (or import it if we move it to a shared types file)
 interface Task {
@@ -21,6 +21,7 @@ interface Task {
     component: string;
     assigned_worker_profile?: string;
     depends_on: string[];
+    retry_count?: number;
 }
 
 interface TaskGraphProps {
@@ -101,6 +102,13 @@ const TaskNode = ({ data }: { data: Task }) => {
                     </span>
                 )}
             </div>
+
+            {data.retry_count && data.retry_count > 0 && (
+                <div className="absolute -top-2 -right-2 bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 rounded-md px-1.5 py-0.5 text-[10px] font-bold flex items-center gap-1 shadow-sm backdrop-blur-sm">
+                    <RefreshCw size={10} />
+                    {data.retry_count}
+                </div>
+            )}
 
             <Handle type="source" position={Position.Bottom} className="!bg-slate-500" />
         </div>

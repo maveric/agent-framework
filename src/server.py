@@ -340,7 +340,7 @@ async def list_runs():
     
     try:
         # Ensure graph/checkpointer is initialized
-        get_orchestrator_graph()
+        orchestrator = get_orchestrator_graph()
         logger.info("📊 /api/runs called - querying database...")
         # Get async connection from checkpointer
         conn = global_checkpointer.conn
@@ -354,18 +354,28 @@ async def list_runs():
         for thread_id in thread_ids:
             # Get latest state for this thread
             config = {"configurable": {"thread_id": thread_id}}
-            state_snapshot = await global_checkpointer.aget(config)
+            state_snapshot = await orchestrator.aget_state(config)
             
-            if state_snapshot and "channel_values" in state_snapshot:
-                state = state_snapshot["channel_values"]
+            if state_snapshot and state_snapshot.values:
+                state = state_snapshot.values
                 
                 # Extract info
                 run_id = state.get("run_id", thread_id)
                 objective = state.get("objective", "Unknown")
                 
                 strat_status = state.get("strategy_status", "progressing")
+                
+                # Check for interrupts/pauses
+                is_interrupted = False
+                if state_snapshot.next:
+                     is_interrupted = True
+                elif state_snapshot.tasks and len(state_snapshot.tasks) > 0 and state_snapshot.tasks[0].interrupts:
+                     is_interrupted = True
+                     
                 if strat_status == "complete":
                     status = "completed"
+                elif is_interrupted:
+                    status = "waiting_human" # Or "interrupted", but waiting_human is more descriptive for queue
                 elif strat_status == "paused_human_requested":
                     status = "paused"
                 elif strat_status == "paused_infra_error":

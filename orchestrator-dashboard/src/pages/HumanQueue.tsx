@@ -21,11 +21,15 @@ export function HumanQueue() {
     useEffect(() => {
         // Initial fetch
         apiClient<RunSummary[]>('/api/runs')
-            .then(setRuns)
+            .then(data => {
+                console.log('HumanQueue: Fetched runs:', data);
+                setRuns(data);
+            })
             .finally(() => setIsLoading(false));
 
         // Subscribe to real-time updates
         const unsubscribe = addMessageHandler('run_list_update', (msg) => {
+            console.log('HumanQueue: Received update:', msg.payload);
             setRuns(msg.payload as RunSummary[]);
         });
 
