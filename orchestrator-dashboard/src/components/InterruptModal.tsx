@@ -23,15 +23,15 @@ interface InterruptModalProps {
 export function InterruptModal({ runId, interruptData, onResolve, onClose }: InterruptModalProps) {
     const [action, setAction] = useState<'retry' | 'abandon' | 'spawn_new_task'>('retry');
     const [modifiedDescription, setModifiedDescription] = useState(interruptData.task_description);
-    const [modifiedCriteria, setModifiedCriteria] = useState(interruptData.acceptance_criteria);
+    const [modifiedCriteria, setModifiedCriteria] = useState(interruptData.acceptance_criteria || []);
 
     // Fields for new task spawning
     const [newDescription, setNewDescription] = useState(interruptData.task_description);
     const [newComponent, setNewComponent] = useState(interruptData.component);
     const [newPhase, setNewPhase] = useState(interruptData.phase);
     const [newWorkerProfile, setNewWorkerProfile] = useState(interruptData.assigned_worker_profile);
-    const [newCriteria, setNewCriteria] = useState(interruptData.acceptance_criteria);
-    const [newDependencies, setNewDependencies] = useState<string[]>(interruptData.depends_on);
+    const [newCriteria, setNewCriteria] = useState(interruptData.acceptance_criteria || []);
+    const [newDependencies, setNewDependencies] = useState<string[]>(interruptData.depends_on || []);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async () => {
@@ -40,12 +40,14 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
 
         if (action === 'retry') {
             resolution = {
+                task_id: interruptData.task_id,
                 action: 'retry',
                 modified_description: modifiedDescription !== interruptData.task_description ? modifiedDescription : null,
                 modified_criteria: JSON.stringify(modifiedCriteria) !== JSON.stringify(interruptData.acceptance_criteria) ? modifiedCriteria : null
             };
         } else if (action === 'spawn_new_task') {
             resolution = {
+                task_id: interruptData.task_id,
                 action: 'spawn_new_task',
                 new_description: newDescription,
                 new_component: newComponent,
@@ -55,7 +57,10 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
                 new_dependencies: newDependencies
             };
         } else {
-            resolution = { action: 'abandon' };
+            resolution = {
+                task_id: interruptData.task_id,
+                action: 'abandon'
+            };
         }
 
         try {

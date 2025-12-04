@@ -1,12 +1,14 @@
 import { useParams } from 'react-router-dom';
-import { useMemo, useState, useEffect } from 'react';  // Add useEffect
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, useEffect } from 'react';
 import { apiClient } from '../api/client';
+import { useWebSocketStore } from '../api/websocket';
 import { Clock, ChevronDown, ChevronUp, LayoutGrid, List, X, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskGraph } from '../components/TaskGraph';
 import { TaskDetailsContent } from '../components/TaskDetailsContent';
-import { InterruptModal } from '../components/InterruptModal';  // Add this line
+import { InterruptModal } from '../components/InterruptModal';
+import { LogPanel } from '../components/LogPanel';
+import { CancelRunButton } from '../components/CancelRunButton';
 
 interface Task {
     id: string;
@@ -63,7 +65,16 @@ interface RunDetails {
         active: number;
         planned: number;
     };
+    interrupt_data?: any;
 }
+
+const workerColors: Record<string, string> = {
+    'full_stack_developer': 'bg-blue-900/20 text-blue-400 border-blue-800/50',
+    'devops_engineer': 'bg-purple-900/20 text-purple-400 border-purple-800/50',
+    'qa_engineer': 'bg-green-900/20 text-green-400 border-green-800/50',
+    'product_manager': 'bg-orange-900/20 text-orange-400 border-orange-800/50',
+    'architect': 'bg-indigo-900/20 text-indigo-400 border-indigo-800/50',
+};
 
 export function RunDetails() {
     const { runId } = useParams<{ runId: string }>();
@@ -87,96 +98,109 @@ export function RunDetails() {
         });
     };
 
+    // WebSocket: Subscribe to run updates and interrupts
+    const addMessageHandler = useWebSocketStore((state) => state.addMessageHandler);
+    const subscribe = useWebSocketStore((state) => state.subscribe);
+    const unsubscribe = useWebSocketStore((state) => state.unsubscribe);
+
+    const [run, setRun] = useState<RunDetails | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<Error | null>(null);
+
     useEffect(() => {
         if (!runId) return;
 
-        const checkInterrupts = async () => {
-            try {
-                const response = await fetch(`http://localhost:8085/api/runs/${runId}/interrupts`);
-                const data = await response.json();
-                if (data.interrupted && data.data) {
-                    setInterruptData(data.data);
+        // Initial fetch
+        apiClient<RunDetails>(`/api/runs/${runId}`)
+            .then(data => {
+                console.log('RunDetails fetched:', data);
+                setRun(data);
+                if (data.interrupt_data) {
+                    console.log('Interrupt data found:', data.interrupt_data);
+                    setInterruptData(data.interrupt_data);
+                } else {
+                    console.log('No interrupt data in response');
+                }
+            })
+            .catch(err => setError(err))
+            .finally(() => setIsLoading(false));
+
+        // Subscribe to updates
+        subscribe(runId);
+
+        // Handle real-time updates
+        const removeStateUpdateHandler = addMessageHandler('state_update', (message) => {
+            if (message.run_id === runId) {
+                setRun(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        status: message.payload.status || prev.status,
+                        tasks: message.payload.tasks || prev.tasks,
+                        task_counts: message.payload.task_counts || prev.task_counts,
+                        insights: message.payload.insights || prev.insights,
+                        design_log: message.payload.design_log || prev.design_log,
+                        task_memories: message.payload.task_memories || prev.task_memories
+                    };
+                });
+            }
+        });
+
+        const removeInterruptHandler = addMessageHandler('interrupted', (message) => {
+            if (message.run_id === runId) {
+                console.log('Interrupted event received:', message.payload);
+                // Show modal immediately on interrupt
+                // The payload from server is { status: 'interrupted', data: { ... } }
+                if (message.payload.data) {
+                    setInterruptData(message.payload.data);
                     setShowInterruptModal(true);
                 }
-            } catch (error) {
-                console.error('Failed to check for interrupts:', error);
+                // Also update run status
+                setRun(prev => prev ? { ...prev, status: 'interrupted' } : null);
             }
+        });
+
+        return () => {
+            removeStateUpdateHandler();
+            removeInterruptHandler();
+            unsubscribe(runId);
         };
-
-        checkInterrupts(); // Check immediately
-        const interval = setInterval(checkInterrupts, 2000);
-
-        return () => clearInterval(interval);
-    }, [runId]);
-
-    const { data: run, isLoading, error } = useQuery({
-        queryKey: ['run', runId],
-        queryFn: () => apiClient<RunDetails>(`/api/runs/${runId}`),
-        refetchInterval: 1000, // Poll every second for real-time updates
-    });
+    }, [runId, addMessageHandler, subscribe, unsubscribe]);
 
     const handleReplan = async () => {
         if (!runId) return;
+        setIsReplanning(true);
         try {
-            setIsReplanning(true);
             await apiClient(`/api/runs/${runId}/replan`, { method: 'POST' });
-            // We don't need to manually refetch because the query invalidation or polling will pick it up
-            // But we can show a toast or just rely on the button state
-        } catch (err) {
-            console.error('Failed to trigger replan:', err);
-            alert('Failed to trigger replan. Check console for details.');
+        } catch (error) {
+            console.error('Failed to trigger replan:', error);
         } finally {
-            // Keep loading state for a moment to show feedback
-            setTimeout(() => setIsReplanning(false), 1000);
+            setIsReplanning(false);
         }
     };
 
     const sortedTasks = useMemo(() => {
         if (!run?.tasks) return [];
-
-        const taskMap = new Map(run.tasks.map(t => [t.id, t]));
-        const visited = new Set<string>();
-        const visiting = new Set<string>();
-        const result: Task[] = [];
-
-        const visit = (taskId: string) => {
-            if (visited.has(taskId)) return;
-            if (visiting.has(taskId)) {
-                console.warn(`Cycle detected involving task ${taskId}`);
-                return;
-            }
-
-            const task = taskMap.get(taskId);
-            if (!task) return;
-
-            visiting.add(taskId);
-
-            if (task.depends_on && Array.isArray(task.depends_on)) {
-                task.depends_on.forEach(depId => visit(depId));
-            }
-
-            visiting.delete(taskId);
-            visited.add(taskId);
-            result.push(task);
+        // Sort by status priority then ID
+        const statusPriority = {
+            'active': 0,
+            'failed': 1,
+            'ready': 2,
+            'blocked': 3,
+            'planned': 4,
+            'complete': 5
         };
-
-        run.tasks.forEach(t => visit(t.id));
-        return result;
+        return [...run.tasks].sort((a, b) => {
+            const priorityA = statusPriority[a.status] ?? 99;
+            const priorityB = statusPriority[b.status] ?? 99;
+            if (priorityA !== priorityB) return priorityA - priorityB;
+            return a.id.localeCompare(b.id);
+        });
     }, [run?.tasks]);
-
-    // Define workerColors here or import them if they are from another file
-    const workerColors: { [key: string]: string } = {
-        'planner_worker': 'bg-purple-900/30 text-purple-300 border border-purple-800/50',
-        'code_worker': 'bg-blue-900/30 text-blue-300 border border-blue-800/50',
-        'test_worker': 'bg-green-900/30 text-green-300 border border-green-800/50',
-        'research_worker': 'bg-amber-900/30 text-amber-300 border border-amber-800/50',
-        'writer_worker': 'bg-pink-900/30 text-pink-300 border border-pink-800/50',
-        'default': 'bg-slate-800 text-slate-400 border-slate-700'
-    };
 
     if (isLoading) {
         return (
-            <div className="flex items-center justify-center min-h-screen">
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
             </div>
         );
@@ -184,60 +208,68 @@ export function RunDetails() {
 
     if (error || !run) {
         return (
-            <div className="flex items-center justify-center min-h-screen text-red-400">
-                Error loading run details
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center text-red-400">
+                Error loading run details: {error?.message || 'Run not found'}
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-slate-950 text-slate-200 p-8">
-            <div className="w-full px-8 space-y-8">
+        <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-blue-500/30">
+            <div className="w-full px-6 py-8">
                 {/* Header */}
-                <div className="bg-slate-900 rounded-lg p-6 border border-slate-800">
-                    <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                            <h1 className="text-xl font-bold text-white">Run Details</h1>
-                            <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${run.status === 'completed' ? 'bg-green-500/20 text-green-400' :
-                                run.status === 'failed' ? 'bg-red-500/20 text-red-400' :
-                                    run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400' :
-                                        'bg-blue-500/20 text-blue-400'
+                <div className="flex items-center justify-between mb-8">
+                    <div>
+                        <div className="flex items-center gap-3 mb-2">
+                            <h1 className="text-3xl font-bold text-white tracking-tight">Run Details</h1>
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${run.status === 'running' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                                run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                                    run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                                        run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                            'bg-slate-700 text-slate-400'
                                 }`}>
                                 {run.status}
                             </span>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-slate-400">
-                            <span className="flex items-center gap-1">
-                                <Clock className="w-4 h-4" />
-                                Started {formatDistanceToNow(new Date(run.created_at))} ago
-                            </span>
+                            <span className="font-mono">{run.run_id}</span>
+                            <span>•</span>
+                            <span>{run.tasks.length} tasks</span>
+                            {run.workspace_path && (
+                                <>
+                                    <span>•</span>
+                                    <span className="font-mono">{run.workspace_path}</span>
+                                </>
+                            )}
                         </div>
+                        <p className="text-lg text-slate-300 leading-relaxed mt-2">{run.objective}</p>
                     </div>
-
-                    <div className="mb-4">
-                        <div className="text-sm font-mono text-slate-500 mb-2">{run.run_id}</div>
-                        <p className="text-lg text-slate-300 leading-relaxed">{run.objective}</p>
-                    </div>
-
-                    <div className="flex items-center gap-4 text-xs text-slate-500 pt-4 border-t border-slate-800">
-                        <span className="flex items-center gap-1">
-                            <span className={`w-2 h-2 rounded-full ${run.status === 'active' ? 'bg-blue-400 animate-pulse' : 'bg-slate-600'}`}></span>
-                            {run.status}
-                        </span>
-                        <span>•</span>
-                        <span>{run.tasks.length} tasks</span>
-                        {run.workspace_path && (
-                            <>
-                                <span>•</span>
-                                <span className="font-mono">{run.workspace_path}</span>
-                            </>
+                    <div className="flex gap-3">
+                        {interruptData && (
+                            <button
+                                onClick={() => setShowInterruptModal(true)}
+                                className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors flex items-center gap-2 shadow-lg shadow-yellow-900/20 animate-pulse"
+                            >
+                                ⚠️ Resolve Intervention
+                            </button>
                         )}
+                        <button
+                            onClick={handleReplan}
+                            disabled={isReplanning || run.status !== 'running'}
+                            className="px-4 py-2 bg-slate-800 border border-slate-700 rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                            {isReplanning ? 'Replanning...' : 'Trigger Replan'}
+                        </button>
+                        <CancelRunButton
+                            runId={runId!}
+                            status={run?.status || ''}
+                        />
                     </div>
                 </div>
 
                 {/* Model Config */}
                 {run.model_config && (
-                    <div className="bg-slate-900 rounded-lg p-6 border border-slate-800">
+                    <div className="bg-slate-900 rounded-lg p-6 border border-slate-800 mb-8">
                         <h3 className="text-sm font-semibold text-slate-200 mb-4">Model Configuration</h3>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             <div
@@ -269,42 +301,27 @@ export function RunDetails() {
                 {/* Content Grid */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Task List / Graph */}
-                    {/* Task List / Graph */}
                     <div className={`${!selectedTaskId ? 'lg:col-span-3' : 'lg:col-span-2'} space-y-4 transition-all duration-300`}>
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-semibold text-slate-200">Tasks ({run.tasks.length})</h2>
-                            <div className="flex items-center gap-2">
+                            <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
                                 <button
-                                    onClick={handleReplan}
-                                    disabled={isReplanning}
-                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isReplanning
-                                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
-                                        }`}
-                                    title="Trigger a re-planning of pending tasks"
+                                    onClick={() => {
+                                        setViewMode('list');
+                                        setSelectedTaskId(null);
+                                    }}
+                                    className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                                    title="List View"
                                 >
-                                    <RefreshCw className={`w-3.5 h-3.5 ${isReplanning ? 'animate-spin' : ''}`} />
-                                    {isReplanning ? 'Replanning...' : 'Replan'}
+                                    <List className="w-4 h-4" />
                                 </button>
-                                <div className="flex bg-slate-800 p-1 rounded-lg border border-slate-700">
-                                    <button
-                                        onClick={() => {
-                                            setViewMode('list');
-                                            setSelectedTaskId(null);
-                                        }}
-                                        className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                                        title="List View"
-                                    >
-                                        <List className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                        onClick={() => setViewMode('graph')}
-                                        className={`p-1.5 rounded ${viewMode === 'graph' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-                                        title="Graph View"
-                                    >
-                                        <LayoutGrid className="w-4 h-4" />
-                                    </button>
-                                </div>
+                                <button
+                                    onClick={() => setViewMode('graph')}
+                                    className={`p-1.5 rounded ${viewMode === 'graph' ? 'bg-slate-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
+                                    title="Graph View"
+                                >
+                                    <LayoutGrid className="w-4 h-4" />
+                                </button>
                             </div>
                         </div>
 
@@ -472,58 +489,63 @@ export function RunDetails() {
                                     </div>
                                 </div>
                             )}
-                        </div>
-                    )}
-                    {/* Director Logs Modal */}
-                    {viewingDirectorLogs && (
-                        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                            <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-                                <div className="flex items-center justify-between p-4 border-b border-slate-800">
-                                    <div className="flex items-center gap-3">
-                                        <h2 className="text-lg font-bold text-white">Director System Logs</h2>
-                                        <span className="bg-indigo-900/30 text-indigo-300 px-2 py-0.5 rounded text-xs border border-indigo-800/50">
-                                            GLOBAL VIEW
-                                        </span>
-                                    </div>
-                                    <button
-                                        onClick={() => setViewingDirectorLogs(false)}
-                                        className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors"
-                                    >
-                                        <X className="w-5 h-5" />
-                                    </button>
-                                </div>
-                                <div className="p-6 overflow-y-auto">
-                                    <TaskDetailsContent
-                                        task={{
-                                            id: 'director-system',
-                                            description: 'Global orchestration logs. Shows high-level planning, decomposition, and integration decisions.',
-                                            status: 'active',
-                                            phase: 'orchestration',
-                                            component: 'director',
-                                            depends_on: []
-                                        }}
-                                        logs={run.task_memories?.['director']}
-                                    />
-                                </div>
-                            </div>
+
+                            {/* Real-Time Logs */}
+                            <LogPanel runId={runId!} />
                         </div>
                     )}
                 </div>
+
+                {/* Director Logs Modal */}
+                {viewingDirectorLogs && (
+                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+                            <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                                <div className="flex items-center gap-3">
+                                    <h2 className="text-lg font-bold text-white">Director System Logs</h2>
+                                    <span className="bg-indigo-900/30 text-indigo-300 px-2 py-0.5 rounded text-xs border border-indigo-800/50">
+                                        GLOBAL VIEW
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={() => setViewingDirectorLogs(false)}
+                                    className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                            <div className="p-6 overflow-y-auto">
+                                <TaskDetailsContent
+                                    task={{
+                                        id: 'director-system',
+                                        description: 'Global orchestration logs. Shows high-level planning, decomposition, and integration decisions.',
+                                        status: 'active',
+                                        phase: 'orchestration',
+                                        component: 'director',
+                                        depends_on: []
+                                    }}
+                                    logs={run.task_memories?.['director']}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* HITL Interrupt Modal */}
+                {showInterruptModal && interruptData && (
+                    <InterruptModal
+                        runId={runId!}
+                        interruptData={interruptData}
+                        onResolve={() => {
+                            setShowInterruptModal(false);
+                            setInterruptData(null);
+                        }}
+                        onClose={() => {
+                            setShowInterruptModal(false);
+                        }}
+                    />
+                )}
             </div>
-            {/* HITL Interrupt Modal */}
-            {showInterruptModal && interruptData && (
-                <InterruptModal
-                    runId={runId!}
-                    interruptData={interruptData}
-                    onResolve={() => {
-                        setShowInterruptModal(false);
-                        setInterruptData(null);
-                    }}
-                    onClose={() => {
-                        setShowInterruptModal(false);
-                    }}
-                />
-            )}
         </div>
     );
 }

@@ -4,6 +4,7 @@ import { Layout } from './components/layout/Layout';
 import { Dashboard } from './pages/Dashboard';
 import { RunDetails } from './pages/RunDetails';
 import { NewRun } from './pages/NewRun';
+import { HumanQueue } from './pages/HumanQueue';
 
 const queryClient = new QueryClient({
     defaultOptions: {
@@ -24,7 +25,7 @@ function App() {
                         <Route path="new" element={<NewRun />} />
                         <Route path="runs" element={<Navigate to="/" replace />} />
                         <Route path="runs/:runId" element={<RunDetails />} />
-                        <Route path="queue" element={<div>Human Queue (Coming Soon)</div>} />
+                        <Route path="queue" element={<HumanQueue />} />
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Route>
                 </Routes>

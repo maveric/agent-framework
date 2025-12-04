@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { apiClient } from '../api/client';
+import { useWebSocketStore } from '../api/websocket';
 import { Play, CheckCircle, XCircle, Clock } from 'lucide-react';
 
 interface RunSummary {
@@ -13,11 +14,23 @@ interface RunSummary {
 }
 
 export function Dashboard() {
-    const { data: runs, isLoading } = useQuery({
-        queryKey: ['runs'],
-        queryFn: () => apiClient<RunSummary[]>('/api/runs'),
-        refetchInterval: 5000,
-    });
+    const [runs, setRuns] = useState<RunSummary[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const addMessageHandler = useWebSocketStore((state) => state.addMessageHandler);
+
+    useEffect(() => {
+        // Initial fetch
+        apiClient<RunSummary[]>('/api/runs')
+            .then(setRuns)
+            .finally(() => setIsLoading(false));
+
+        // Subscribe to real-time updates via WebSocket
+        const unsubscribe = addMessageHandler('run_list_update', (msg) => {
+            setRuns(msg.payload as RunSummary[]);
+        });
+
+        return unsubscribe;
+    }, [addMessageHandler]);
 
     if (isLoading) {
         return <div>Loading...</div>;

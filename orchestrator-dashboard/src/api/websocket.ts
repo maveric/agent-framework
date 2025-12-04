@@ -13,7 +13,9 @@ export type WSMessageType =
     | 'subscribed'
     | 'unsubscribed'
     | 'ping'
-    | 'pong';
+    | 'pong'
+    | 'run_list_update'
+    | 'interrupted';
 
 export interface WSMessage {
     type: WSMessageType;
@@ -24,7 +26,8 @@ export interface WSMessage {
 
 // WebSocket connects directly to the FastAPI backend on port 8085
 // Can be overridden with VITE_WS_URL environment variable
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8085/ws';
+// Use 127.0.0.1 to avoid IPv6 resolution issues with localhost
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8085/ws';
 
 interface WebSocketState {
     socket: WebSocket | null;

@@ -321,12 +321,16 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
                 # CRITICAL: This interrupt() call PAUSES the graph execution HERE
                 # The graph will NOT continue past this point until human provides resolution
                 # When resumed with Command(resume=resolution), the director_node will restart
-                # from the beginning and _process_human_resolution() will handle it
-                interrupt(interrupt_data)
+                # from the beginning. When it reaches this interrupt() call again, it will return the resolution.
+                resolution = interrupt(interrupt_data)
                 
-                # Note: Code after interrupt() will NOT execute in this invocation
-                # The function effectively "returns" here and waits for resume
-                # So we don't need any processing code here - it's handled on resume
+                if resolution:
+                    print(f"Director: Resumed with resolution: {resolution}", flush=True)
+                    return _process_human_resolution(state, resolution)
+                
+                # If we get here (and didn't return), it means we just interrupted (first pass)
+                # The interrupt() raises an exception, so this line is technically unreachable
+                # unless running in a context that suppresses the interrupt exception.
                 continue
         
         # Standard readiness evaluation for planned tasks
@@ -916,7 +920,7 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
             objective=objective,
             spec_content=spec_content[:3000],  # Truncate if too long
             tasks_json=str(tasks_input)
-        ))
+        ), config={"callbacks": []})
     except Exception as e:
         print(f"  Integration LLM Error: {e}", flush=True)
         # Fallback: Return tasks as-is (converted to Task objects)

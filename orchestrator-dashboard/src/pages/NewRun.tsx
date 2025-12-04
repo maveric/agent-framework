@@ -4,7 +4,7 @@ import { Play, FolderOpen, AlertCircle } from 'lucide-react';
 
 interface CreateRunRequest {
     objective: string;
-    workspace_path?: string;
+    workspace?: string;
 }
 
 export function NewRun() {
@@ -31,7 +31,7 @@ export function NewRun() {
             };
 
             if (workspacePath.trim()) {
-                payload.workspace_path = workspacePath.trim();
+                payload.workspace = workspacePath.trim();
             }
 
             const response = await fetch('http://localhost:8085/api/runs', {

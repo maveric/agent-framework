@@ -20,6 +20,11 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Disable LangSmith tracing by default to prevent warnings
+# User requested to turn this off. To enable, set LANGCHAIN_TRACING_V2=true AND ensure LANGCHAIN_API_KEY is valid.
+# For now, we force it off to avoid "not authorized" errors.
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -103,6 +108,10 @@ class ConnectionManager:
             self.subscriptions[run_id].remove(websocket)
 
     async def broadcast(self, message: dict):
+        # Inject timestamp if missing
+        if "timestamp" not in message:
+            message["timestamp"] = datetime.now().isoformat()
+            
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
@@ -110,6 +119,12 @@ class ConnectionManager:
                 pass
 
     async def broadcast_to_run(self, run_id: str, message: dict):
+        # Inject run_id and timestamp if missing
+        if "run_id" not in message:
+            message["run_id"] = run_id
+        if "timestamp" not in message:
+            message["timestamp"] = datetime.now().isoformat()
+            
         if run_id in self.subscriptions:
             for connection in self.subscriptions[run_id]:
                 try:
@@ -147,9 +162,45 @@ async def lifespan(app: FastAPI):
         raise
     
     logger.info("Starting Orchestrator Server")
+    
+    # Register signal handlers for cleanup
+    import signal
+    import psutil
+    
+    def shutdown_handler():
+        logger.info(f"Cleaning up child processes...")
+        try:
+            parent = psutil.Process(os.getpid())
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    logger.info(f"Killing child process {child.pid}")
+                    child.terminate()
+                except psutil.NoSuchProcess:
+                    pass
+            
+            # Wait for termination
+            _, alive = psutil.wait_procs(children, timeout=3)
+            for p in alive:
+                try:
+                    logger.warning(f"Force killing process {p.pid}")
+                    p.kill()
+                except psutil.NoSuchProcess:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
     yield
-    # Shutdown
+    
+    # Shutdown logic (runs when FastAPI stops)
     logger.info("Shutting down Orchestrator Server")
+    shutdown_handler()
+    
+    # Close DB connection
+    if 'conn' in locals():
+        await conn.close()
+        logger.info("Database connection closed")
 
 app = FastAPI(title="Agent Orchestrator API", lifespan=lifespan)
 
@@ -437,12 +488,29 @@ async def get_run(run_id: str):
     run_data = runs_index[run_id]
     
     # Get detailed state from checkpointer
+    # Get detailed state from checkpointer
     try:
-        get_orchestrator_graph()
+        orchestrator = get_orchestrator_graph()
         config = {"configurable": {"thread_id": run_data["thread_id"]}}
-        state_snapshot = await global_checkpointer.aget(config)
-        if state_snapshot and "channel_values" in state_snapshot:
-            state = state_snapshot["channel_values"]
+        
+        # Use aget_state to get the full snapshot including interrupts
+        state_snapshot = await orchestrator.aget_state(config)
+        
+        interrupt_data = None
+        if state_snapshot.tasks:
+            # Check for interrupts in the tasks
+            for task in state_snapshot.tasks:
+                if task.interrupts:
+                    # We assume the first interrupt holds our data
+                    interrupt_data = task.interrupts[0].value
+                    logger.info(f"🔍 Found interrupt in get_run: {interrupt_data}")
+                    break
+        
+        if not interrupt_data:
+            logger.info("ℹ️ No interrupt data found in get_run")
+        
+        if state_snapshot and state_snapshot.values:
+            state = state_snapshot.values
             
             # Serialize task memories
             task_memories = {}
@@ -460,7 +528,8 @@ async def get_run(run_id: str):
                 "guardian": state.get("guardian", {}),
                 "workspace_path": state.get("_workspace_path", ""),
                 "model_config": _serialize_orch_config(state.get("orch_config")),
-                "task_memories": task_memories
+                "task_memories": task_memories,
+                "interrupt_data": interrupt_data  # Include persistent interrupt data
             }
     except Exception as e:
         logger.error(f"Error getting run details: {e}")
@@ -613,7 +682,7 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
             try:
                 logger.info(f"   Calling orchestrator.invoke(Command(resume=...))")
                 orchestrator.invoke(
-                    Command(resume=resolution.dict()),
+                    Command(resume=resolution.model_dump()),
                     config=config
                 )
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
@@ -661,7 +730,10 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
         # Initialize git
         initialize_git_repo(workspace_path)
     
-        # Create worktree manager
+        # Create config
+        config = OrchestratorConfig(mock_mode=False)
+        
+        # Create worktree manager (Always enabled to match main.py behavior)
         worktree_base = workspace_path / ".worktrees"
         worktree_base.mkdir(exist_ok=True)
         
@@ -669,9 +741,6 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
             repo_path=workspace_path,
             worktree_base=worktree_base
         )
-        
-        # Create config
-        config = OrchestratorConfig(mock_mode=False)
         
         # Create graph
         orchestrator = get_orchestrator_graph()
@@ -761,19 +830,55 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                             "status": "running" if data.get("strategy_status") != "complete" else "completed",
                             "updated_at": datetime.now().isoformat(),
                             "task_counts": {
-                                "planned": len([t for t in data.get("tasks", []) if t.status == "planned"]),
-                                "completed": len([t for t in data.get("tasks", []) if t.status == "complete"]),
+                                "planned": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "planned") or (not isinstance(t, dict) and getattr(t, "status", "") == "planned")]),
+                                "completed": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "complete") or (not isinstance(t, dict) and getattr(t, "status", "") == "complete")]),
                             }
                         })
                         
-                        # Broadcast update
-                        await manager.broadcast_to_run(run_id, {
-                            "type": "state_update",
-                            "payload": {
-                                "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
-                                "status": runs_index[run_id]["status"]
-                            }
-                        })
+                        # Broadcast FULL state update (same as polling API)
+                        # We fetch the latest state from the graph to ensure we send the complete list
+                        # CRITICAL: We merge the event data (which is freshest) into the snapshot (which might be slightly stale)
+                        try:
+                            snapshot = await orchestrator.aget_state(run_config)
+                            full_tasks = []
+                            if snapshot and snapshot.values:
+                                full_tasks = snapshot.values.get("tasks", [])
+                            
+                            # Create a map of existing tasks
+                            task_map = {t.id if hasattr(t, "id") else t.get("id"): t for t in full_tasks}
+                            
+                            # Merge in the FRESH updates from the event
+                            fresh_tasks = data.get("tasks", [])
+                            for t in fresh_tasks:
+                                t_id = t.get("id")
+                                if t_id:
+                                    # If it's a dict, use it directly. If existing was object, replace it.
+                                    # The event data 't' is always a dict here because it comes from the event output
+                                    task_map[t_id] = t
+                            
+                            # Convert back to list
+                            merged_tasks = list(task_map.values())
+                            
+                            # Convert to dicts if needed for serialization
+                            serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in merged_tasks]
+                            
+                            await manager.broadcast_to_run(run_id, {
+                                "type": "state_update",
+                                "payload": {
+                                    "tasks": serialized_tasks,
+                                    "status": runs_index[run_id]["status"]
+                                }
+                            })
+                        except Exception as e:
+                            logger.error(f"Failed to broadcast full state: {e}")
+                            # Fallback to partial update if fetch fails
+                            await manager.broadcast_to_run(run_id, {
+                                "type": "state_update",
+                                "payload": {
+                                    "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
+                                    "status": runs_index[run_id]["status"]
+                                }
+                            })
                 
                 elif kind == "on_chat_model_stream":
                     # Optional: Stream tokens for logs
@@ -798,11 +903,23 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                     runs_index[run_id]["status"] = "interrupted"
                     logger.info(f"Run {run_id} paused for HITL intervention")
                     
-                    # Broadcast interrupt notification to frontend
-                    await manager.broadcast_to_run(run_id, {
-                        "type": "interrupted",
-                        "payload": {"status": "interrupted"}
-                    })
+                    # Extract interrupt data
+                    interrupt_data = {}
+                    if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
+                        interrupt_data = snapshot.tasks[0].interrupts[0].value
+                    
+                    # Only broadcast if we actually have interrupt data
+                    if interrupt_data:
+                        # Broadcast interrupt notification to frontend
+                        await manager.broadcast_to_run(run_id, {
+                            "type": "interrupted",
+                            "payload": {
+                                "status": "interrupted",
+                                "data": interrupt_data
+                            }
+                        })
+                    else:
+                        logger.warning(f"Run {run_id} paused but no interrupt data found. Snapshot next: {snapshot.next}")
                     
                     # Broadcast run list update
                     await manager.broadcast({
