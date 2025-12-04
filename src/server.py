@@ -15,6 +15,11 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -40,6 +45,7 @@ class CreateRunRequest(BaseModel):
     objective: str
     spec: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
+    workspace: Optional[str] = None
 
 class RunSummary(BaseModel):
     run_id: str
@@ -119,7 +125,27 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup - Initialize checkpointer
+    global global_checkpointer
+    
+    try:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        import aiosqlite
+        
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
+        logger.info(f"Initializing checkpointer with database: {db_path}")
+        
+        # Create async connection and checkpointer
+        conn = await aiosqlite.connect(db_path)
+        global_checkpointer = AsyncSqliteSaver(conn)
+        
+        logger.info("✅ AsyncSqliteSaver initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize checkpointer: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    
     logger.info("Starting Orchestrator Server")
     yield
     # Shutdown
@@ -143,26 +169,16 @@ app.add_middleware(
 # We use the LangGraph checkpointing for the actual state, but we need an index
 runs_index: Dict[str, Dict[str, Any]] = {}
 
-# Global DB connection for querying
-db_conn = None
+# Track running background tasks for cancellation
+running_tasks: Dict[str, Any] = {}  # run_id -> asyncio.Task
+
+# Global checkpointer (initialized at startup)
 global_checkpointer = None
 
 def get_orchestrator_graph():
-    global db_conn, global_checkpointer
-    
-    # We use sqlite for persistence to allow dashboard to see history
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    import sqlite3
-    
-    # Ensure .gemini directory exists for db
-    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
-    
-    # Keep connection open
-    if db_conn is None:
-        db_conn = sqlite3.connect(db_path, check_same_thread=False)
-        
+    """Get the orchestrator graph. Checkpointer is initialized at startup."""
     if global_checkpointer is None:
-        global_checkpointer = SqliteSaver(db_conn)
+        raise RuntimeError("Checkpointer not initialized - server startup may have failed")
     
     return create_orchestrator(checkpointer=global_checkpointer)
 
@@ -216,14 +232,18 @@ async def ensure_run_in_index(run_id: str) -> bool:
     logger.info(f"🔍 Looking up run {run_id} in database (CLI-initiated run?)")
     try:
         get_orchestrator_graph()
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
-        thread_ids = [row[0] for row in cursor.fetchall()]
+        
+        # Get async connection from checkpointer
+        conn = global_checkpointer.conn
+        cursor = await conn.cursor()
+        await cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        rows = await cursor.fetchall()
+        thread_ids = [row[0] for row in rows]
         logger.info(f"   Found {len(thread_ids)} thread(s) in database")
         
         for thread_id in thread_ids:
             config = {"configurable": {"thread_id": thread_id}}
-            state_snapshot = global_checkpointer.get(config)
+            state_snapshot = await global_checkpointer.aget(config)
             
             if state_snapshot and "channel_values" in state_snapshot:
                 state = state_snapshot["channel_values"]
@@ -253,23 +273,26 @@ async def ensure_run_in_index(run_id: str) -> bool:
 
 @app.get("/api/runs", response_model=List[RunSummary])
 async def list_runs():
-    # Query the DB for all threads
-    # LangGraph SqliteSaver uses a 'checkpoints' table with 'thread_id' column
+    # Query the DB for all threads using async checkpointer
     summaries = []
     
     try:
         # Ensure graph/checkpointer is initialized
         get_orchestrator_graph()
+        logger.info("📊 /api/runs called - querying database...")
+        # Get async connection from checkpointer
+        conn = global_checkpointer.conn
+        cursor = await conn.cursor()
         
-        cursor = db_conn.cursor()
         # Get distinct thread_ids
-        cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
-        thread_ids = [row[0] for row in cursor.fetchall()]
+        await cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        rows = await cursor.fetchall()
+        thread_ids = [row[0] for row in rows]
         
         for thread_id in thread_ids:
             # Get latest state for this thread
             config = {"configurable": {"thread_id": thread_id}}
-            state_snapshot = global_checkpointer.get(config)
+            state_snapshot = await global_checkpointer.aget(config)
             
             if state_snapshot and "channel_values" in state_snapshot:
                 state = state_snapshot["channel_values"]
@@ -354,8 +377,23 @@ async def create_run(request: CreateRunRequest, background_tasks: BackgroundTask
         "tags": request.tags or []
     }
     
-    # Start the run in background
-    background_tasks.add_task(run_orchestrator, run_id, thread_id, request.objective, request.spec)
+    # Broadcast new run to all clients
+    await manager.broadcast({
+        "type": "run_list_update",
+        "payload": list(runs_index.values())
+    })
+    
+    # Start the run in background and track the task
+    import asyncio
+    task = asyncio.create_task(run_orchestrator(run_id, thread_id, request.objective, request.spec, request.workspace))
+    running_tasks[run_id] = task
+    
+    # Cleanup task when done
+    def cleanup_task(t):
+        running_tasks.pop(run_id, None)
+        logger.info(f"Cleaned up task for run {run_id}")
+    
+    task.add_done_callback(cleanup_task)
     
     return {"run_id": run_id}
 
@@ -402,7 +440,7 @@ async def get_run(run_id: str):
     try:
         get_orchestrator_graph()
         config = {"configurable": {"thread_id": run_data["thread_id"]}}
-        state_snapshot = global_checkpointer.get(config)
+        state_snapshot = await global_checkpointer.aget(config)
         if state_snapshot and "channel_values" in state_snapshot:
             state = state_snapshot["channel_values"]
             
@@ -478,6 +516,42 @@ async def replan_run(run_id: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/runs/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    """Cancel a running task."""
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    if run_id not in running_tasks:
+        # Already completed or not running
+        return {"status": runs_index[run_id].get("status", "unknown"), "message": "Run not active"}
+    
+    task = running_tasks[run_id]
+    if task.done():
+        return {"status": "already_completed"}
+    
+    # Cancel the task
+    task.cancel()
+    logger.warning(f"🛑 Cancelled run {run_id}")
+    
+    # Update status
+    runs_index[run_id]["status"] = "cancelled"
+    runs_index[run_id]["updated_at"] = datetime.now().isoformat()
+    
+    # Broadcast cancellation
+    await manager.broadcast_to_run(run_id, {
+        "type": "cancelled",
+        "payload": {"status": "cancelled", "message": "Run cancelled by user"}
+    })
+    
+    # Broadcast run list update
+    await manager.broadcast({
+        "type": "run_list_update",
+        "payload": list(runs_index.values())
+    })
+    
+    return {"status": "cancelled", "run_id": run_id}
+
 @app.get("/api/runs/{run_id}/interrupts")
 async def get_interrupts(run_id: str):
     """Check if run is paused waiting for human input."""
@@ -491,7 +565,7 @@ async def get_interrupts(run_id: str):
         config = {"configurable": {"thread_id": thread_id}}
         
         # Get current state snapshot (correct LangGraph API)
-        snapshot = orchestrator.get_state(config)
+        snapshot = await orchestrator.aget_state(config)
         
         # Check if graph is paused (snapshot.next is non-empty when waiting)
         if snapshot.next:
@@ -578,7 +652,183 @@ async def websocket_endpoint(websocket: WebSocket):
 # BACKGROUND WORKER
 # =============================================================================
 
-async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: dict = None):
+async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: dict, workspace_path: Any):
+    """Core execution logic for the run."""
+    from pathlib import Path
+    from git_manager import WorktreeManager, initialize_git_repo
+    
+    try:
+        # Initialize git
+        initialize_git_repo(workspace_path)
+    
+        # Create worktree manager
+        worktree_base = workspace_path / ".worktrees"
+        worktree_base.mkdir(exist_ok=True)
+        
+        wt_manager = WorktreeManager(
+            repo_path=workspace_path,
+            worktree_base=worktree_base
+        )
+        
+        # Create config
+        config = OrchestratorConfig(mock_mode=False)
+        
+        # Create graph
+        orchestrator = get_orchestrator_graph()
+        
+        # Initial state
+        initial_state = {
+            "run_id": run_id,
+            "objective": objective,
+            "spec": spec or {},
+            "tasks": [],
+            "insights": [],
+            "design_log": [],
+            "task_memories": {},
+            "filesystem_index": {},
+            "guardian": {},
+            "strategy_status": "progressing",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "mock_mode": False,
+            "_wt_manager": wt_manager,
+            "_workspace_path": str(workspace_path),
+            "orch_config": config,
+        }
+        
+        run_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "mock_mode": False
+            }
+        }
+        
+        try:
+            # Stream events from the graph
+            logger.info(f"📡 Starting event stream for run {run_id}")
+            event_count = 0
+            
+            async for event in orchestrator.astream_events(initial_state, config=run_config, version="v1"):
+                kind = event["event"]
+                name = event.get("name", "")
+                event_count += 1
+                
+                # Log node execution
+                if kind == "on_chain_start" and name in ["director", "worker", "strategist"]:
+                    logger.info(f"  ▶️  Node '{name}' starting")
+                    # Broadcast log to frontend
+                    await manager.broadcast_to_run(run_id, {
+                        "type": "log_message",
+                        "payload": {
+                            "message": f"Node '{name}' starting",
+                            "level": "info",
+                            "node": name,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    })
+                
+                if kind == "on_chain_end":
+                    # Log node completion
+                    if name in ["director", "worker", "strategist"]:
+                        data = event["data"].get("output")
+                        if data and isinstance(data, dict) and "tasks" in data:
+                            logger.info(f"  ✅ Node '{name}' completed")
+                            # Broadcast log to frontend
+                            await manager.broadcast_to_run(run_id, {
+                                "type": "log_message",
+                                "payload": {
+                                    "message": f"Node '{name}' completed",
+                                    "level": "success",
+                                    "node": name,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            })
+                    
+                    # Check if it's the main graph end or a node end
+                    data = event["data"].get("output")
+                    if data and isinstance(data, dict) and "tasks" in data:
+                        # Log task status changes
+                        for task in data.get("tasks", []):
+                            if isinstance(task, dict):
+                                task_id = task.get("id", "")[:12]
+                                status = task.get("status", "")
+                                retry_count = task.get("retry_count", 0)
+                                if status in ["active", "failed", "waiting_human", "complete"]:
+                                    logger.info(f"     Task {task_id}: {status} (retries: {retry_count})")
+                        
+                        # Update state
+                        runs_index[run_id].update({
+                            "status": "running" if data.get("strategy_status") != "complete" else "completed",
+                            "updated_at": datetime.now().isoformat(),
+                            "task_counts": {
+                                "planned": len([t for t in data.get("tasks", []) if t.status == "planned"]),
+                                "completed": len([t for t in data.get("tasks", []) if t.status == "complete"]),
+                            }
+                        })
+                        
+                        # Broadcast update
+                        await manager.broadcast_to_run(run_id, {
+                            "type": "state_update",
+                            "payload": {
+                                "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
+                                "status": runs_index[run_id]["status"]
+                            }
+                        })
+                
+                elif kind == "on_chat_model_stream":
+                    # Optional: Stream tokens for logs
+                    pass
+            
+            logger.info(f"📡 Event stream ended ({event_count} events)")
+                    
+        except Exception as e:
+            logger.error(f"Run failed: {e}")
+            import traceback
+            traceback.print_exc()
+            runs_index[run_id]["status"] = "failed"
+            await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+        
+        finally:
+            # CRITICAL: Check if run is paused after stream ends
+            # This detects interrupts that occur during execution
+            try:
+                snapshot = await orchestrator.aget_state(run_config)
+                
+                if snapshot.next:  # Graph is paused/interrupted
+                    runs_index[run_id]["status"] = "interrupted"
+                    logger.info(f"Run {run_id} paused for HITL intervention")
+                    
+                    # Broadcast interrupt notification to frontend
+                    await manager.broadcast_to_run(run_id, {
+                        "type": "interrupted",
+                        "payload": {"status": "interrupted"}
+                    })
+                    
+                    # Broadcast run list update
+                    await manager.broadcast({
+                        "type": "run_list_update",
+                        "payload": list(runs_index.values())
+                    })
+                else:
+                    # Run actually completed
+                    logger.info(f"Run {run_id} completed successfully")
+                    
+                    # Broadcast run list update  
+                    await manager.broadcast({
+                        "type": "run_list_update",
+                        "payload": list(runs_index.values())
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error checking final state: {e}")
+
+    except Exception as e:
+        logger.error(f"Critical error in run execution logic: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: dict = None, workspace: str = None):
     """
     Execute the orchestrator graph.
     """
@@ -589,141 +839,33 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
     from git_manager import WorktreeManager, initialize_git_repo
     
     # Setup workspace
-    workspace = "projects/workspace"
+    if not workspace:
+        workspace = "projects/workspace"
+    
     workspace_path = Path(workspace).resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
     
-    # Initialize git
-    initialize_git_repo(workspace_path)
+    # Setup file logging for this run
+    # This mimics main.py's logging behavior
+    log_dir = workspace_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"run_{timestamp}.log"
     
-    # Create worktree manager
-    worktree_base = workspace_path / ".worktrees"
-    worktree_base.mkdir(exist_ok=True)
-    
-    wt_manager = WorktreeManager(
-        repo_path=workspace_path,
-        worktree_base=worktree_base
-    )
-    
-    # Create config
-    config = OrchestratorConfig(mock_mode=False)
-    
-    # Create graph
-    orchestrator = get_orchestrator_graph()
-    
-    # Initial state
-    initial_state = {
-        "run_id": run_id,
-        "objective": objective,
-        "spec": spec or {},
-        "tasks": [],
-        "insights": [],
-        "design_log": [],
-        "task_memories": {},
-        "filesystem_index": {},
-        "guardian": {},
-        "strategy_status": "progressing",
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
-        "mock_mode": False,
-        "_wt_manager": wt_manager,
-        "_workspace_path": str(workspace_path),
-        "orch_config": config,
-    }
-    
-    run_config = {
-        "configurable": {
-            "thread_id": thread_id,
-            "mock_mode": False
-        }
-    }
+    # Add file handler to root logger
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    logger.info(f"📝 Logging run to: {log_file}")
     
     try:
-        # Stream events from the graph
-        logger.info(f"📡 Starting event stream for run {run_id}")
-        event_count = 0
-        
-        async for event in orchestrator.astream_events(initial_state, config=run_config, version="v1"):
-            kind = event["event"]
-            name = event.get("name", "")
-            event_count += 1
-            
-            # Log node execution
-            if kind == "on_chain_start" and name in ["director", "worker", "strategist"]:
-                logger.info(f"  ▶️  Node '{name}' starting")
-            
-            if kind == "on_chain_end":
-                # Log node completion
-                if name in ["director", "worker", "strategist"]:
-                    data = event["data"].get("output")
-                    if data and isinstance(data, dict) and "tasks" in data:
-                        logger.info(f"  ✅ Node '{name}' completed")
-                
-                # Check if it's the main graph end or a node end
-                data = event["data"].get("output")
-                if data and isinstance(data, dict) and "tasks" in data:
-                    # Log task status changes
-                    for task in data.get("tasks", []):
-                        if isinstance(task, dict):
-                            task_id = task.get("id", "")[:12]
-                            status = task.get("status", "")
-                            retry_count = task.get("retry_count", 0)
-                            if status in ["active", "failed", "waiting_human", "complete"]:
-                                logger.info(f"     Task {task_id}: {status} (retries: {retry_count})")
-                    
-                    # Update state
-                    runs_index[run_id].update({
-                        "status": "running" if data.get("strategy_status") != "complete" else "completed",
-                        "updated_at": datetime.now().isoformat(),
-                        "task_counts": {
-                            "planned": len([t for t in data.get("tasks", []) if t.status == "planned"]),
-                            "completed": len([t for t in data.get("tasks", []) if t.status == "complete"]),
-                        }
-                    })
-                    
-                    # Broadcast update
-                    await manager.broadcast_to_run(run_id, {
-                        "type": "state_update",
-                        "payload": {
-                            "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
-                            "status": runs_index[run_id]["status"]
-                        }
-                    })
-            
-            elif kind == "on_chat_model_stream":
-                # Optional: Stream tokens for logs
-                pass
-        
-        logger.info(f"📡 Event stream ended ({event_count} events)")
-                
-    except Exception as e:
-        logger.error(f"Run failed: {e}")
-        import traceback
-        traceback.print_exc()
-        runs_index[run_id]["status"] = "failed"
-        await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
-    
+        await _execute_run_logic(run_id, thread_id, objective, spec, workspace_path)
     finally:
-        # CRITICAL: Check if run is paused after stream ends
-        # This detects interrupts that occur during execution
-        try:
-            snapshot = orchestrator.get_state(run_config)
-            
-            if snapshot.next:  # Graph is paused/interrupted
-                runs_index[run_id]["status"] = "interrupted"
-                logger.info(f"Run {run_id} paused for HITL intervention")
-                
-                # Broadcast interrupt notification to frontend
-                await manager.broadcast_to_run(run_id, {
-                    "type": "interrupted",
-                    "payload": {"status": "interrupted"}
-                })
-            else:
-                # Run actually completed
-                logger.info(f"Run {run_id} completed successfully")
-                
-        except Exception as e:
-            logger.error(f"Error checking final state: {e}")
+        # Clean up file handler
+        root_logger.removeHandler(file_handler)
+        file_handler.close()
+        logger.info(f"📝 Closed log file: {log_file}")
 
 if __name__ == "__main__":
     import uvicorn
