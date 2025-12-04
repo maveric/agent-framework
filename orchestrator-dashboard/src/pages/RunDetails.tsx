@@ -131,6 +131,7 @@ export function RunDetails() {
         // Handle real-time updates
         const removeStateUpdateHandler = addMessageHandler('state_update', (message) => {
             if (message.run_id === runId) {
+                console.log('State update received:', message.payload);
                 setRun(prev => {
                     if (!prev) return prev;
                     return {
@@ -223,13 +224,15 @@ export function RunDetails() {
                         <div className="flex items-center gap-3 mb-2">
                             <h1 className="text-3xl font-bold text-white tracking-tight">Run Details</h1>
                             <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${run.status === 'running' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                                run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-                                    run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                                        run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
-                                            'bg-slate-700 text-slate-400'
+                                    run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                                        run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                                            run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                                'bg-slate-700 text-slate-400'
                                 }`}>
                                 {run.status}
                             </span>
+                            {/* Connection Status */}
+                            <div className={`w-2 h-2 rounded-full ${useWebSocketStore.getState().connected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} title={useWebSocketStore.getState().connected ? 'Connected' : 'Disconnected'} />
                         </div>
                         <div className="flex items-center gap-2 text-sm text-slate-400">
                             <span className="font-mono">{run.run_id}</span>
@@ -265,38 +268,40 @@ export function RunDetails() {
                             status={run?.status || ''}
                         />
                     </div>
-                </div>
+                </div >
 
                 {/* Model Config */}
-                {run.model_config && (
-                    <div className="bg-slate-900 rounded-lg p-6 border border-slate-800 mb-8">
-                        <h3 className="text-sm font-semibold text-slate-200 mb-4">Model Configuration</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div
-                                className="space-y-1 cursor-pointer hover:bg-slate-800/50 p-2 -m-2 rounded transition-colors"
-                                onClick={() => setViewingDirectorLogs(true)}
-                                title="View Director Logs"
-                            >
-                                <div className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-1">DIRECTOR</div>
-                                <div className="text-sm font-medium text-white">{run.model_config.director_model.model_name}</div>
-                                <div className="text-xs text-slate-500">{run.model_config.director_model.provider}</div>
-                                <div className="text-xs text-slate-600">temp: {run.model_config.director_model.temperature}</div>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1">WORKER</div>
-                                <div className="text-sm font-medium text-white">{run.model_config.worker_model.model_name}</div>
-                                <div className="text-xs text-slate-500">{run.model_config.worker_model.provider}</div>
-                                <div className="text-xs text-slate-600">temp: {run.model_config.worker_model.temperature}</div>
-                            </div>
-                            <div className="space-y-1">
-                                <div className="text-xs font-bold text-green-400 uppercase tracking-wider mb-1">STRATEGIST</div>
-                                <div className="text-sm font-medium text-white">{run.model_config.strategist_model.model_name}</div>
-                                <div className="text-xs text-slate-500">{run.model_config.strategist_model.provider}</div>
-                                <div className="text-xs text-slate-600">temp: {run.model_config.strategist_model.temperature}</div>
+                {
+                    run.model_config && (
+                        <div className="bg-slate-900 rounded-lg p-6 border border-slate-800 mb-8">
+                            <h3 className="text-sm font-semibold text-slate-200 mb-4">Model Configuration</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div
+                                    className="space-y-1 cursor-pointer hover:bg-slate-800/50 p-2 -m-2 rounded transition-colors"
+                                    onClick={() => setViewingDirectorLogs(true)}
+                                    title="View Director Logs"
+                                >
+                                    <div className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-1">DIRECTOR</div>
+                                    <div className="text-sm font-medium text-white">{run.model_config.director_model.model_name}</div>
+                                    <div className="text-xs text-slate-500">{run.model_config.director_model.provider}</div>
+                                    <div className="text-xs text-slate-600">temp: {run.model_config.director_model.temperature}</div>
+                                </div>
+                                <div className="space-y-1">
+                                    <div className="text-xs font-bold text-blue-400 uppercase tracking-wider mb-1">WORKER</div>
+                                    <div className="text-sm font-medium text-white">{run.model_config.worker_model.model_name}</div>
+                                    <div className="text-xs text-slate-500">{run.model_config.worker_model.provider}</div>
+                                    <div className="text-xs text-slate-600">temp: {run.model_config.worker_model.temperature}</div>
+                                </div>
+                                <div className="space-y-1">
+                                    <div className="text-xs font-bold text-green-400 uppercase tracking-wider mb-1">STRATEGIST</div>
+                                    <div className="text-sm font-medium text-white">{run.model_config.strategist_model.model_name}</div>
+                                    <div className="text-xs text-slate-500">{run.model_config.strategist_model.provider}</div>
+                                    <div className="text-xs text-slate-600">temp: {run.model_config.strategist_model.temperature}</div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
+                    )
+                }
 
                 {/* Content Grid */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -497,55 +502,59 @@ export function RunDetails() {
                 </div>
 
                 {/* Director Logs Modal */}
-                {viewingDirectorLogs && (
-                    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                        <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
-                            <div className="flex items-center justify-between p-4 border-b border-slate-800">
-                                <div className="flex items-center gap-3">
-                                    <h2 className="text-lg font-bold text-white">Director System Logs</h2>
-                                    <span className="bg-indigo-900/30 text-indigo-300 px-2 py-0.5 rounded text-xs border border-indigo-800/50">
-                                        GLOBAL VIEW
-                                    </span>
+                {
+                    viewingDirectorLogs && (
+                        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                            <div className="bg-slate-900 rounded-xl border border-slate-700 w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+                                <div className="flex items-center justify-between p-4 border-b border-slate-800">
+                                    <div className="flex items-center gap-3">
+                                        <h2 className="text-lg font-bold text-white">Director System Logs</h2>
+                                        <span className="bg-indigo-900/30 text-indigo-300 px-2 py-0.5 rounded text-xs border border-indigo-800/50">
+                                            GLOBAL VIEW
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => setViewingDirectorLogs(false)}
+                                        className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
                                 </div>
-                                <button
-                                    onClick={() => setViewingDirectorLogs(false)}
-                                    className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors"
-                                >
-                                    <X className="w-5 h-5" />
-                                </button>
-                            </div>
-                            <div className="p-6 overflow-y-auto">
-                                <TaskDetailsContent
-                                    task={{
-                                        id: 'director-system',
-                                        description: 'Global orchestration logs. Shows high-level planning, decomposition, and integration decisions.',
-                                        status: 'active',
-                                        phase: 'orchestration',
-                                        component: 'director',
-                                        depends_on: []
-                                    }}
-                                    logs={run.task_memories?.['director']}
-                                />
+                                <div className="p-6 overflow-y-auto">
+                                    <TaskDetailsContent
+                                        task={{
+                                            id: 'director-system',
+                                            description: 'Global orchestration logs. Shows high-level planning, decomposition, and integration decisions.',
+                                            status: 'active',
+                                            phase: 'orchestration',
+                                            component: 'director',
+                                            depends_on: []
+                                        }}
+                                        logs={run.task_memories?.['director']}
+                                    />
+                                </div>
                             </div>
                         </div>
-                    </div>
-                )}
+                    )
+                }
 
                 {/* HITL Interrupt Modal */}
-                {showInterruptModal && interruptData && (
-                    <InterruptModal
-                        runId={runId!}
-                        interruptData={interruptData}
-                        onResolve={() => {
-                            setShowInterruptModal(false);
-                            setInterruptData(null);
-                        }}
-                        onClose={() => {
-                            setShowInterruptModal(false);
-                        }}
-                    />
-                )}
-            </div>
-        </div>
+                {
+                    showInterruptModal && interruptData && (
+                        <InterruptModal
+                            runId={runId!}
+                            interruptData={interruptData}
+                            onResolve={() => {
+                                setShowInterruptModal(false);
+                                setInterruptData(null);
+                            }}
+                            onClose={() => {
+                                setShowInterruptModal(false);
+                            }}
+                        />
+                    )
+                }
+            </div >
+        </div >
     );
 }

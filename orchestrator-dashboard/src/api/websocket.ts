@@ -78,6 +78,7 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => ({
 
         socket.onmessage = (event) => {
             const msg: WSMessage = JSON.parse(event.data);
+            console.log('WS Message received:', msg.type, msg);
 
             // Add to message history (keep last 100)
             set((state) => ({

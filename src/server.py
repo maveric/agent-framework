@@ -63,6 +63,7 @@ class RunSummary(BaseModel):
     workspace_path: Optional[str] = None
 
 class HumanResolution(BaseModel):
+    task_id: str
     action: str  # 'retry', 'abandon', or 'spawn_new_task'
     
     # For 'retry' action
@@ -89,23 +90,33 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        logger.info(f"WebSocket connected. Total active: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        
+        # Remove from subscriptions
         for run_id in list(self.subscriptions.keys()):
             if websocket in self.subscriptions[run_id]:
                 self.subscriptions[run_id].remove(websocket)
+                if not self.subscriptions[run_id]:
+                    del self.subscriptions[run_id]
+        logger.info(f"WebSocket disconnected. Total active: {len(self.active_connections)}")
 
     async def subscribe(self, websocket: WebSocket, run_id: str):
         if run_id not in self.subscriptions:
             self.subscriptions[run_id] = []
         if websocket not in self.subscriptions[run_id]:
             self.subscriptions[run_id].append(websocket)
-            logger.info(f"Subscribed to {run_id}")
+            logger.info(f"Subscribed to {run_id}. Total subscribers: {len(self.subscriptions[run_id])}")
 
     async def unsubscribe(self, websocket: WebSocket, run_id: str):
         if run_id in self.subscriptions and websocket in self.subscriptions[run_id]:
             self.subscriptions[run_id].remove(websocket)
+            if not self.subscriptions[run_id]:
+                del self.subscriptions[run_id]
+            logger.info(f"Unsubscribed from {run_id}")
 
     async def broadcast(self, message: dict):
         # Inject timestamp if missing
@@ -115,8 +126,8 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Error broadcasting message: {e}")
 
     async def broadcast_to_run(self, run_id: str, message: dict):
         # Inject run_id and timestamp if missing
@@ -129,8 +140,8 @@ class ConnectionManager:
             for connection in self.subscriptions[run_id]:
                 try:
                     await connection.send_json(message)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Error broadcasting to run {run_id}: {e}")
 
 manager = ConnectionManager()
 
@@ -771,7 +782,6 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                 "mock_mode": False
             }
         }
-        
         try:
             # Stream events from the graph
             logger.info(f"📡 Starting event stream for run {run_id}")
@@ -866,7 +876,8 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                                 "type": "state_update",
                                 "payload": {
                                     "tasks": serialized_tasks,
-                                    "status": runs_index[run_id]["status"]
+                                    "status": runs_index[run_id]["status"],
+                                    "task_counts": runs_index[run_id]["task_counts"]
                                 }
                             })
                         except Exception as e:
