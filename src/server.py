@@ -209,14 +209,17 @@ async def ensure_run_in_index(run_id: str) -> bool:
     """
     # Already in index
     if run_id in runs_index:
+        logger.debug(f"Run {run_id} already in index")
         return True
     
     # Try to find in database
+    logger.info(f"🔍 Looking up run {run_id} in database (CLI-initiated run?)")
     try:
         get_orchestrator_graph()
         cursor = db_conn.cursor()
         cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
         thread_ids = [row[0] for row in cursor.fetchall()]
+        logger.info(f"   Found {len(thread_ids)} thread(s) in database")
         
         for thread_id in thread_ids:
             config = {"configurable": {"thread_id": thread_id}}
@@ -238,9 +241,10 @@ async def ensure_run_in_index(run_id: str) -> bool:
                         "task_counts": {},
                         "tags": state.get("tags", [])
                     }
-                    logger.info(f"Added CLI-initiated run {run_id} to index (thread: {thread_id})")
+                    logger.info(f"✅ Found and added run {run_id} (thread: {thread_id})")
                     return True
         
+        logger.warning(f"❌ Run {run_id} not found in database")
         return False
             
     except Exception as e:
@@ -491,11 +495,13 @@ async def get_interrupts(run_id: str):
         
         # Check if graph is paused (snapshot.next is non-empty when waiting)
         if snapshot.next:
+            logger.info(f"⏸️  Run {run_id} is PAUSED (snapshot.next = {snapshot.next})")
             # Check for dynamic interrupt - this is where LangGraph stores interrupt() payloads
             # Based on user research and LangGraph docs
             if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
                 # Extract the interrupt data we passed to interrupt()
                 interrupt_data = snapshot.tasks[0].interrupts[0].value
+                logger.info(f"   Found interrupt: task_id={interrupt_data.get('task_id')}, type={interrupt_data.get('type')}")
                 return {
                     "interrupted": True,
                     "data": interrupt_data
@@ -525,15 +531,20 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         
         # Resume with Command - the resolution dict becomes the return value of interrupt()
         # Run in background to avoid blocking the API response
+        logger.info(f"▶️  Resuming run {run_id} with action '{resolution.action}'")
+        if resolution.action == "retry" and resolution.modified_description:
+            logger.info(f"   Modified description: {resolution.modified_description[:100]}...")
+        
         def resume_execution():
             try:
+                logger.info(f"   Calling orchestrator.invoke(Command(resume=...))")
                 orchestrator.invoke(
                     Command(resume=resolution.dict()),
                     config=config
                 )
-                logger.info(f"Resumed run {run_id} with action: {resolution.action}")
+                logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
             except Exception as e:
-                logger.error(f"Error during resume execution: {e}")
+                logger.error(f"❌ Error during resume execution: {e}")
                 import traceback
                 traceback.print_exc()
         
@@ -629,13 +640,37 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
     
     try:
         # Stream events from the graph
+        logger.info(f"📡 Starting event stream for run {run_id}")
+        event_count = 0
+        
         async for event in orchestrator.astream_events(initial_state, config=run_config, version="v1"):
             kind = event["event"]
+            name = event.get("name", "")
+            event_count += 1
+            
+            # Log node execution
+            if kind == "on_chain_start" and name in ["director", "worker", "strategist"]:
+                logger.info(f"  ▶️  Node '{name}' starting")
             
             if kind == "on_chain_end":
+                # Log node completion
+                if name in ["director", "worker", "strategist"]:
+                    data = event["data"].get("output")
+                    if data and isinstance(data, dict) and "tasks" in data:
+                        logger.info(f"  ✅ Node '{name}' completed")
+                
                 # Check if it's the main graph end or a node end
                 data = event["data"].get("output")
                 if data and isinstance(data, dict) and "tasks" in data:
+                    # Log task status changes
+                    for task in data.get("tasks", []):
+                        if isinstance(task, dict):
+                            task_id = task.get("id", "")[:12]
+                            status = task.get("status", "")
+                            retry_count = task.get("retry_count", 0)
+                            if status in ["active", "failed", "waiting_human", "complete"]:
+                                logger.info(f"     Task {task_id}: {status} (retries: {retry_count})")
+                    
                     # Update state
                     runs_index[run_id].update({
                         "status": "running" if data.get("strategy_status") != "complete" else "completed",
@@ -658,6 +693,8 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
             elif kind == "on_chat_model_stream":
                 # Optional: Stream tokens for logs
                 pass
+        
+        logger.info(f"📡 Event stream ended ({event_count} events)")
                 
     except Exception as e:
         logger.error(f"Run failed: {e}")
