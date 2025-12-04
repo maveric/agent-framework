@@ -140,7 +140,9 @@ export function RunDetails() {
                         task_counts: message.payload.task_counts || prev.task_counts,
                         insights: message.payload.insights || prev.insights,
                         design_log: message.payload.design_log || prev.design_log,
-                        task_memories: message.payload.task_memories || prev.task_memories
+                        task_memories: message.payload.task_memories
+                            ? { ...prev.task_memories, ...message.payload.task_memories }
+                            : prev.task_memories
                     };
                 });
             }

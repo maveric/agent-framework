@@ -536,6 +536,7 @@ async def get_run(run_id: str):
             # Serialize task memories
             task_memories = {}
             raw_memories = state.get("task_memories", {})
+            logger.info(f"🔍 get_run found task_memories for: {list(raw_memories.keys())}")
             for task_id, messages in raw_memories.items():
                 task_memories[task_id] = _serialize_messages(messages)
             
