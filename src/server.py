@@ -689,13 +689,11 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         if resolution.action == "retry" and resolution.modified_description:
             logger.info(f"   Modified description: {resolution.modified_description[:100]}...")
         
-        def resume_execution():
+        async def resume_execution():
             try:
-                logger.info(f"   Calling orchestrator.invoke(Command(resume=...))")
-                orchestrator.invoke(
-                    Command(resume=resolution.model_dump()),
-                    config=config
-                )
+                logger.info(f"   Calling _stream_and_broadcast with Command(resume=...)")
+                command = Command(resume=resolution.model_dump())
+                await _stream_and_broadcast(orchestrator, command, config, run_id)
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
             except Exception as e:
                 logger.error(f"❌ Error during resume execution: {e}")
@@ -731,6 +729,175 @@ async def websocket_endpoint(websocket: WebSocket):
 # =============================================================================
 # BACKGROUND WORKER
 # =============================================================================
+
+async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
+    """Stream events from the graph and broadcast updates to the frontend."""
+    try:
+        logger.info(f"📡 Starting event stream for run {run_id}")
+        event_count = 0
+        
+        async for event in orchestrator.astream_events(input_data, config=run_config, version="v1"):
+            kind = event["event"]
+            name = event.get("name", "")
+            event_count += 1
+            
+            # Log node execution
+            if kind == "on_chain_start" and name in ["director", "worker", "strategist"]:
+                logger.info(f"  ▶️  Node '{name}' starting")
+                # Broadcast log to frontend
+                await manager.broadcast_to_run(run_id, {
+                    "type": "log_message",
+                    "payload": {
+                        "message": f"Node '{name}' starting",
+                        "level": "info",
+                        "node": name,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                })
+            
+            if kind == "on_chain_end":
+                # Log node completion
+                if name in ["director", "worker", "strategist"]:
+                    data = event["data"].get("output")
+                    if data and isinstance(data, dict) and "tasks" in data:
+                        logger.info(f"  ✅ Node '{name}' completed")
+                        # Broadcast log to frontend
+                        await manager.broadcast_to_run(run_id, {
+                            "type": "log_message",
+                            "payload": {
+                                "message": f"Node '{name}' completed",
+                                "level": "success",
+                                "node": name,
+                                    "timestamp": datetime.now().isoformat()
+                            }
+                        })
+                
+                # Check if it's the main graph end or a node end
+                data = event["data"].get("output")
+                if data and isinstance(data, dict) and "tasks" in data:
+                    # Log task status changes
+                    for task in data.get("tasks", []):
+                        if isinstance(task, dict):
+                            task_id = task.get("id", "")[:12]
+                            status = task.get("status", "")
+                            retry_count = task.get("retry_count", 0)
+                            if status in ["active", "failed", "waiting_human", "complete"]:
+                                logger.info(f"     Task {task_id}: {status} (retries: {retry_count})")
+                    
+                    # Update state
+                    runs_index[run_id].update({
+                        "status": "running" if data.get("strategy_status") != "complete" else "completed",
+                        "updated_at": datetime.now().isoformat(),
+                        "task_counts": {
+                            "planned": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "planned") or (not isinstance(t, dict) and getattr(t, "status", "") == "planned")]),
+                            "completed": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "complete") or (not isinstance(t, dict) and getattr(t, "status", "") == "complete")]),
+                        }
+                    })
+                    
+                    # Broadcast FULL state update (same as polling API)
+                    # We fetch the latest state from the graph to ensure we send the complete list
+                    # CRITICAL: We merge the event data (which is freshest) into the snapshot (which might be slightly stale)
+                    try:
+                        snapshot = await orchestrator.aget_state(run_config)
+                        full_tasks = []
+                        if snapshot and snapshot.values:
+                            full_tasks = snapshot.values.get("tasks", [])
+                        
+                        # Create a map of existing tasks
+                        task_map = {t.id if hasattr(t, "id") else t.get("id"): t for t in full_tasks}
+                        
+                        # Merge in the FRESH updates from the event
+                        fresh_tasks = data.get("tasks", [])
+                        for t in fresh_tasks:
+                            t_id = t.get("id")
+                            if t_id:
+                                # If it's a dict, use it directly. If existing was object, replace it.
+                                # The event data 't' is always a dict here because it comes from the event output
+                                task_map[t_id] = t
+                        
+                        # Convert back to list
+                        merged_tasks = list(task_map.values())
+                        
+                        # Convert to dicts if needed for serialization
+                        serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in merged_tasks]
+                        
+                        await manager.broadcast_to_run(run_id, {
+                            "type": "state_update",
+                            "payload": {
+                                "tasks": serialized_tasks,
+                                "status": runs_index[run_id]["status"],
+                                "task_counts": runs_index[run_id]["task_counts"]
+                            }
+                        })
+                    except Exception as e:
+                        logger.error(f"Failed to broadcast full state: {e}")
+                        # Fallback to partial update if fetch fails
+                        await manager.broadcast_to_run(run_id, {
+                            "type": "state_update",
+                            "payload": {
+                                "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
+                                "status": runs_index[run_id]["status"]
+                            }
+                        })
+            
+            elif kind == "on_chat_model_stream":
+                # Optional: Stream tokens for logs
+                pass
+        
+        logger.info(f"📡 Event stream ended ({event_count} events)")
+                
+    except Exception as e:
+        logger.error(f"Run failed: {e}")
+        import traceback
+        traceback.print_exc()
+        runs_index[run_id]["status"] = "failed"
+        await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+    
+    finally:
+        # CRITICAL: Check if run is paused after stream ends
+        # This detects interrupts that occur during execution
+        try:
+            snapshot = await orchestrator.aget_state(run_config)
+            
+            if snapshot.next:  # Graph is paused/interrupted
+                runs_index[run_id]["status"] = "interrupted"
+                logger.info(f"Run {run_id} paused for HITL intervention")
+                
+                # Extract interrupt data
+                interrupt_data = {}
+                if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
+                    interrupt_data = snapshot.tasks[0].interrupts[0].value
+                
+                # Only broadcast if we actually have interrupt data
+                if interrupt_data:
+                    # Broadcast interrupt notification to frontend
+                    await manager.broadcast_to_run(run_id, {
+                        "type": "interrupted",
+                        "payload": {
+                            "status": "interrupted",
+                            "data": interrupt_data
+                        }
+                    })
+                else:
+                    logger.warning(f"Run {run_id} paused but no interrupt data found. Snapshot next: {snapshot.next}")
+                
+                # Broadcast run list update
+                await manager.broadcast({
+                    "type": "run_list_update",
+                    "payload": list(runs_index.values())
+                })
+            else:
+                # Run actually completed
+                logger.info(f"Run {run_id} completed successfully")
+                
+                # Broadcast run list update  
+                await manager.broadcast({
+                    "type": "run_list_update",
+                    "payload": list(runs_index.values())
+                })
+                
+        except Exception as e:
+            logger.error(f"Error checking final state: {e}")
 
 async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: dict, workspace_path: Any):
     """Core execution logic for the run."""
@@ -782,173 +949,8 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                 "mock_mode": False
             }
         }
-        try:
-            # Stream events from the graph
-            logger.info(f"📡 Starting event stream for run {run_id}")
-            event_count = 0
-            
-            async for event in orchestrator.astream_events(initial_state, config=run_config, version="v1"):
-                kind = event["event"]
-                name = event.get("name", "")
-                event_count += 1
-                
-                # Log node execution
-                if kind == "on_chain_start" and name in ["director", "worker", "strategist"]:
-                    logger.info(f"  ▶️  Node '{name}' starting")
-                    # Broadcast log to frontend
-                    await manager.broadcast_to_run(run_id, {
-                        "type": "log_message",
-                        "payload": {
-                            "message": f"Node '{name}' starting",
-                            "level": "info",
-                            "node": name,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    })
-                
-                if kind == "on_chain_end":
-                    # Log node completion
-                    if name in ["director", "worker", "strategist"]:
-                        data = event["data"].get("output")
-                        if data and isinstance(data, dict) and "tasks" in data:
-                            logger.info(f"  ✅ Node '{name}' completed")
-                            # Broadcast log to frontend
-                            await manager.broadcast_to_run(run_id, {
-                                "type": "log_message",
-                                "payload": {
-                                    "message": f"Node '{name}' completed",
-                                    "level": "success",
-                                    "node": name,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                            })
-                    
-                    # Check if it's the main graph end or a node end
-                    data = event["data"].get("output")
-                    if data and isinstance(data, dict) and "tasks" in data:
-                        # Log task status changes
-                        for task in data.get("tasks", []):
-                            if isinstance(task, dict):
-                                task_id = task.get("id", "")[:12]
-                                status = task.get("status", "")
-                                retry_count = task.get("retry_count", 0)
-                                if status in ["active", "failed", "waiting_human", "complete"]:
-                                    logger.info(f"     Task {task_id}: {status} (retries: {retry_count})")
-                        
-                        # Update state
-                        runs_index[run_id].update({
-                            "status": "running" if data.get("strategy_status") != "complete" else "completed",
-                            "updated_at": datetime.now().isoformat(),
-                            "task_counts": {
-                                "planned": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "planned") or (not isinstance(t, dict) and getattr(t, "status", "") == "planned")]),
-                                "completed": len([t for t in data.get("tasks", []) if (isinstance(t, dict) and t.get("status") == "complete") or (not isinstance(t, dict) and getattr(t, "status", "") == "complete")]),
-                            }
-                        })
-                        
-                        # Broadcast FULL state update (same as polling API)
-                        # We fetch the latest state from the graph to ensure we send the complete list
-                        # CRITICAL: We merge the event data (which is freshest) into the snapshot (which might be slightly stale)
-                        try:
-                            snapshot = await orchestrator.aget_state(run_config)
-                            full_tasks = []
-                            if snapshot and snapshot.values:
-                                full_tasks = snapshot.values.get("tasks", [])
-                            
-                            # Create a map of existing tasks
-                            task_map = {t.id if hasattr(t, "id") else t.get("id"): t for t in full_tasks}
-                            
-                            # Merge in the FRESH updates from the event
-                            fresh_tasks = data.get("tasks", [])
-                            for t in fresh_tasks:
-                                t_id = t.get("id")
-                                if t_id:
-                                    # If it's a dict, use it directly. If existing was object, replace it.
-                                    # The event data 't' is always a dict here because it comes from the event output
-                                    task_map[t_id] = t
-                            
-                            # Convert back to list
-                            merged_tasks = list(task_map.values())
-                            
-                            # Convert to dicts if needed for serialization
-                            serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in merged_tasks]
-                            
-                            await manager.broadcast_to_run(run_id, {
-                                "type": "state_update",
-                                "payload": {
-                                    "tasks": serialized_tasks,
-                                    "status": runs_index[run_id]["status"],
-                                    "task_counts": runs_index[run_id]["task_counts"]
-                                }
-                            })
-                        except Exception as e:
-                            logger.error(f"Failed to broadcast full state: {e}")
-                            # Fallback to partial update if fetch fails
-                            await manager.broadcast_to_run(run_id, {
-                                "type": "state_update",
-                                "payload": {
-                                    "tasks": [worker_result_to_dict(t) if hasattr(t, "status") else t for t in data.get("tasks", [])],
-                                    "status": runs_index[run_id]["status"]
-                                }
-                            })
-                
-                elif kind == "on_chat_model_stream":
-                    # Optional: Stream tokens for logs
-                    pass
-            
-            logger.info(f"📡 Event stream ended ({event_count} events)")
-                    
-        except Exception as e:
-            logger.error(f"Run failed: {e}")
-            import traceback
-            traceback.print_exc()
-            runs_index[run_id]["status"] = "failed"
-            await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
         
-        finally:
-            # CRITICAL: Check if run is paused after stream ends
-            # This detects interrupts that occur during execution
-            try:
-                snapshot = await orchestrator.aget_state(run_config)
-                
-                if snapshot.next:  # Graph is paused/interrupted
-                    runs_index[run_id]["status"] = "interrupted"
-                    logger.info(f"Run {run_id} paused for HITL intervention")
-                    
-                    # Extract interrupt data
-                    interrupt_data = {}
-                    if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
-                        interrupt_data = snapshot.tasks[0].interrupts[0].value
-                    
-                    # Only broadcast if we actually have interrupt data
-                    if interrupt_data:
-                        # Broadcast interrupt notification to frontend
-                        await manager.broadcast_to_run(run_id, {
-                            "type": "interrupted",
-                            "payload": {
-                                "status": "interrupted",
-                                "data": interrupt_data
-                            }
-                        })
-                    else:
-                        logger.warning(f"Run {run_id} paused but no interrupt data found. Snapshot next: {snapshot.next}")
-                    
-                    # Broadcast run list update
-                    await manager.broadcast({
-                        "type": "run_list_update",
-                        "payload": list(runs_index.values())
-                    })
-                else:
-                    # Run actually completed
-                    logger.info(f"Run {run_id} completed successfully")
-                    
-                    # Broadcast run list update  
-                    await manager.broadcast({
-                        "type": "run_list_update",
-                        "payload": list(runs_index.values())
-                    })
-                    
-            except Exception as e:
-                logger.error(f"Error checking final state: {e}")
+        await _stream_and_broadcast(orchestrator, initial_state, run_config, run_id)
 
     except Exception as e:
         logger.error(f"Critical error in run execution logic: {e}")
