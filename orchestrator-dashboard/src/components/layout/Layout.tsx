@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Play, Users, Settings } from 'lucide-react';
+import { LayoutDashboard, Play, Users, Settings, PlusCircle } from 'lucide-react';
 import { useWebSocketStore } from '../../api/websocket';
 
 export function Layout() {
@@ -24,6 +24,20 @@ export function Layout() {
                 </div>
 
                 <nav className="px-4 space-y-2">
+                    {/* New Run Button - Prominent Primary Action */}
+                    <NavLink
+                        to="/new"
+                        className={({ isActive }) =>
+                            `flex items-center gap-3 px-4 py-2 rounded-md transition-colors font-semibold ${isActive
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-blue-600/10 text-blue-400 hover:bg-blue-600/20 border border-blue-500/30'
+                            }`
+                        }
+                    >
+                        <PlusCircle size={20} />
+                        New Run
+                    </NavLink>
+
                     <NavLink
                         to="/"
                         className={({ isActive }) =>

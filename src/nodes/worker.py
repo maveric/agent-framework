@@ -31,6 +31,10 @@ from tools import (
 
 from langchain_core.runnables import RunnableConfig
 
+import platform
+
+PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
+
 def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
     """
     Worker: Execute task based on profile.

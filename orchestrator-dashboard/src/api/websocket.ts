@@ -22,11 +22,9 @@ export interface WSMessage {
     timestamp: string;
 }
 
-// In development, use relative WebSocket URL to go through Vite's proxy
-// In production, or if VITE_WS_URL is set, use that
-const WS_URL = import.meta.env.VITE_WS_URL || (import.meta.env.DEV
-    ? `ws://${window.location.host}/ws`
-    : 'ws://localhost:8085/ws');
+// WebSocket connects directly to the FastAPI backend on port 8085
+// Can be overridden with VITE_WS_URL environment variable
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8085/ws';
 
 interface WebSocketState {
     socket: WebSocket | null;

@@ -1,11 +1,12 @@
 import { useParams } from 'react-router-dom';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';  // Add useEffect
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { Clock, ChevronDown, ChevronUp, LayoutGrid, List, X, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskGraph } from '../components/TaskGraph';
 import { TaskDetailsContent } from '../components/TaskDetailsContent';
+import { InterruptModal } from '../components/InterruptModal';  // Add this line
 
 interface Task {
     id: string;
@@ -17,6 +18,7 @@ interface Task {
     depends_on: string[];
     acceptance_criteria?: string[];
     result_path?: string;
+    retry_count?: number;
     qa_verdict?: {
         passed: boolean;
         overall_feedback: string;
@@ -70,6 +72,8 @@ export function RunDetails() {
     const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
     const [viewingDirectorLogs, setViewingDirectorLogs] = useState(false);
     const [isReplanning, setIsReplanning] = useState(false);
+    const [interruptData, setInterruptData] = useState<any>(null);
+    const [showInterruptModal, setShowInterruptModal] = useState(false);
 
     const toggleTask = (taskId: string) => {
         setExpandedTasks(prev => {
@@ -82,6 +86,28 @@ export function RunDetails() {
             return next;
         });
     };
+
+    useEffect(() => {
+        if (!runId) return;
+
+        const checkInterrupts = async () => {
+            try {
+                const response = await fetch(`http://localhost:8085/api/runs/${runId}/interrupts`);
+                const data = await response.json();
+                if (data.interrupted && data.data) {
+                    setInterruptData(data.data);
+                    setShowInterruptModal(true);
+                }
+            } catch (error) {
+                console.error('Failed to check for interrupts:', error);
+            }
+        };
+
+        checkInterrupts(); // Check immediately
+        const interval = setInterval(checkInterrupts, 2000);
+
+        return () => clearInterval(interval);
+    }, [runId]);
 
     const { data: run, isLoading, error } = useQuery({
         queryKey: ['run', runId],
@@ -319,6 +345,11 @@ export function RunDetails() {
                                                     {task.assigned_worker_profile}
                                                 </span>
                                             )}
+                                            {task.retry_count !== undefined && task.retry_count > 0 && (
+                                                <span className="px-1.5 py-0.5 rounded bg-yellow-900/20 text-yellow-400 border border-yellow-700/50 font-semibold">
+                                                    ↻ {task.retry_count}
+                                                </span>
+                                            )}
                                         </div>
 
                                         {task.depends_on && task.depends_on.length > 0 && (
@@ -479,6 +510,20 @@ export function RunDetails() {
                     )}
                 </div>
             </div>
+            {/* HITL Interrupt Modal */}
+            {showInterruptModal && interruptData && (
+                <InterruptModal
+                    runId={runId!}
+                    interruptData={interruptData}
+                    onResolve={() => {
+                        setShowInterruptModal(false);
+                        setInterruptData(null);
+                    }}
+                    onClose={() => {
+                        setShowInterruptModal(false);
+                    }}
+                />
+            )}
         </div>
     );
 }
