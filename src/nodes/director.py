@@ -119,13 +119,22 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
                 break
         
         # Create new task from resolution data
+        new_component = resolution.get("new_component", task.component)
+        new_phase_str = resolution.get("new_phase", task.phase.value)
+        new_title = f"{new_component} {new_phase_str} Task".title() # Default title
+        
+        # Append title to description so integrator can find it
+        new_description = resolution["new_description"]
+        if "Title: " not in new_description:
+            new_description += f"\n\nTitle: {new_title}"
+
         new_task = Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
-            component=resolution.get("new_component", task.component),
-            phase=TaskPhase(resolution.get("new_phase", task.phase.value)),
+            component=new_component,
+            phase=TaskPhase(new_phase_str),
             status=TaskStatus.PLANNED,
             assigned_worker_profile=WorkerProfile(resolution.get("new_worker_profile", task.assigned_worker_profile.value)),
-            description=resolution["new_description"],
+            description=new_description,
             acceptance_criteria=resolution.get("new_criteria", task.acceptance_criteria),
             depends_on=resolution.get("new_dependencies", []),
             created_at=datetime.now(),
@@ -134,7 +143,26 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
         )
         
         tasks.append(new_task)
-        print(f"  Created new task: {new_task.id}", flush=True)
+        print(f"  Created new task: {new_task.id} ({new_title})", flush=True)
+        
+        # [NEW] Dependency Re-linking
+        # Find tasks that depended on the OLD task and point them to the NEW task
+        relinked_count = 0
+        for t in tasks:
+            if t.id != new_task.id and t.id != task_id: # Don't update self or abandoned task
+                if task_id in t.depends_on:
+                    t.depends_on.remove(task_id)
+                    t.depends_on.append(new_task.id)
+                    t.updated_at = datetime.now()
+                    relinked_count += 1
+                    print(f"  Relinked dependency: {t.id} now depends on {new_task.id} (was {task_id})", flush=True)
+        
+        if relinked_count > 0:
+            print(f"  Auto-relinked {relinked_count} tasks to the new task.", flush=True)
+
+        # Trigger Replan to ensure graph integrity
+        print(f"  Triggering smart replan to integrate new task...", flush=True)
+        return {"tasks": [task_to_dict(t) for t in tasks], "replan_requested": True}
     
     elif action == "abandon":
         print(f"  Human abandoned task {task.id}", flush=True)
@@ -777,6 +805,19 @@ def _evaluate_readiness(task: Task, all_tasks: List[Task]) -> TaskStatus:
     # Check all dependencies are complete
     for dep_id in task.depends_on:
         dep = next((t for t in all_tasks if t.id == dep_id), None)
+        
+        # [NEW] Safety check for abandoned dependencies
+        if dep and dep.status == TaskStatus.ABANDONED:
+            print(f"  Task {task.id} BLOCKED: Dependency {dep_id} was ABANDONED", flush=True)
+            # We can't proceed. Mark as BLOCKED (or FAILED) to stop the loop.
+            # We'll modify the task object in place (though this function returns status)
+            # Ideally we should return a BLOCKED status if we had one, or FAILED.
+            # Let's use FAILED with a clear reason so Phoenix/User can see it.
+            # But wait, _evaluate_readiness returns TaskStatus.
+            # If we return FAILED, Phoenix might try to retry it.
+            # If we return BLOCKED, it's a valid status.
+            return TaskStatus.BLOCKED
+            
         if not dep or dep.status != TaskStatus.COMPLETE:
             return TaskStatus.PLANNED
     
@@ -986,8 +1027,16 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
     
     # 1. Create IDs and Map Titles for NEW tasks
     for t_def in response.tasks:
-        new_id = f"task_{uuid.uuid4().hex[:8]}"
-        title_to_id_map[t_def.title.lower()] = new_id
+        # [NEW] Check if title already exists in map (case-insensitive)
+        existing_id = title_to_id_map.get(t_def.title.lower())
+        
+        if existing_id:
+            # Reuse existing ID to prevent duplication
+            print(f"    Reusing ID {existing_id} for '{t_def.title}'", flush=True)
+        else:
+            # Generate new ID
+            new_id = f"task_{uuid.uuid4().hex[:8]}"
+            title_to_id_map[t_def.title.lower()] = new_id
         
     # 2. Create Task Objects with Resolved Dependencies
     for t_def in response.tasks:
