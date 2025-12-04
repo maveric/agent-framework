@@ -2,7 +2,7 @@ import { useParams } from 'react-router-dom';
 import { useMemo, useState, useEffect } from 'react';
 import { apiClient } from '../api/client';
 import { useWebSocketStore } from '../api/websocket';
-import { Clock, ChevronDown, ChevronUp, LayoutGrid, List, X, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutGrid, List, X } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskGraph } from '../components/TaskGraph';
 import { TaskDetailsContent } from '../components/TaskDetailsContent';

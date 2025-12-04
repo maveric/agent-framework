@@ -660,6 +660,7 @@ def _execute_react_loop(
                     print(f"  [LOG] Task marked as already implemented: {tc['args'].get('file_path')}", flush=True)
                     
                 elif tc["name"] == "create_subtasks":
+                    print(f"  [DEBUG] Tool call: {tc.get('name')} args keys: {list(tc.get('args', {}).keys())}", flush=True)
                     subtasks = tc["args"].get("subtasks", [])
                     print(f"  [LOG] Captured {len(subtasks)} suggested subtasks", flush=True)
                     
@@ -1062,6 +1063,11 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     7. DO NOT output code in the chat. Only use the tools.
     8. You are working in a real file system. Your changes are persistent.
     9. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
+    NOTE:
+        Platform - {PLATFORM}
+        CRITICAL - SHELL COMMAND SYNTAX:
+        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
     
     Remember: agents-work/ has plans and test results. Your code goes in the project root.
     
