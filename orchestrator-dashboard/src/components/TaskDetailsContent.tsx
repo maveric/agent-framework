@@ -5,7 +5,7 @@ import { AlertCircle } from 'lucide-react';
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human';
     phase: string;
     component: string;
     assigned_worker_profile?: string;

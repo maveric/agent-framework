@@ -9,11 +9,10 @@ import { TaskDetailsContent } from '../components/TaskDetailsContent';
 import { InterruptModal } from '../components/InterruptModal';
 import { LogPanel } from '../components/LogPanel';
 import { CancelRunButton } from '../components/CancelRunButton';
-
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human';
     phase: string;
     component: string;
     assigned_worker_profile?: string;
@@ -183,9 +182,10 @@ export function RunDetails() {
     const sortedTasks = useMemo(() => {
         if (!run?.tasks) return [];
         // Sort by status priority then ID
-        const statusPriority = {
+        const statusPriority: Record<string, number> = {
             'active': 0,
             'failed': 1,
+            'waiting_human': 1,
             'ready': 2,
             'blocked': 3,
             'planned': 4,
@@ -224,10 +224,10 @@ export function RunDetails() {
                         <div className="flex items-center gap-3 mb-2">
                             <h1 className="text-3xl font-bold text-white tracking-tight">Run Details</h1>
                             <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${run.status === 'running' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                                    run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-                                        run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                                            run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
-                                                'bg-slate-700 text-slate-400'
+                                run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                                    run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                                        run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                            'bg-slate-700 text-slate-400'
                                 }`}>
                                 {run.status}
                             </span>
@@ -251,7 +251,7 @@ export function RunDetails() {
                         {interruptData && (
                             <button
                                 onClick={() => setShowInterruptModal(true)}
-                                className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors flex items-center gap-2 shadow-lg shadow-yellow-900/20 animate-pulse"
+                                className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 transition-colors flex items-center gap-2 shadow-lg shadow-yellow-900/20 animate-pulse-slow"
                             >
                                 ⚠️ Resolve Intervention
                             </button>
@@ -338,70 +338,79 @@ export function RunDetails() {
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                {sortedTasks.map((task) => (
-                                    <div key={task.id} className="bg-slate-800 p-4 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors">
+                                {sortedTasks.map((task) => {
+                                    const isWaiting = task.status === 'failed' || task.status === 'waiting_human';
+                                    return (
                                         <div
-                                            className="flex items-start justify-between mb-2 cursor-pointer"
-                                            onClick={() => toggleTask(task.id)}
+                                            key={task.id}
+                                            className={`bg-slate-800 p-4 rounded-lg border transition-all ${isWaiting
+                                                ? 'border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow'
+                                                : 'border-slate-700 hover:border-slate-600'
+                                                }`}
                                         >
-                                            <div className="flex items-center gap-2">
-                                                {expandedTasks.has(task.id) ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-                                                <span className="font-mono text-xs text-slate-500">{task.id}</span>
-                                            </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
-                                                task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
-                                                    task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
-                                                        'bg-slate-700 text-slate-400'
-                                                }`}>
-                                                {task.status}
-                                            </span>
-                                        </div>
-
-                                        <p className={`text-sm text-slate-300 ${expandedTasks.has(task.id) ? '' : 'line-clamp-2'}`}>{task.description}</p>
-
-                                        <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-                                            <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.component}</span>
-                                            <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
-                                            {task.assigned_worker_profile && (
-                                                <span className={`px-1.5 py-0.5 rounded border ${workerColors[task.assigned_worker_profile] || 'bg-slate-800 text-slate-400 border-slate-700'}`}>
-                                                    {task.assigned_worker_profile}
+                                            <div
+                                                className="flex items-start justify-between mb-2 cursor-pointer"
+                                                onClick={() => toggleTask(task.id)}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    {expandedTasks.has(task.id) ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+                                                    <span className="font-mono text-xs text-slate-500">{task.id}</span>
+                                                </div>
+                                                <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
+                                                    task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
+                                                        task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
+                                                            'bg-slate-700 text-slate-400'
+                                                    }`}>
+                                                    {task.status}
                                                 </span>
+                                            </div>
+
+                                            <p className={`text-sm text-slate-300 ${expandedTasks.has(task.id) ? '' : 'line-clamp-2'}`}>{task.description}</p>
+
+                                            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                                                <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.component}</span>
+                                                <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
+                                                {task.assigned_worker_profile && (
+                                                    <span className={`px-1.5 py-0.5 rounded border ${workerColors[task.assigned_worker_profile] || 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                                                        {task.assigned_worker_profile}
+                                                    </span>
+                                                )}
+                                                {task.retry_count !== undefined && task.retry_count > 0 && (
+                                                    <span className="px-1.5 py-0.5 rounded bg-yellow-900/20 text-yellow-400 border border-yellow-700/50 font-semibold">
+                                                        ↻ {task.retry_count}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {task.depends_on && task.depends_on.length > 0 && (
+                                                <div className="mt-2 text-xs text-slate-500">
+                                                    <span className="mr-1">Depends on:</span>
+                                                    {task.depends_on.map(dep => {
+                                                        const depTask = sortedTasks.find(t => t.id === dep);
+                                                        const isComplete = depTask?.status === 'complete';
+                                                        return (
+                                                            <span
+                                                                key={dep}
+                                                                className={`px-1 rounded mr-1 font-mono ${isComplete
+                                                                    ? 'bg-green-900/30 border border-green-700/50 text-green-400'
+                                                                    : 'bg-slate-800 border border-slate-700 text-slate-400'
+                                                                    }`}
+                                                            >
+                                                                {dep}
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </div>
                                             )}
-                                            {task.retry_count !== undefined && task.retry_count > 0 && (
-                                                <span className="px-1.5 py-0.5 rounded bg-yellow-900/20 text-yellow-400 border border-yellow-700/50 font-semibold">
-                                                    ↻ {task.retry_count}
-                                                </span>
+
+                                            {expandedTasks.has(task.id) && (
+                                                <div className="mt-4 pt-4 border-t border-slate-700">
+                                                    <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />
+                                                </div>
                                             )}
                                         </div>
-
-                                        {task.depends_on && task.depends_on.length > 0 && (
-                                            <div className="mt-2 text-xs text-slate-500">
-                                                <span className="mr-1">Depends on:</span>
-                                                {task.depends_on.map(dep => {
-                                                    const depTask = sortedTasks.find(t => t.id === dep);
-                                                    const isComplete = depTask?.status === 'complete';
-                                                    return (
-                                                        <span
-                                                            key={dep}
-                                                            className={`px-1 rounded mr-1 font-mono ${isComplete
-                                                                ? 'bg-green-900/30 border border-green-700/50 text-green-400'
-                                                                : 'bg-slate-800 border border-slate-700 text-slate-400'
-                                                                }`}
-                                                        >
-                                                            {dep}
-                                                        </span>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-
-                                        {expandedTasks.has(task.id) && (
-                                            <div className="mt-4 pt-4 border-t border-slate-700">
-                                                <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
+                                    );
+                                })}
                                 {run.tasks.length === 0 && (
                                     <div className="text-center py-8 text-slate-500 bg-slate-800/50 rounded-lg border border-slate-700 border-dashed">
                                         No tasks generated yet

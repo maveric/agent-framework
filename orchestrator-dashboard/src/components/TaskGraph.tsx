@@ -16,7 +16,7 @@ import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, Ref
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'awaiting_qa';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'awaiting_qa' | 'waiting_human';
     phase: string;
     component: string;
     assigned_worker_profile?: string;
@@ -46,6 +46,7 @@ const TaskNode = ({ data }: { data: Task }) => {
         planned: 'border-slate-700 bg-slate-900',
         blocked: 'border-orange-500 bg-orange-900/20',
         awaiting_qa: 'border-orange-400 bg-orange-900/20',
+        waiting_human: 'border-yellow-500 bg-yellow-900/20',
     };
 
     const StatusIcon = {
@@ -56,6 +57,7 @@ const TaskNode = ({ data }: { data: Task }) => {
         planned: PauseCircle,
         blocked: StopCircle,
         awaiting_qa: Clock,
+        waiting_human: PauseCircle,
     }[data.status] || PauseCircle;
 
     const workerColors: Record<string, string> = {
@@ -67,9 +69,11 @@ const TaskNode = ({ data }: { data: Task }) => {
     };
 
     const title = extractTitle(data.description);
+    const isWaiting = data.status === 'failed' || data.status === 'waiting_human';
 
     return (
-        <div className={`w-64 p-3 rounded-lg border-2 ${statusColors[data.status] || statusColors.planned} shadow-lg transition-all hover:shadow-xl`}>
+        <div className={`w-64 p-3 rounded-lg border-2 ${statusColors[data.status] || statusColors.planned} shadow-lg transition-all hover:shadow-xl ${isWaiting ? '!border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow' : ''
+            }`}>
             <Handle type="target" position={Position.Top} className="!bg-slate-500" />
 
             <div className="flex items-start justify-between mb-2">
@@ -103,7 +107,7 @@ const TaskNode = ({ data }: { data: Task }) => {
                 )}
             </div>
 
-            {data.retry_count && data.retry_count > 0 && (
+            {data.retry_count !== undefined && data.retry_count > 0 && (
                 <div className="absolute -top-2 -right-2 bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 rounded-md px-1.5 py-0.5 text-[10px] font-bold flex items-center gap-1 shadow-sm backdrop-blur-sm">
                     <RefreshCw size={10} />
                     {data.retry_count}
