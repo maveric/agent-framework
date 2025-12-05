@@ -1087,10 +1087,43 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
     """Core execution logic for the run."""
     from pathlib import Path
     from git_manager import WorktreeManager, initialize_git_repo
+    import subprocess
+    import platform
     
     try:
         # Initialize git
         initialize_git_repo(workspace_path)
+        
+        # Create SHARED venv at workspace root (all worktrees will use this)
+        venv_path = workspace_path / ".venv"
+        if not venv_path.exists():
+            logger.info(f"Creating shared venv at {venv_path}...")
+            try:
+                subprocess.run(
+                    ["python", "-m", "venv", str(venv_path)],
+                    cwd=str(workspace_path),
+                    check=True,
+                    capture_output=True,
+                    timeout=120  # 2 minute timeout
+                )
+                logger.info(f"✅ Shared venv created at {venv_path}")
+                
+                # Install basic packages (requests for test harness pattern)
+                pip_exe = venv_path / "Scripts" / "pip.exe" if platform.system() == "Windows" else venv_path / "bin" / "pip"
+                if pip_exe.exists():
+                    subprocess.run(
+                        [str(pip_exe), "install", "requests"],
+                        cwd=str(workspace_path),
+                        capture_output=True,
+                        timeout=120
+                    )
+                    logger.info(f"✅ Installed 'requests' in shared venv")
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Venv creation timed out - agents may need to create manually")
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Venv creation failed: {e} - agents may need to create manually")
+        else:
+            logger.info(f"Shared venv already exists at {venv_path}")
     
         # Create config
         config = OrchestratorConfig(mock_mode=False)
