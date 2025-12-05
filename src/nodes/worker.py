@@ -312,9 +312,9 @@ from tools import (
     run_python, run_shell
 )
 
-def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
+async def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
     """
-    Worker: Execute task based on profile.
+    Worker: Execute task based on profile (async version).
     """
     task_id = state.get("task_id")
     if not task_id:
@@ -350,7 +350,7 @@ def worker_node(state: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[st
     # Execute handler
     print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
     try:
-        result = handler(task, state, config)
+        result = await handler(task, state, config)
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
