@@ -838,17 +838,39 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         thread_id = runs_index[run_id]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
         
-        # Resume with Command - the resolution dict becomes the return value of interrupt()
-        # Run in background to avoid blocking the API response
+        # Check if there's a real interrupt in the graph (from interrupt() call)
+        snapshot = await orchestrator.aget_state(config)
+        has_real_interrupt = (
+            snapshot and 
+            snapshot.tasks and 
+            len(snapshot.tasks) > 0 and 
+            snapshot.tasks[0].interrupts
+        )
+        
         logger.info(f"▶️  Resuming run {run_id} with action '{resolution.action}'")
+        logger.info(f"   Has real interrupt: {has_real_interrupt}")
         if resolution.action == "retry" and resolution.modified_description:
             logger.info(f"   Modified description: {resolution.modified_description[:100]}...")
         
         async def resume_execution():
             try:
-                logger.info(f"   Calling _stream_and_broadcast with Command(resume=...)")
-                command = Command(resume=resolution.model_dump())
-                await _stream_and_broadcast(orchestrator, command, config, run_id)
+                if has_real_interrupt:
+                    # Natural interrupt (from interrupt() call) - use Command(resume=...)
+                    logger.info(f"   Resuming via Command(resume=...) - natural interrupt")
+                    command = Command(resume=resolution.model_dump())
+                    await _stream_and_broadcast(orchestrator, command, config, run_id)
+                else:
+                    # Manual interrupt - store resolution in state and invoke normally
+                    logger.info(f"   Resuming via state update - manual interrupt")
+                    
+                    # Store the pending resolution in graph state for director to process
+                    await orchestrator.aupdate_state(config, {
+                        "pending_resolution": resolution.model_dump()
+                    })
+                    
+                    # Invoke graph normally (no Command) - director will pick up pending_resolution
+                    await _stream_and_broadcast(orchestrator, None, config, run_id)
+                
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
             except Exception as e:
                 logger.error(f"❌ Error during resume execution: {e}")

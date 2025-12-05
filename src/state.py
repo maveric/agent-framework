@@ -108,6 +108,9 @@ class OrchestratorState(TypedDict, total=False):
     
     # Ephemeral with reducer
     task_memories: Annotated[Dict[str, List[BaseMessage]], task_memories_reducer]
+    
+    # Manual interrupt resolution (cleared after processing)
+    pending_resolution: Dict[str, Any]
 """
 Agent Orchestrator — State Management
 =====================================

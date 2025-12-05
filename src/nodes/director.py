@@ -197,6 +197,17 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
             print(f"Director: Resuming from interrupt, processing human resolution", flush=True)
             return _process_human_resolution(state, resume_value)
     
+    # MANUAL INTERRUPT: Check if there's a pending resolution in state
+    # This handles manual interrupts where Command(resume=...) doesn't work
+    pending_resolution = state.get("pending_resolution")
+    if pending_resolution:
+        print(f"Director: Found pending resolution from manual interrupt, processing...", flush=True)
+        # Clear the pending resolution and process it
+        result = _process_human_resolution(state, pending_resolution)
+        # Add clearing of pending_resolution to the result
+        result["pending_resolution"] = None
+        return result
+    
     # Get configuration
     mock_mode = state.get("mock_mode", False)
     if not mock_mode and config and "configurable" in config:
