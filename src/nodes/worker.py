@@ -962,16 +962,33 @@ Remember: agents-work/ has plans and test results. Your code goes in the project
   - Run via: `npx`, `npm run`, or `node ./node_modules/.bin/tool`
 - **Other stacks**: Check design_spec.md for isolation requirements
 
-**CRITICAL WARNING - DO NOT HANG THE PROCESS**:
-- NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
-- If you need to verify your code with a server, use the **TEST HARNESS PATTERN**:
-  Write a Python script that:
-  1. Starts the server in a subprocess (`subprocess.Popen`)
-  2. Waits for it to be ready (poll localhost)
-  3. Sends requests to test it
-  4. Kills the subprocess
-  5. Prints the results
-- ALWAYS ensure your commands exit.
+**🚨🚨🚨 CRITICAL - BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
+**BANNED COMMANDS** (these NEVER exit and will freeze the agent):
+- `python app.py` / `python backend/app.py` / `python server.py`
+- `flask run` / `python -m flask run`
+- `npm start` / `npm run dev` / `npm run serve`
+- `python -m http.server`
+- ANY command that starts a web server or long-running process
+
+**YOU MUST USE THE TEST HARNESS PATTERN**:
+If you need to verify a server works, write a Python test script that:
+```python
+import subprocess, time, requests
+# 1. Start server as subprocess (don't block!)
+proc = subprocess.Popen(['python', 'app.py'])
+time.sleep(2)  # Wait for startup
+try:
+    # 2. Test it
+    resp = requests.get('http://localhost:5000/api/tasks')
+    print(f"Status: {{resp.status_code}}, Body: {{resp.text[:100]}}")
+finally:
+    # 3. ALWAYS kill the process
+    proc.terminate()
+    proc.wait()
+```
+- ALWAYS use `subprocess.Popen` to start servers
+- ALWAYS `terminate()` and `wait()` to clean up
+- NEVER run server commands directly
 
 **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
 - **NO SCOPE EXPANSION**: You have ZERO authority to add features not in your task description
@@ -1176,17 +1193,27 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
         - ✅ CORRECT: .venv\\Scripts\\python.exe backend\\test.py (Windows)
         - ✅ CORRECT: python backend/test.py (if venv activated)
     
-    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
-    - NEVER run blocking commands like `python app.py`, `flask run`, or `npm start` directly
-    - These will hang forever and block the workflow
-    - Use the **TEST HARNESS PATTERN** instead:
-      1. Write a test script that starts the server in a subprocess (`subprocess.Popen`)
-      2. Wait for it to be ready (poll localhost with timeout)
-      3. Send test requests to verify functionality
-      4. Kill the subprocess
-      5. Print test results
-    - Example: test_server.py that starts Flask, tests endpoints, then kills the process
-    - ALWAYS ensure your commands exit with results
+    **🚨🚨🚨 CRITICAL - BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
+    **BANNED COMMANDS** (these NEVER exit and will freeze the agent):
+    - `python app.py` / `python backend/app.py` / `python server.py`
+    - `flask run` / `python -m flask run`
+    - `npm start` / `npm run dev` / `npm run serve`
+    - `python -m http.server`
+    - ANY command that starts a web server or long-running process
+    
+    **YOU MUST USE THE TEST HARNESS PATTERN**:
+    ```python
+    import subprocess, time, requests
+    proc = subprocess.Popen(['python', 'app.py'])
+    time.sleep(2)
+    try:
+        resp = requests.get('http://localhost:5000/api/tasks')
+        print(f"Status: {{resp.status_code}}")
+    finally:
+        proc.terminate()
+        proc.wait()  # ALWAYS clean up!
+    ```
+    - NEVER run server commands directly - you will hang forever
     
     **MANDATORY FOR QA APPROVAL**:
     - You MUST create a markdown file in `agents-work/test-results/` named `test-{task_desc}.md`.
