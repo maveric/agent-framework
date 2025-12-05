@@ -42,6 +42,11 @@ from orchestrator_types import worker_result_to_dict, task_to_dict, TaskStatus
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("server")
 
+# Suppress noisy LangChain callback warnings about serialization
+# These occur when our Pydantic models don't implement lc_serializable
+# but don't affect functionality - purely cosmetic
+logging.getLogger("langchain_core.callbacks.manager").setLevel(logging.ERROR)
+
 # =============================================================================
 # TYPES
 # =============================================================================
