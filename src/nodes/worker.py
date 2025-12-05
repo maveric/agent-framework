@@ -960,79 +960,83 @@ async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     # Bind tools to worktree
     tools = _bind_tools(tools, state, WorkerProfile.CODER)
     
+    # Platform-specific shell warning (must be at TOP to be seen)
+    is_windows = platform.system() == 'Windows'
+    platform_warning = f"""
+**🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
+{"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
+- ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
+- ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
+- ✅ CORRECT: `python folder/script.py` (Run from project root)
+- ✅ CORRECT: `python -m pytest tests/` (Use -m for modules)
+The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
+"""
+
     # Stronger system prompt to force file creation
-    system_prompt = """You are a software engineer. Implement the requested feature.
-    
-    CRITICAL INSTRUCTIONS:
-    1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` in the project root. You MUST follow it exactly for API routes, data models, and file structure.
-    2. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
-    3. Read any plan files to understand the intended design and architecture.
-    4. Use `list_directory` and `read_file` to explore the codebase FIRST.
-    5. **CHECK IF ALREADY IMPLEMENTED (BEFORE YOU START WORK)**:
-       - If a PREVIOUS task already completed your assigned work, use `report_existing_implementation`
-       - This tool is ONLY for pre-existing code that you FOUND, NOT code you just created
-       - **CRITICAL**: If YOU wrote files in THIS session, DO NOT call this tool - your work needs to be committed!
-       - Only use this to avoid duplicate work when another agent already finished the task
-    6. If the feature does NOT exist, use `write_file` to create or modify files.
-    7. DO NOT output code in the chat. Only use the tools.
-    8. You are working in a real file system. Your changes are persistent.
-    9. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
-    NOTE:
-        Platform - {PLATFORM}
-        CRITICAL - SHELL COMMAND SYNTAX:
-        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-        **BEST PRACTICE - AVOID CHAINING**:
-        - ❌ BAD: cd backend && python app.py (Fails on Windows)
-        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
-        - ✅ GOOD: python backend/app.py (Run from root)
-        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
-    
-    Remember: agents-work/ has plans and test results. Your code goes in the project root.
-    
-    **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
-    - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
-    - If you need to verify your code with a server, use the **TEST HARNESS PATTERN**:
-      Write a Python script that:
-      1. Starts the server in a subprocess (`subprocess.Popen`)
-      2. Waits for it to be ready (poll localhost)
-      3. Sends requests to test it
-      4. Kills the subprocess
-      5. Prints the results
-    - ALWAYS ensure your commands exit.
-    
-    **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
-    - **NO SCOPE EXPANSION**: You have ZERO authority to add features not in your task description
-    - **IMPLEMENT ONLY WHAT'S ASSIGNED**: Only write code for the specific feature/component in your task
-    - **NO EXTRAS**: Do NOT add Docker files, CI/CD configs, deployment scripts, monitoring, logging frameworks, or ANY extras
-    - **STICK TO THE SPEC**: If design_spec.md says "CRUD API", build ONLY that. NOT: admin panels, authentication, rate limiting, etc.
-    - **IF NOT IN TASK**: Don't build it. Period.
-    
-    **REQUESTING MISSING DEPENDENCIES**:
-    - If you discover missing files/work that BLOCKS YOUR CURRENT TASK, you may use `create_subtasks`
-    - **ONLY FOR IN-SCOPE BLOCKERS**: The missing item must be:
-      * Required by design_spec.md
-      * Needed to complete YOUR assigned task
-      * NOT a "nice-to-have" or optimization
-    - **DETAILED RATIONALE REQUIRED**: In the `rationale` field, explain:
-      * What you were trying to implement
-      * What specific file/component is missing
-      * Why you cannot complete your task without it
-      * Evidence it's in scope (reference design_spec.md)
-    - **EXAMPLES**:
-      * ✅ GOOD: "Need backend/models.py to define API routes. design_spec.md requires User model for /api/users endpoint."
-      * ❌ BAD: "Should add Redis caching for better performance"
-      * ❌ BAD: "Need authentication system" (too broad, not your task)
-    - **CONSTRAINTS**:
-      * Do NOT suggest nice-to-haves, performance optimizations, or scope expansion
-      * Do NOT suggest tasks unrelated to YOUR current assignment
-      * If rejected by Director, find an alternative approach or work around it
-    
-    **ALREADY IMPLEMENTED?**:
-    - If you find the code ALREADY EXISTS and meets requirements:
-    - Do NOT modify the file just to "touch" it.
-    - Use the `report_existing_implementation` tool to prove you checked it.
-    - Provide the file path and a summary of why it's correct.
-    """
+    system_prompt = f"""You are a software engineer. Implement the requested feature.
+{platform_warning}
+
+CRITICAL INSTRUCTIONS:
+1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` in the project root. You MUST follow it exactly for API routes, data models, and file structure.
+2. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
+3. Read any plan files to understand the intended design and architecture.
+4. Use `list_directory` and `read_file` to explore the codebase FIRST.
+5. **CHECK IF ALREADY IMPLEMENTED (BEFORE YOU START WORK)**:
+   - If a PREVIOUS task already completed your assigned work, use `report_existing_implementation`
+   - This tool is ONLY for pre-existing code that you FOUND, NOT code you just created
+   - **CRITICAL**: If YOU wrote files in THIS session, DO NOT call this tool - your work needs to be committed!
+   - Only use this to avoid duplicate work when another agent already finished the task
+6. If the feature does NOT exist, use `write_file` to create or modify files.
+7. DO NOT output code in the chat. Only use the tools.
+8. You are working in a real file system. Your changes are persistent.
+9. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
+
+Remember: agents-work/ has plans and test results. Your code goes in the project root.
+
+**CRITICAL WARNING - DO NOT HANG THE PROCESS**:
+- NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
+- If you need to verify your code with a server, use the **TEST HARNESS PATTERN**:
+  Write a Python script that:
+  1. Starts the server in a subprocess (`subprocess.Popen`)
+  2. Waits for it to be ready (poll localhost)
+  3. Sends requests to test it
+  4. Kills the subprocess
+  5. Prints the results
+- ALWAYS ensure your commands exit.
+
+**ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
+- **NO SCOPE EXPANSION**: You have ZERO authority to add features not in your task description
+- **IMPLEMENT ONLY WHAT'S ASSIGNED**: Only write code for the specific feature/component in your task
+- **NO EXTRAS**: Do NOT add Docker files, CI/CD configs, deployment scripts, monitoring, logging frameworks, or ANY extras
+- **STICK TO THE SPEC**: If design_spec.md says "CRUD API", build ONLY that. NOT: admin panels, authentication, rate limiting, etc.
+- **IF NOT IN TASK**: Don't build it. Period.
+
+**REQUESTING MISSING DEPENDENCIES**:
+- If you discover missing files/work that BLOCKS YOUR CURRENT TASK, you may use `create_subtasks`
+- **ONLY FOR IN-SCOPE BLOCKERS**: The missing item must be:
+  * Required by design_spec.md
+  * Needed to complete YOUR assigned task
+  * NOT a "nice-to-have" or optimization
+- **DETAILED RATIONALE REQUIRED**: In the `rationale` field, explain:
+  * What you were trying to implement
+  * What specific file/component is missing
+  * Why you cannot complete your task without it
+  * Evidence it's in scope (reference design_spec.md)
+- **EXAMPLES**:
+  * ✅ GOOD: "Need backend/models.py to define API routes. design_spec.md requires User model for /api/users endpoint."
+  * ❌ BAD: "Should add Redis caching for better performance"
+  * ❌ BAD: "Need authentication system" (too broad, not your task)
+- **CONSTRAINTS**:
+  * Do NOT suggest nice-to-haves, performance optimizations, or scope expansion
+  * Do NOT suggest tasks unrelated to YOUR current assignment
+  * If rejected by Director, find an alternative approach or work around it
+
+**ALREADY IMPLEMENTED?**:
+- If you find the code ALREADY EXISTS and meets requirements:
+- Do NOT modify the file just to "touch" it.
+- Use the `report_existing_implementation` tool to prove you checked it.
+- Provide the file path and a summary of why it's correct.
+"""
     
     return await _execute_react_loop(task, tools, system_prompt, state, config)
 
@@ -1053,23 +1057,26 @@ async def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
     tools = _bind_tools(tools, state, WorkerProfile.PLANNER)
 
+    # Platform-specific shell warning
+    is_windows = platform.system() == 'Windows'
+    platform_warning = f"""
+**🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
+{"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
+- ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
+- ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
+- ✅ CORRECT: `python folder/script.py` (Run from project root)
+The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
+"""
+
     # UNIFIED PLANNER PROMPT - All planners work the same way
     system_prompt = f"""You are a component planner.
+{platform_warning}
 
 **TOOL USAGE RULES**:
 - Use `list_directory(".")` to see the project root (NOT list_directory("/") - that's invalid)
 - Use relative paths: "design_spec.md" or "agents-work/plans/" (NOT "/design_spec.md")  
 - Use `read_file()` for FILES only, use `list_directory()` for directories
-- Use `run_python()` to execute Python code
-- Use `run_shell()` to execute shell commands
-Platform - {PLATFORM}
-CRITICAL - SHELL COMMAND SYNTAX:
-{'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-**BEST PRACTICE - AVOID CHAINING**:
-        - ❌ BAD: cd backend && python app.py (Fails on Windows)
-        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
-        - ✅ GOOD: python backend/app.py (Run from root)
-        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
+
 
 
 Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
