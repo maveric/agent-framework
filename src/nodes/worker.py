@@ -763,39 +763,39 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
         if tool.__name__ in fs_tools:
             
             # Use factory functions to avoid closure loop variable capture issues
-            # NOTE: Use coroutine= for async wrappers so LangChain properly awaits them
+            # NOTE: Pass coroutine= directly - LangChain infers schema from the async function signature
             if tool.__name__ in ["read_file", "read_file_async"]:
                 wrapper = _create_read_file_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="read_file", description="Read the contents of a file.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="read_file", description="Read the contents of a file.", handle_tool_error=True))
                 
             elif tool.__name__ in ["write_file", "write_file_async"]:
                 wrapper = _create_write_file_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="write_file", description="Write content to a file.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="write_file", description="Write content to a file.", handle_tool_error=True))
                 
             elif tool.__name__ in ["append_file", "append_file_async"]:
                 wrapper = _create_append_file_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="append_file", description="Append content to an existing file.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="append_file", description="Append content to an existing file.", handle_tool_error=True))
                 
             elif tool.__name__ in ["list_directory", "list_directory_async"]:
                 wrapper = _create_list_directory_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="list_directory", description="List files and directories.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="list_directory", description="List files and directories.", handle_tool_error=True))
                 
             elif tool.__name__ in ["file_exists", "file_exists_async"]:
                 wrapper = _create_file_exists_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="file_exists", description="Check if a file or directory exists.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="file_exists", description="Check if a file or directory exists.", handle_tool_error=True))
                 
             elif tool.__name__ in ["delete_file", "delete_file_async"]:
                 wrapper = _create_delete_file_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="delete_file", description="Delete a file.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="delete_file", description="Delete a file.", handle_tool_error=True))
                 
         elif tool.__name__ in ["run_python", "run_shell", "run_python_async", "run_shell_async"]:
             workspace_path = state.get("_workspace_path")  # For shared venv lookup
             if tool.__name__ in ["run_python", "run_python_async"]:
                 wrapper = _create_run_python_wrapper(tool, worktree_path, workspace_path=workspace_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="run_python", description="Execute Python code using shared venv if available.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="run_python", description="Execute Python code using shared venv if available.", handle_tool_error=True))
             elif tool.__name__ in ["run_shell", "run_shell_async"]:
                 wrapper = _create_run_shell_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=lambda: None, name="run_shell", description="Execute shell command.", coroutine=wrapper))
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="run_shell", description="Execute shell command.", handle_tool_error=True))
         
         elif tool.__name__ == "create_subtasks":
              # Allow Planners, Testers, and Coders to create subtasks

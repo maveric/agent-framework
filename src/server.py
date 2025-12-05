@@ -34,7 +34,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from langgraph_definition import create_orchestrator
 from config import OrchestratorConfig
-from state import OrchestratorState
+from state import OrchestratorState, tasks_reducer, task_memories_reducer, insights_reducer, design_log_reducer
 from git_manager import WorktreeManager, initialize_git_repo
 from orchestrator_types import worker_result_to_dict, task_to_dict, TaskStatus
 
@@ -1153,14 +1153,22 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 await _broadcast_state_update(run_id, state)
             
             # ========== PHASE 2: Run Director (evaluates readiness, creates tasks) ==========
-            logger.info(f"  ▶️  Director cycle {iteration}")
+            # logger.info(f"  ▶️  Director cycle {iteration}") # Spammy
             
             # Director modifies state directly
             director_result = await director_node(state, run_config)
             if director_result:
-                # Merge director updates into state
+                # Merge director updates into state (applying reducers)
                 for key, value in director_result.items():
-                    if key != "_wt_manager":  # Don't overwrite internal objects
+                    if key == "tasks":
+                        state["tasks"] = tasks_reducer(state.get("tasks", []), value)
+                    elif key == "task_memories":
+                        state["task_memories"] = task_memories_reducer(state.get("task_memories", {}), value)
+                    elif key == "insights":
+                        state["insights"] = insights_reducer(state.get("insights", []), value)
+                    elif key == "design_log":
+                        state["design_log"] = design_log_reducer(state.get("design_log", []), value)
+                    elif key != "_wt_manager":  # Don't overwrite internal objects
                         state[key] = value
             
             # ========== PHASE 3: Find and dispatch ready tasks ==========
@@ -1195,13 +1203,15 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             if dispatched > 0:
                 await _broadcast_state_update(run_id, state)
             
-            # ========== PHASE 4: Run Strategist for completed test tasks ==========
-            test_complete = [t for t in state.get("tasks", []) 
-                           if t.get("status") == "complete" 
-                           and t.get("phase") == "test"
-                           and not t.get("qa_verdict")]  # Not yet QA'd
+            # ========== PHASE 4: Run Strategist for QA (Test tasks or Awaiting QA) ==========
+            # We need to run Strategist if:
+            # 1. Task is explicitly AWAITING_QA (any phase)
+            # 2. Task is TEST phase and COMPLETE but missing verdict (legacy check)
+            tasks_requiring_qa = [t for t in state.get("tasks", []) 
+                               if t.get("status") == "awaiting_qa" 
+                               or (t.get("status") == "complete" and t.get("phase") == "test" and not t.get("qa_verdict"))]
             
-            for task in test_complete:
+            for task in tasks_requiring_qa:
                 logger.info(f"  🔍 QA evaluating: {task.get('id', '')[:12]}")
                 strategist_result = await strategist_node({**state, "task_id": task.get("id")}, run_config)
                 if strategist_result:
@@ -1237,7 +1247,8 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 break
             
             # No work and no ready tasks? Check if we're stuck
-            if not task_queue.has_work and not ready_tasks and not test_complete:
+            # No work and no ready tasks? Check if we're stuck
+            if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa:
                 # Check for planned tasks that might become ready
                 planned = [t for t in all_tasks if t.get("status") == "planned"]
                 

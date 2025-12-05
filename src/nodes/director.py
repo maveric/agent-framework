@@ -235,6 +235,7 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     failed_count = len([t for t in tasks if t.get("status") == "failed"])
     active_count = len([t for t in tasks if t.get("status") == "active"])
     ready_count = len([t for t in tasks if t.get("status") == "ready"])
+    blocked_count = len([t for t in tasks if t.get("status") == "planned"])
     
     # Track previous counts in state
     prev_counts = state.get("_director_prev_counts", {})
@@ -242,17 +243,19 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
         "complete": completed_count,
         "failed": failed_count, 
         "active": active_count,
-        "ready": ready_count
+        "ready": ready_count,
+        "blocked": blocked_count
     }
     
     # Only print if counts have changed
-    if current_counts != prev_counts and (completed_count or failed_count or active_count):
+    if current_counts != prev_counts and (completed_count or failed_count or active_count or blocked_count):
         print(f"\n{'='*60}", flush=True)
         print(f"📊 BATCH STATUS SUMMARY", flush=True)
         print(f"{'='*60}", flush=True)
         print(f"  ✅ Complete/QA: {completed_count}", flush=True)
         print(f"  🔄 Active:      {active_count}", flush=True)
         print(f"  📋 Ready:       {ready_count}", flush=True)
+        print(f"  ⏳ Pending:      {blocked_count}", flush=True)
         print(f"  ❌ Failed:      {failed_count}", flush=True)
         
         # Show individual task timings for recently changed tasks
@@ -446,9 +449,17 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     active_planners = [t for t in planner_tasks if t.status not in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA]]
     
     # Only print waiting message when count changes
+    # Only print waiting message when count changes
+    prev_active_planners = state.get("_director_prev_counts", {}).get("active_planners", -1) # Use dedicated key if possible, or fallback
+    # Actually we stored it in _prev_active_planners in the return
     prev_active_planners = state.get("_prev_active_planners", -1)
-    if active_planners and len(active_planners) != prev_active_planners:
-        print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
+    
+    if active_planners:
+        if len(active_planners) != prev_active_planners:
+            print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
+        # BLOCK: Do not proceed to integration or replan
+        # We just return the updates (status changes, etc.)
+        # We need to make sure we return result at the end
     elif replan_requested:
         # MANUAL REPLAN TRIGGER
         print("Director: Manual replan requested. Re-integrating pending tasks...", flush=True)
@@ -609,6 +620,12 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     if updates:
         result["tasks"] = updates
     result["replan_requested"] = False
+    
+    # Save state for log de-duplication
+    result["_director_prev_counts"] = current_counts
+    if 'active_planners' in locals():
+        result["_prev_active_planners"] = len(active_planners)
+
     
     if director_messages:
         # We use a special key "director" for these logs. 
@@ -901,7 +918,14 @@ def _evaluate_readiness(task: Task, all_tasks: List[Task]) -> TaskStatus:
             # If we return BLOCKED, it's a valid status.
             return TaskStatus.BLOCKED
             
-        if not dep or dep.status != TaskStatus.COMPLETE:
+        if not dep:
+            print(f"  Task {task.id} waiting: Dependency {dep_id} NOT FOUND", flush=True)
+            return TaskStatus.PLANNED
+            
+        if dep.status != TaskStatus.COMPLETE:
+            # Only print if dependency is not PLANNED (to avoid spamming for deep chains)
+            if dep.status != TaskStatus.PLANNED:
+                print(f"  Task {task.id} waiting: {dep.component} ({dep.id}) is {dep.status}", flush=True)
             return TaskStatus.PLANNED
     
     return TaskStatus.READY

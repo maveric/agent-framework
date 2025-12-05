@@ -192,50 +192,80 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                             test_results_path = worktree_path / file
                         break
             
-            if test_results_path and test_results_path.exists():
-                try:
-                    test_content = test_results_path.read_text(encoding="utf-8")
-                    
-                    if not mock_mode:
-                        # Use LLM to evaluate test results
-                        qa_result = await _evaluate_test_results_with_llm(task, test_content, objective, config)
+            # Check phase - only TEST tasks strictly require test result files
+            task_phase = task.get("phase", "build") # Default to build if not set
+            
+            if task_phase == "test":
+                # STRICT QA for TEST tasks
+                if test_results_path and test_results_path.exists():
+                    try:
+                        test_content = test_results_path.read_text(encoding="utf-8")
+                        
+                        if not mock_mode:
+                            # Use LLM to evaluate test results
+                            qa_result = await _evaluate_test_results_with_llm(task, test_content, objective, config)
+                            qa_verdict = {
+                                "passed": qa_result["passed"],
+                                "overall_feedback": qa_result["feedback"],
+                                "suggested_focus": ", ".join(qa_result["suggestions"])
+                            }
+                        else:
+                            # Mock QA always passes
+                            qa_verdict = {
+                                "passed": True,
+                                "overall_feedback": "MOCK: QA skipped",
+                                "suggested_focus": ""
+                            }
+                    except Exception as e:
+                        print(f"  [ERROR]: Failed to read test results: {e}", flush=True)
                         qa_verdict = {
-                            "passed": qa_result["passed"],
-                            "overall_feedback": qa_result["feedback"],
-                            "suggested_focus": ", ".join(qa_result["suggestions"])
+                            "passed": False,
+                            "overall_feedback": f"Failed to read test results: {e}",
+                            "suggested_focus": "Fix test results file access"
                         }
-                    else:
-                        # Mock QA always passes
-                        qa_verdict = {
-                            "passed": True,
-                            "overall_feedback": "MOCK: QA skipped",
-                            "suggested_focus": ""
-                        }
-                except Exception as e:
-                    print(f"  [ERROR]: Failed to read test results: {e}", flush=True)
+                else:
+                    # No test results found - FAIL
+                    expected_path = f"agents-work/test-results/test-{task.get('component', task_id)}.md"
                     qa_verdict = {
                         "passed": False,
-                        "overall_feedback": f"Failed to read test results: {e}",
-                        "suggested_focus": "Fix test results file access"
+                        "overall_feedback": (
+                            f"MISSING TEST RESULTS FILE: No test results documentation found.\n"
+                            f"REQUIRED: {expected_path} with actual test output."
+                        ),
+                        "suggested_focus": "Write test results to agents-work/test-results/"
                     }
+                    print(f"  [QA FAIL]: Missing test results file at {expected_path}", flush=True)
             else:
-                # No test results found - FAIL with specific feedback for Phoenix retry
-                # This allows the agent to fix it without creating a new task
-                expected_path = f"agents-work/test-results/test-{task.get('component', task_id)}.md"
-                qa_verdict = {
-                    "passed": False,
-                    "overall_feedback": (
-                        f"MISSING TEST RESULTS FILE: No test results documentation found.\n\n"
-                        f"REQUIRED ACTION:\n"
-                        f"1. Create the file: {expected_path}\n"
-                        f"2. Include the actual test output (command output, assertions, results)\n"
-                        f"3. Do NOT just write 'tests passed' - include ACTUAL output\n\n"
-                        f"The test results file must exist in agents-work/test-results/ and contain "
-                        f"the actual output of your tests. This is mandatory for QA evaluation."
-                    ),
-                    "suggested_focus": "Write test results to agents-work/test-results/"
-                }
-                print(f"  [QA FAIL]: Missing test results file at {expected_path}", flush=True)
+                # SMART VALIDATION for BUILD/PLAN tasks
+                # Check if task actually DID something
+                aar = task.get("aar", {})
+                files_modified = aar.get("files_modified", [])
+                
+                # Check for "explicit completion" (where agent said "already implemented")
+                is_explicitly_completed = False
+                if aar.get("summary", "").startswith("ALREADY IMPLEMENTED:"):
+                     is_explicitly_completed = True
+                
+                if files_modified or is_explicitly_completed:
+                    print(f"  [QA PASS] Validated work for {task_phase} task {task_id}", flush=True)
+                    qa_verdict = {
+                        "passed": True,
+                        "overall_feedback": f"Validated work (files modified: {len(files_modified)})",
+                        "suggested_focus": ""
+                    }
+                else:
+                    # FAIL: No work done
+                    print(f"  [QA FAIL] No files modified for {task_phase} task {task_id}", flush=True)
+                    qa_verdict = {
+                        "passed": False,
+                        "overall_feedback": (
+                            "NO WORK DETECTED: Task marked complete but no files were modified and "
+                            "no 'report_existing_implementation' tool was used.\n\n"
+                            "REQUIRED: You must either write code (using write_file) or explicitly "
+                            "report an existing implementation."
+                        ),
+                        "suggested_focus": "Use write_file or report_existing_implementation"
+                    }
             
             # Update task status based on QA verdict
             if qa_verdict and qa_verdict["passed"]:

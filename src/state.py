@@ -236,6 +236,10 @@ class OrchestratorState(TypedDict, total=False):
     orch_config: Any  # OrchestratorConfig instance (public to persist)
     strategy_status: str
     
+    # Internal logging state (for de-duplication)
+    _director_prev_counts: Dict[str, int]
+    _prev_active_planners: int
+    
     # Metadata
     created_at: str
     updated_at: str
