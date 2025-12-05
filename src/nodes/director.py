@@ -525,13 +525,24 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                 result["task_memories"] = {"director": director_messages}
             return result
     
+    # Check if all tasks are in terminal states (complete/abandoned/waiting_human)
+    # If so, mark the run as complete
+    all_terminal = all(
+        t.status in [TaskStatus.COMPLETE, TaskStatus.ABANDONED, TaskStatus.WAITING_HUMAN]
+        for t in all_tasks
+    )
+    
+    if all_terminal and all_tasks:
+        print("Director: All tasks in terminal states - marking run as COMPLETE", flush=True)
+        result["strategy_status"] = "complete"
+    
     # Return updates and logs
-    result = {"tasks": updates, "replan_requested": False} if updates else {}
+    result = {**result, "tasks": updates, "replan_requested": False} if updates else result
     if director_messages:
         # We use a special key "director" for these logs. 
         # The frontend will need to be updated to display them, or we can attach them to a dummy task.
         # For now, we just expose them in the state.
-        result["task_memories"] = {"director": director_messages}
+        result["task_memories"] = {**result.get("task_memories", {}), "director": director_messages}
         
     return result
 
