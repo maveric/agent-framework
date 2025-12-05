@@ -1181,66 +1181,83 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
     
     system_prompt = f"""You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
+
+🚨🚨🚨 YOUR #1 MANDATORY REQUIREMENT - READ THIS FIRST 🚨🚨🚨
+**BEFORE YOU FINISH, YOU MUST CREATE THIS FILE:**
     
-    Your job: Test THIS feature in isolation, not integration between features.
+    File path: `agents-work/test-results/test-{task_desc}.md`
     
-    CRITICAL RULES:
-    1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` to know what to test (routes, selectors, etc.).
-    2. MUST use `run_python` or `run_shell` to actually EXECUTE tests
-    3. Use `python` (not `python3`) for compatibility
-    4. Verify file existence with `list_directory` before running tests
-    5. Focus on unit testing THIS feature (not integration)
-    5. Capture REAL output (errors, pass/fail, counts)
-    6. Write results to `agents-work/test-results/test-{task_desc}.md` with:
-       - Command run
-       - Actual execution output
-       - Pass/fail summary
-    7. Create the `agents-work/test-results/` directory if it does not exist
-    8. If tests fail, include real error messages
-    9. For small projects (HTML/JS), document manual tests if no test framework available
+**YOUR TASK WILL AUTOMATICALLY FAIL IF THIS FILE DOES NOT EXIST!**
+
+The file must contain:
+- The exact command(s) you ran
+- The ACTUAL output from running tests (copy/paste the real output)
+- Pass/fail summary
+
+Example - use write_file to create this:
+```markdown
+# Test Results: {task_desc}
+
+## Command Run
+`python -m pytest tests/test_api.py -v`
+
+## Output
+```
+tests/test_api.py::test_get_tasks PASSED
+tests/test_api.py::test_create_task PASSED
+2 passed in 0.45s
+```
+
+## Summary
+✅ All tests passed (2/2)
+```
+
+**DO NOT PROCEED WITHOUT WRITING THIS FILE. QA CHECKS FOR IT AUTOMATICALLY.**
+
+---
+
     
-    **🔒 DEPENDENCY ISOLATION - SHARED VENV 🔒**:
-    - **Python**: A SHARED venv exists at the workspace root. Use it:
-      - Run tests: `{venv_python} test.py`
-      - Install deps: `{venv_pip} install pytest`
-      - **NEVER** create a new venv or use bare `pip install`
-    - **Node.js**: Use `npm test` or `npx jest` (uses local node_modules)
-    
-    Platform - {PLATFORM}
-    CRITICAL - SHELL COMMAND SYNTAX:
-    {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-    **BEST PRACTICE - AVOID CHAINING**:
-        - ❌ FORBIDDEN: cd backend && python test.py
-        - ❌ FORBIDDEN: cd . && python test.py
-        - ✅ CORRECT: `{venv_python} backend\\test.py` (Windows)
-        - ✅ CORRECT: `{venv_python} backend/test.py` (Unix)
-    
-    **🚨🚨🚨 CRITICAL - BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
-    **BANNED COMMANDS** (these NEVER exit and will freeze the agent):
-    - `python app.py` / `python backend/app.py` / `python server.py`
-    - `flask run` / `python -m flask run`
-    - `npm start` / `npm run dev` / `npm run serve`
-    - `python -m http.server`
-    - ANY command that starts a web server or long-running process
-    
-    **YOU MUST USE THE TEST HARNESS PATTERN**:
-    ```python
-    import subprocess, time, requests
-    proc = subprocess.Popen(['python', 'app.py'])
-    time.sleep(2)
-    try:
-        resp = requests.get('http://localhost:5000/api/tasks')
-        print(f"Status: {{resp.status_code}}")
-    finally:
-        proc.terminate()
-        proc.wait()  # ALWAYS clean up!
-    ```
-    - NEVER run server commands directly - you will hang forever
-    
-    **MANDATORY FOR QA APPROVAL**:
-    - You MUST create a markdown file in `agents-work/test-results/` named `test-{task_desc}.md`.
-    - This file MUST contain the actual output of your tests.
-    - If this file is missing, QA WILL FAIL.
+CRITICAL RULES:
+1. **THE SPEC IS THE BIBLE**: Check `design_spec.md` to know what to test (routes, selectors, etc.).
+2. MUST use `run_python` or `run_shell` to actually EXECUTE tests
+3. Use `python` (not `python3`) for compatibility
+4. Verify file existence with `list_directory` before running tests
+5. Focus on unit testing THIS feature (not integration)
+6. Capture REAL output (errors, pass/fail, counts)
+7. **WRITE THE RESULTS FILE** - `agents-work/test-results/test-{task_desc}.md`
+8. Create the `agents-work/test-results/` directory if it does not exist
+9. If tests fail, include real error messages
+10. For small projects (HTML/JS), document manual tests if no test framework available
+
+**🔒 DEPENDENCY ISOLATION - SHARED VENV 🔒**:
+- **Python**: A SHARED venv exists at the workspace root. Use it:
+  - Run tests: `{venv_python} test.py`
+  - Install deps: `{venv_pip} install pytest`
+  - **NEVER** create a new venv or use bare `pip install`
+- **Node.js**: Use `npm test` or `npx jest` (uses local node_modules)
+
+Platform - {PLATFORM}
+CRITICAL - SHELL COMMAND SYNTAX:
+{'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+**BEST PRACTICE - AVOID CHAINING**:
+    - ❌ FORBIDDEN: cd backend && python test.py
+    - ✅ CORRECT: `{venv_python} backend\\test.py` (Windows)
+    - ✅ CORRECT: `{venv_python} backend/test.py` (Unix)
+
+**🚨🚨🚨 BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
+**BANNED COMMANDS**: `python app.py`, `flask run`, `npm start`, `npm run dev`
+**USE TEST HARNESS PATTERN INSTEAD**:
+```python
+import subprocess, time, requests
+proc = subprocess.Popen(['python', 'app.py'])
+time.sleep(2)
+try:
+    resp = requests.get('http://localhost:5000/api/tasks')
+    print(f"Status: {{resp.status_code}}")
+finally:
+    proc.terminate()
+    proc.wait()
+```
 
     **BROWSER/UI TESTING**:
     - Use `playwright` (python) for browser automation.
