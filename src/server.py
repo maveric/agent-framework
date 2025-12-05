@@ -1240,9 +1240,19 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             if not task_queue.has_work and not ready_tasks and not test_complete:
                 # Check for planned tasks that might become ready
                 planned = [t for t in all_tasks if t.get("status") == "planned"]
-                if not planned:
+                
+                # Also check for completed planners with suggestions that need integration
+                # These are awaiting_qa but have suggested_tasks that Director needs to process
+                awaiting_planners = [t for t in all_tasks 
+                                    if t.get("status") == "awaiting_qa" 
+                                    and t.get("assigned_worker_profile") == "planner_worker"
+                                    and t.get("suggested_tasks")]
+                
+                if not planned and not awaiting_planners:
                     logger.warning(f"⚠️  No more work to do, but not all tasks complete")
                     break
+                elif awaiting_planners:
+                    logger.info(f"  📋 {len(awaiting_planners)} planners have suggestions pending integration")
                 # Otherwise director will evaluate readiness on next cycle
             
             # ========== PHASE 6: Wait for completions ==========

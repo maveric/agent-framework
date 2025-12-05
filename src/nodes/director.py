@@ -499,7 +499,8 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
         
         for task in all_tasks:
             # We only process suggestions from tasks that are done running
-            if task.status in [TaskStatus.COMPLETE, TaskStatus.FAILED]:
+            # NOTE: AWAITING_QA counts as "done" - planners complete with this status
+            if task.status in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA]:
                 raw_task = next((t for t in tasks if t["id"] == task.id), None)
                 if raw_task and raw_task.get("suggested_tasks"):
                     all_suggestions.extend(raw_task["suggested_tasks"])
