@@ -622,12 +622,15 @@ async def replan_run(run_id: str):
         config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
         
         # Set replan_requested flag - director will handle blocking and waiting
-        orchestrator.update_state(config, {"replan_requested": True})
+        # Must use async version since this is an async function
+        await orchestrator.aupdate_state(config, {"replan_requested": True})
         
         logger.info(f"Replan requested for run {run_id}. Director will re-integrate pending tasks.")
         return {"status": "replan_requested"}
     except Exception as e:
         logger.error(f"Failed to set replan_requested flag: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/runs/{run_id}/tasks/{task_id}/interrupt")
