@@ -80,9 +80,9 @@ def create_orchestrator(
     return graph.compile(checkpointer=checkpointer)
 
 
-def start_run(objective: str, workspace: str = "../workspace", spec: dict = None, config: OrchestratorConfig = None, checkpointer = None):
+async def start_run(objective: str, workspace: str = "../workspace", spec: dict = None, config: OrchestratorConfig = None, checkpointer = None):
     """
-    Start an orchestrator run.
+    Start an orchestrator run (async version).
     
     Args:
         objective: What to build
@@ -144,14 +144,14 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
     thread_id = str(uuid.uuid4())
     print(f"Starting run with thread_id: {thread_id}", flush=True)
     
-    # Run graph with thread_id for checkpointing
+    # Run graph with thread_id for checkpointing (async)
     run_config = {
         "configurable": {
             "thread_id": thread_id,
             "mock_mode": config.mock_mode if config else False
         }
     }
-    result = orchestrator.invoke(initial_state, config={
+    result = await orchestrator.ainvoke(initial_state, config={
         "recursion_limit": 150,  # Circuit breaker to prevent runaway token costs
         "configurable": {
             "thread_id": thread_id,
@@ -160,7 +160,7 @@ def start_run(objective: str, workspace: str = "../workspace", spec: dict = None
     })
     
     # Check if run is paused for HITL (not actually complete)
-    final_snapshot = orchestrator.get_state({
+    final_snapshot = await orchestrator.aget_state({
         "configurable": {
             "thread_id": thread_id,
             "mock_mode": config.mock_mode if config else False

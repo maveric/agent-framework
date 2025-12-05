@@ -14,9 +14,9 @@ from llm_client import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
-def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, objective: str, config: Any) -> Dict[str, Any]:
+async def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, objective: str, config: Any) -> Dict[str, Any]:
     """
-    Use LLM to evaluate test results against acceptance criteria AND original objective.
+    Use LLM to evaluate test results against acceptance criteria AND original objective (async version).
     
     Returns:
         dict with keys: passed (bool), feedback (str), suggestions (list)
@@ -94,7 +94,7 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
     
     for attempt in range(MAX_RETRIES):
         try:
-            response = llm.invoke(messages)
+            response = await llm.ainvoke(messages)
             content = str(response.content)
             
             # Parse response
@@ -154,9 +154,9 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
 
 from langchain_core.runnables import RunnableConfig
 
-def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
+async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
     """
-    Strategist: LLM-based QA evaluation of test results.
+    Strategist: LLM-based QA evaluation of test results (async version).
     """
     tasks = state.get("tasks", [])
     updates = []
@@ -198,7 +198,7 @@ def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dic
                     
                     if not mock_mode:
                         # Use LLM to evaluate test results
-                        qa_result = _evaluate_test_results_with_llm(task, test_content, objective, config)
+                        qa_result = await _evaluate_test_results_with_llm(task, test_content, objective, config)
                         qa_verdict = {
                             "passed": qa_result["passed"],
                             "overall_feedback": qa_result["feedback"],

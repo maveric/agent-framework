@@ -35,9 +35,9 @@ import platform
 
 PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
 
-def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
+async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
     """
-    Worker: Execute task based on profile.
+    Worker: Execute task based on profile (async version).
     """
     print(f"DEBUG: worker_node state keys: {list(state.keys())}", flush=True)
     print(f"DEBUG: worker_node _workspace_path: {state.get('_workspace_path')}", flush=True)
@@ -76,7 +76,7 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
     # Execute handler
     print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
     try:
-        result = handler(task, state, config)
+        result = await handler(task, state, config)
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
@@ -422,7 +422,7 @@ def _get_handler(profile: WorkerProfile) -> Callable:
     return handlers.get(profile, _code_handler)
 
 
-def _execute_react_loop(
+async def _execute_react_loop(
     task: Task, 
     tools: List[Callable], 
     system_prompt: str,
@@ -430,7 +430,7 @@ def _execute_react_loop(
     config: Dict[str, Any] = None
 ) -> WorkerResult:
     """
-    Execute a ReAct loop using LangGraph's prebuilt agent.
+    Execute a ReAct loop using LangGraph's prebuilt agent (async version).
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
@@ -511,7 +511,8 @@ def _execute_react_loop(
     # We use a recursion limit to prevent infinite loops
     try:
         # Increased recursion limit to prevent "Sorry, need more steps" error
-        result = agent.invoke(inputs, config={"recursion_limit": 150})
+        # Using ainvoke for async execution
+        result = await agent.ainvoke(inputs, config={"recursion_limit": 150})
     except Exception as e:
         # Handle errors gracefully - return AAR instead of crashing
         error_type = type(e).__name__
@@ -1059,8 +1060,8 @@ def report_existing_implementation(file_path: str, implementation_summary: str, 
     return "Implementation reported successfully."
 
 
-def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Coding tasks."""
+async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
+    """Coding tasks (async)."""
     from tools import git_commit, git_status, git_diff, git_add
     
     # Tools for code workers - includes execution for verification
@@ -1146,11 +1147,11 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - Provide the file path and a summary of why it's correct.
     """
     
-    return _execute_react_loop(task, tools, system_prompt, state, config)
+    return await _execute_react_loop(task, tools, system_prompt, state, config)
 
 
-def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Planning tasks."""
+async def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
+    """Planning tasks (async)."""
     
     # PREVENT PLANNER EXPLOSION: Count existing planners
     existing_tasks = state.get("tasks", [])
@@ -1243,7 +1244,7 @@ AVOID THESE PATTERNS:
 - ❌ Vague criteria like "make it work"
 """
     
-    result = _execute_react_loop(task, tools, system_prompt, state, config)
+    result = await _execute_react_loop(task, tools, system_prompt, state, config)
     
     # VALIDATION: Planners MUST create tasks
     if not result.suggested_tasks or len(result.suggested_tasks) == 0:
@@ -1267,8 +1268,8 @@ AVOID THESE PATTERNS:
     return result
 
 
-def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Testing tasks."""
+async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
+    """Testing tasks (async)."""
     # Tester now has create_subtasks to reject work and request fixes
     tools = [read_file, write_file, list_directory, run_python, run_shell, create_subtasks]
     tools = _bind_tools(tools, state, WorkerProfile.TESTER)
@@ -1348,11 +1349,11 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - **IF NOT IN TASK**: Don't test it. Period.
     """
     
-    return _execute_react_loop(task, tools, system_prompt, state, config)
+    return await _execute_react_loop(task, tools, system_prompt, state, config)
 
 
-def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Research tasks."""
+async def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
+    """Research tasks (async)."""
     # Note: Web tools not yet implemented/imported, falling back to basic tools
     tools = [read_file, list_directory] 
     tools = _bind_tools(tools, state, WorkerProfile.RESEARCHER)
@@ -1361,11 +1362,11 @@ def _research_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] 
     Your goal is to gather information.
     """
     
-    return _execute_react_loop(task, tools, system_prompt, state, config)
+    return await _execute_react_loop(task, tools, system_prompt, state, config)
 
 
-def _write_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
-    """Writing tasks."""
+async def _write_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
+    """Writing tasks (async)."""
     tools = [read_file, write_file, list_directory]
     tools = _bind_tools(tools, state, WorkerProfile.WRITER)
     
@@ -1378,4 +1379,4 @@ def _write_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = N
     3. Keep chat responses concise.
     """
     
-    return _execute_react_loop(task, tools, system_prompt, state, config)
+    return await _execute_react_loop(task, tools, system_prompt, state, config)

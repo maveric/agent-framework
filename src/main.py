@@ -9,6 +9,7 @@ Main entry point for the orchestrator.
 import argparse
 import sys
 import os
+import asyncio
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -21,8 +22,8 @@ from langgraph_definition import create_orchestrator, start_run
 from config import OrchestratorConfig, ModelConfig
 
 
-def main():
-    """Main entry point."""
+async def main():
+    """Main entry point (async version)."""
     parser = argparse.ArgumentParser(description="Agent Orchestrator")
     parser.add_argument("--objective", type=str, default="Build a simple API", help="What to build")
     parser.add_argument("--workspace", type=str, default="projects/workspace", 
@@ -159,7 +160,7 @@ def main():
         # I should have modified start_run in langgraph_definition.py earlier.
         # Let's check langgraph_definition.py content again.
         
-        result = start_run(
+        result = await start_run(
             objective=args.objective,
             workspace=args.workspace,
             config=config,
@@ -198,4 +199,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

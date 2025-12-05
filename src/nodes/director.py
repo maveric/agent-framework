@@ -182,9 +182,9 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
     return {"tasks": [task_to_dict(t) for t in tasks]}
 
 
-def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
+async def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
     """
-    Director: Task decomposition and readiness evaluation.
+    Director: Task decomposition and readiness evaluation (async version).
     """
     tasks = state.get("tasks", [])
     
@@ -210,7 +210,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
         if mock_mode:
             new_tasks = _mock_decompose(objective)
         else:
-            new_tasks = _decompose_objective(objective, state.get("spec", {}), state)
+            new_tasks = await _decompose_objective(objective, state.get("spec", {}), state)
         # Convert to dicts for state
         tasks = [task_to_dict(t) for t in new_tasks]
         # Fall through to readiness evaluation
@@ -399,7 +399,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             
             try:
                 # Re-run integration
-                new_tasks = _integrate_plans(suggestions, state)
+                new_tasks = await _integrate_plans(suggestions, state)
                 
                 # Update the pending tasks with new definitions (dependencies, etc.)
                 # We match by ID if possible, or replace if IDs changed (though _integrate_plans tries to preserve)
@@ -449,7 +449,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             print(f"Director: Integrating {len(all_suggestions)} task suggestions...", flush=True)
             
             try:
-                new_tasks = _integrate_plans(all_suggestions, state)
+                new_tasks = await _integrate_plans(all_suggestions, state)
                 updates.extend([task_to_dict(t) for t in new_tasks])
                 
                 # Clear suggestions so we don't re-process
@@ -511,7 +511,7 @@ def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Di
             if planned_tasks:
                 suggestions = [task_to_dict(t) for t in planned_tasks]
                 try:
-                    new_tasks = _integrate_plans(suggestions, state)
+                    new_tasks = await _integrate_plans(suggestions, state)
                     updates.extend([task_to_dict(t) for t in new_tasks])
                     print(f"Director: Reorganized {len(new_tasks)} tasks", flush=True)
                 except Exception as e:
@@ -600,9 +600,9 @@ def _mock_decompose(objective: str) -> List[Task]:
     ]
 
 
-def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, Any]) -> List[Task]:
+async def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[str, Any]) -> List[Task]:
     """
-    Director: High-level decomposition + spec creation.
+    Director: High-level decomposition + spec creation (async version).
     
     The Director (using the smartest model) has leeway to decide what's best.
     Creates the design_spec.md and delegates to 1-5 component planners.
@@ -659,7 +659,7 @@ Be specific enough that workers can implement without ambiguity."""),
     ])
     
     try:
-        spec_response = llm.invoke(spec_prompt.format(objective=objective))
+        spec_response = await llm.ainvoke(spec_prompt.format(objective=objective))
         spec_content = str(spec_response.content)
         
         # Write spec to workspace
@@ -752,7 +752,7 @@ Create feature-level planner tasks based on the design spec. Remember:
         # Use first 500 chars of spec as summary
         spec_summary = spec_content[:500] + "..." if len(spec_content) > 500 else spec_content
         
-        response = structured_llm.invoke(decomp_prompt.format(
+        response = await structured_llm.ainvoke(decomp_prompt.format(
             objective=objective,
             spec_summary=spec_summary
         ))
@@ -824,9 +824,9 @@ def _evaluate_readiness(task: Task, all_tasks: List[Task]) -> TaskStatus:
     return TaskStatus.READY
 
 
-def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -> List[Task]:
+async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -> List[Task]:
     """
-    Integrate proposed tasks from multiple planners into a cohesive plan.
+    Integrate proposed tasks from multiple planners into a cohesive plan (async version).
     Resolves cross-component dependencies.
     """
     # Get LLM
@@ -957,7 +957,7 @@ def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, Any]) -
     
     print("  Calling LLM for plan integration with scope validation...", flush=True)
     try:
-        response = structured_llm.invoke(prompt.format(
+        response = await structured_llm.ainvoke(prompt.format(
             objective=objective,
             spec_content=spec_content[:3000],  # Truncate if too long
             tasks_json=str(tasks_input)
