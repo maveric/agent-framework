@@ -15,7 +15,7 @@ from typing import Dict, Any
 PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
 
 
-def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
+def run_python(code: str, timeout: int = 30, cwd: str = None, workspace_path: str = None) -> str:
     f"""
     Execute Python code in a separate process.
     
@@ -23,6 +23,7 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
         code: Python code to execute
         timeout: Max execution time in seconds
         cwd: Directory to execute in (default: current working directory)
+        workspace_path: Path to workspace root (for finding shared venv)
         
     Returns:
         Combined stdout and stderr
@@ -34,18 +35,35 @@ def run_python(code: str, timeout: int = 30, cwd: str = None) -> str:
         {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
 
     """
+    from pathlib import Path
+    
+    # Determine which Python to use: shared venv if exists, otherwise system
+    python_exe = sys.executable  # Default: system python
+    
+    if workspace_path:
+        venv_path = Path(workspace_path) / ".venv"
+        if platform.system() == "Windows":
+            venv_python = venv_path / "Scripts" / "python.exe"
+        else:
+            venv_python = venv_path / "bin" / "python"
+        
+        if venv_python.exists():
+            python_exe = str(venv_python)
+            print(f"DEBUG: run_python using shared venv: {python_exe}", flush=True)
+        else:
+            print(f"DEBUG: run_python venv not found at {venv_python}, using system python", flush=True)
+    
     # Prepare environment with CWD in PYTHONPATH
     env = os.environ.copy()
     if cwd:
         env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
         
     print(f"DEBUG: run_python cwd={cwd}", flush=True)
-    print(f"DEBUG: run_python PYTHONPATH={env.get('PYTHONPATH')}", flush=True)
         
     try:
         # Run in a separate process
         result = subprocess.run(
-            [sys.executable, "-c", code],
+            [python_exe, "-c", code],
             capture_output=True,
             text=True,
             timeout=timeout,
