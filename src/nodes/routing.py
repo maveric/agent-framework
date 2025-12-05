@@ -65,7 +65,9 @@ def route_after_director(state: OrchestratorState):
     # Limit ready tasks to available slots
     tasks_to_dispatch = ready_tasks[:available_slots]
     
-    print(f"  Dispatching {len(tasks_to_dispatch)}/{len(ready_tasks)} ready tasks (max_concurrent={max_concurrent}, active={active_count})", flush=True)
+    # PERF: Log queue depth metrics
+    waiting_count = len([t for t in tasks if t.get("status") == "planned"])
+    print(f"  📊 Dispatching {len(tasks_to_dispatch)}/{len(ready_tasks)} ready tasks (active={active_count}/{max_concurrent}, waiting={waiting_count})", flush=True)
     
     updated_tasks = []
     sends = []

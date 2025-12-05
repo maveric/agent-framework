@@ -75,9 +75,21 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     
     # Execute handler
     print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
+    
+    # PERF: Time the task execution
+    import time
+    task_start_time = time.time()
+    
     try:
         result = await handler(task, state, config)
+        
+        # PERF: Log execution time
+        task_duration = time.time() - task_start_time
+        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) completed in {task_duration:.1f}s", flush=True)
+        
     except Exception as e:
+        task_duration = time.time() - task_start_time
+        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) FAILED after {task_duration:.1f}s", flush=True)
         import traceback
         error_details = traceback.format_exc()
         print(f"Worker Error Details:", flush=True)
