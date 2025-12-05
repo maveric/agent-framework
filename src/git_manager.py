@@ -393,11 +393,14 @@ class WorktreeManager:
                 capture_output=True
             )
             
+            # Git can output errors to stderr OR stdout, so capture both
+            error_output = result.stderr.strip() or result.stdout.strip() or "Merge conflict (no details available)"
+            
             return MergeResult(
                 success=False,
                 task_id=task_id,
                 conflict=True,
-                error_message=result.stderr
+                error_message=error_output
             )
     
     def cleanup_worktree(self, task_id: str) -> None:
