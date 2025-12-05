@@ -219,6 +219,42 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     all_tasks = [_dict_to_task(t) for t in tasks]
     updates = []
     
+    # PERF: Print batch summary of recently completed tasks
+    completed_tasks = [t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"]
+    failed_tasks = [t for t in tasks if t.get("status") == "failed"]
+    active_tasks = [t for t in tasks if t.get("status") == "active"]
+    ready_tasks = [t for t in tasks if t.get("status") == "ready"]
+    
+    if completed_tasks or failed_tasks or active_tasks:
+        print(f"\n{'='*60}", flush=True)
+        print(f"📊 BATCH STATUS SUMMARY", flush=True)
+        print(f"{'='*60}", flush=True)
+        print(f"  ✅ Complete/QA: {len(completed_tasks)}", flush=True)
+        print(f"  🔄 Active:      {len(active_tasks)}", flush=True)
+        print(f"  📋 Ready:       {len(ready_tasks)}", flush=True)
+        print(f"  ❌ Failed:      {len(failed_tasks)}", flush=True)
+        
+        # Show individual task timings for recently changed tasks
+        for t in [*completed_tasks[-5:], *failed_tasks[-3:]]:  # Last 5 complete, 3 failed
+            status_icon = "✅" if t.get("status") in ["complete", "awaiting_qa"] else "❌"
+            task_id = t.get("id", "?")[:8]
+            phase = t.get("phase", "?")[:6]
+            # Calculate duration if we have timestamps
+            started = t.get("started_at")
+            updated = t.get("updated_at")
+            if started and updated:
+                from datetime import datetime
+                try:
+                    start_dt = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                    end_dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
+                    duration = (end_dt - start_dt).total_seconds()
+                    print(f"  {status_icon} {task_id} ({phase}): {duration:.1f}s", flush=True)
+                except:
+                    print(f"  {status_icon} {task_id} ({phase})", flush=True)
+            else:
+                print(f"  {status_icon} {task_id} ({phase})", flush=True)
+        print(f"{'='*60}\n", flush=True)
+    
     MAX_RETRIES = 4  # Maximum number of retries before giving up
     
     for task in all_tasks:
