@@ -314,6 +314,7 @@ class WorktreeManager:
         
         # CRITICAL: Check for uncommitted changes in the worktree
         # This indicates the worker didn't properly complete (crash, bug, etc.)
+        # NOTE: We only care about modified/staged files, NOT untracked files (??)
         status_check = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=info.worktree_path,
@@ -321,8 +322,14 @@ class WorktreeManager:
             text=True
         )
         
-        if status_check.stdout.strip():
-            error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n{status_check.stdout}"
+        # Filter out untracked files (??) - only block on actual uncommitted changes
+        uncommitted_lines = [
+            line for line in status_check.stdout.strip().split('\n')
+            if line and not line.startswith('??')
+        ]
+        
+        if uncommitted_lines:
+            error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n" + "\n".join(uncommitted_lines)
             print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
             return MergeResult(
                 success=False,
@@ -340,6 +347,8 @@ class WorktreeManager:
         )
         
         # Check for uncommitted changes in main repo (should never happen with worktrees)
+        # NOTE: We only care about modified/staged files, NOT untracked files (??)
+        # Untracked directories like .llm_logs/, .worktrees/, logs/ are fine
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=self.repo_path,
@@ -347,8 +356,14 @@ class WorktreeManager:
             text=True
         )
         
-        if status_result.stdout.strip():
-            error_msg = f"Uncommitted changes in main repo - worktree isolation may be broken:\n{status_result.stdout}"
+        # Filter out untracked files (??) - only block on actual changes
+        uncommitted_lines = [
+            line for line in status_result.stdout.strip().split('\n')
+            if line and not line.startswith('??')
+        ]
+        
+        if uncommitted_lines:
+            error_msg = f"Uncommitted changes in main repo - worktree isolation may be broken:\n" + "\n".join(uncommitted_lines)
             print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
             return MergeResult(
                 success=False,

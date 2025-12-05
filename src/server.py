@@ -957,12 +957,19 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
                         # Convert to dicts if needed for serialization
                         serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in merged_tasks]
                         
+                        # Serialize task_memories (LLM conversations)
+                        task_memories = {}
+                        raw_memories = snapshot.values.get("task_memories", {})
+                        for task_id, messages in raw_memories.items():
+                            task_memories[task_id] = _serialize_messages(messages)
+                        
                         await manager.broadcast_to_run(run_id, {
                             "type": "state_update",
                             "payload": {
                                 "tasks": serialized_tasks,
                                 "status": runs_index[run_id]["status"],
-                                "task_counts": runs_index[run_id]["task_counts"]
+                                "task_counts": runs_index[run_id]["task_counts"],
+                                "task_memories": task_memories
                             }
                         })
                     except Exception as e:
