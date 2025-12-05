@@ -916,6 +916,10 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
         logger.info(f"📡 Starting event stream for run {run_id}")
         event_count = 0
         
+        # CRITICAL: Ensure recursion_limit is set to prevent default 25 limit
+        if "recursion_limit" not in run_config:
+            run_config["recursion_limit"] = 150
+        
         async for event in orchestrator.astream_events(input_data, config=run_config, version="v1"):
             kind = event["event"]
             name = event.get("name", "")
