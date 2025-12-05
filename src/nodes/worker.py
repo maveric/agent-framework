@@ -1005,6 +1005,16 @@ CRITICAL INSTRUCTIONS:
 
 Remember: agents-work/ has plans and test results. Your code goes in the project root.
 
+**🔒 DEPENDENCY ISOLATION - MANDATORY 🔒**:
+- **NEVER install packages globally** - this pollutes the host machine
+- **Python**: Check for `.venv/` first. If not exists, create with `python -m venv .venv`
+  - Run: `.venv\\Scripts\\python.exe` (Windows) or `.venv/bin/python` (Unix)
+  - Install: `.venv\\Scripts\\pip.exe install package` (Windows)
+  - **NEVER** use bare `pip install` or `python -m pip install` without venv
+- **Node.js**: Use `npm install` (creates local node_modules, already isolated)
+  - Run via: `npx`, `npm run`, or `node ./node_modules/.bin/tool`
+- **Other stacks**: Check design_spec.md for isolation requirements
+
 **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
 - NEVER run a blocking command like `python -m http.server` or `npm start` directly. The agent will hang forever.
 - If you need to verify your code with a server, use the **TEST HARNESS PATTERN**:
@@ -1202,14 +1212,21 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     7. Create the `agents-work/test-results/` directory if it does not exist
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
+    
+    **🔒 DEPENDENCY ISOLATION - MANDATORY 🔒**:
+    - **Python**: Use venv python - `.venv\\Scripts\\python.exe test.py` (Windows) or `.venv/bin/python test.py` (Unix)
+      - If .venv doesn't exist, create with `python -m venv .venv`
+      - Install test deps: `.venv\\Scripts\\pip.exe install pytest` (Windows)
+    - **Node.js**: Use `npm test` or `npx jest` (uses local node_modules)
+    
     Platform - {PLATFORM}
     CRITICAL - SHELL COMMAND SYNTAX:
     {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
     **BEST PRACTICE - AVOID CHAINING**:
-        - ❌ BAD: cd backend && python app.py (Fails on Windows)
-        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
-        - ✅ GOOD: python backend/app.py (Run from root)
-        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
+        - ❌ FORBIDDEN: cd backend && python test.py
+        - ❌ FORBIDDEN: cd . && python test.py
+        - ✅ CORRECT: .venv\\Scripts\\python.exe backend/test.py (Windows)
+        - ✅ CORRECT: python backend/test.py (if venv activated)
     
     **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
     - NEVER run blocking commands like `python app.py`, `flask run`, or `npm start` directly
