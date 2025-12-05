@@ -12,13 +12,15 @@ export default defineConfig({
     },
     server: {
         port: 3000,
+        // Proxy only in development mode
+        // Uses environment variables with localhost as fallback
         proxy: {
             '/api': {
-                target: 'http://localhost:8085',
+                target: process.env.VITE_API_URL || 'http://localhost:8085',
                 changeOrigin: true,
             },
             '/ws': {
-                target: 'ws://localhost:8085',
+                target: (process.env.VITE_WS_URL || 'ws://localhost:8085').replace('ws://', 'http://'),
                 ws: true,
             },
         },

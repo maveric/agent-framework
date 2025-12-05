@@ -64,7 +64,7 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
         }
 
         try {
-            const response = await fetch(`http://localhost:8085/api/runs/${runId}/resolve`, {
+            const response = await fetch(`/api/runs/${runId}/resolve`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(resolution)

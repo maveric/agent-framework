@@ -1,0 +1,266 @@
+"""
+Agent Orchestrator — Async Filesystem Tools
+============================================
+Version 2.0 — December 2025
+
+Async implementation of filesystem operations using aiofiles.
+These async versions are used by async node handlers.
+
+The sync versions in filesystem.py are kept for backwards compatibility.
+"""
+
+import os
+import asyncio
+from pathlib import Path
+from typing import List, Optional
+
+try:
+    import aiofiles
+    import aiofiles.os
+    AIOFILES_AVAILABLE = True
+except ImportError:
+    AIOFILES_AVAILABLE = False
+
+import platform
+
+WORKSPACE_ROOT = Path(os.getcwd())
+PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
+
+
+def _get_workspace_root(root: Optional[Path] = None) -> Path:
+    """Get workspace root from argument or default."""
+    if root:
+        return root
+    return WORKSPACE_ROOT
+
+
+def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
+    """Ensure path is within workspace."""
+    workspace_root = _get_workspace_root(root)
+    try:
+        normalized_path = path.lstrip('/\\')
+        target = (workspace_root / normalized_path).resolve()
+        workspace_str = str(workspace_root.resolve())
+        target_str = str(target)
+        return target_str.startswith(workspace_str)
+    except Exception:
+        return False
+
+
+async def read_file_async(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+    """
+    Read the contents of a file asynchronously.
+    
+    Args:
+        path: Relative path to the file
+        encoding: File encoding (default: utf-8)
+        root: Optional workspace root override
+    
+    Returns:
+        File contents as string
+    """
+    if not _is_safe_path(path, root):
+        raise ValueError(f"Access denied: {path} is outside workspace")
+    
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
+    
+    if not target_path.exists():
+        return f"File not found: {path}"
+    
+    if target_path.is_dir():
+        return f"Error: {path} is a directory, not a file. Use list_directory instead."
+    
+    if AIOFILES_AVAILABLE:
+        async with aiofiles.open(target_path, mode='r', encoding=encoding) as f:
+            return await f.read()
+    else:
+        # Fallback to thread pool
+        return await asyncio.to_thread(_read_file_sync, target_path, encoding)
+
+
+async def write_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+    """
+    Write content to a file asynchronously. Creates parent directories if needed.
+    
+    Args:
+        path: Relative path to the file
+        content: Content to write
+        encoding: File encoding (default: utf-8)
+        root: Optional workspace root override
+        
+    Returns:
+        Success message with byte count
+    """
+    if not path:
+        raise ValueError("ERROR: 'path' parameter is required!")
+    
+    if content is None:
+        raise ValueError("ERROR: 'content' parameter is required!")
+    
+    if not _is_safe_path(path, root):
+        raise ValueError(f"Access denied: {path} is outside workspace")
+    
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
+    
+    # Create parent directories (sync is fine here - fast operation)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if AIOFILES_AVAILABLE:
+        async with aiofiles.open(target_path, mode='w', encoding=encoding) as f:
+            await f.write(content)
+    else:
+        await asyncio.to_thread(_write_file_sync, target_path, content, encoding)
+    
+    return f"Successfully wrote {len(content)} bytes to {path}"
+
+
+async def append_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+    """
+    Append content to an existing file asynchronously.
+    
+    Args:
+        path: Relative path to the file
+        content: Content to append
+        encoding: File encoding (default: utf-8)
+        root: Optional workspace root override
+        
+    Returns:
+        Success message
+    """
+    if not _is_safe_path(path, root):
+        raise ValueError(f"Access denied: {path} is outside workspace")
+    
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
+    
+    if not target_path.exists():
+        return f"File not found: {path}"
+    
+    if AIOFILES_AVAILABLE:
+        async with aiofiles.open(target_path, mode='a', encoding=encoding) as f:
+            await f.write(content)
+    else:
+        await asyncio.to_thread(_append_file_sync, target_path, content, encoding)
+    
+    return f"Successfully appended to {path}"
+
+
+async def list_directory_async(
+    path: str = ".", 
+    recursive: bool = False, 
+    pattern: str = "*", 
+    root: Optional[Path] = None
+) -> List[str]:
+    """
+    List files and directories asynchronously.
+    
+    Args:
+        path: Directory path (default: ".")
+        recursive: Include subdirectories (default: False)
+        pattern: Glob pattern (default: "*")
+        root: Optional workspace root override
+        
+    Returns:
+        List of file paths
+    """
+    if not _is_safe_path(path, root):
+        raise ValueError(f"Access denied: {path} is outside workspace")
+    
+    normalized_path = path.lstrip('/\\')
+    workspace_root = _get_workspace_root(root)
+    target_path = workspace_root / normalized_path
+    
+    if not target_path.exists():
+        return [f"Directory not found: {path}"]
+    
+    # Glob is CPU-bound, run in thread
+    def _do_glob():
+        import glob
+        results = []
+        abs_pattern = str(target_path / "**" / pattern) if recursive else str(target_path / pattern)
+        for p in glob.glob(abs_pattern, recursive=recursive):
+            rel_path = os.path.relpath(p, workspace_root)
+            rel_path = rel_path.replace("\\", "/")
+            if rel_path != ".":
+                results.append(rel_path)
+        return sorted(results) if results else ["Directory is empty."]
+    
+    return await asyncio.to_thread(_do_glob)
+
+
+async def file_exists_async(path: str, root: Optional[Path] = None) -> bool:
+    """
+    Check if a file or directory exists asynchronously.
+    
+    Args:
+        path: Path to check
+        root: Optional workspace root override
+        
+    Returns:
+        True if exists
+    """
+    if not _is_safe_path(path, root):
+        return False
+    
+    target_path = _get_workspace_root(root) / path.lstrip('/\\')
+    
+    if AIOFILES_AVAILABLE:
+        return await aiofiles.os.path.exists(target_path)
+    else:
+        return await asyncio.to_thread(target_path.exists)
+
+
+async def delete_file_async(path: str, confirm: bool, root: Optional[Path] = None) -> str:
+    """
+    Delete a file asynchronously.
+    
+    Args:
+        path: Path to delete
+        confirm: Must be True
+        root: Optional workspace root override
+        
+    Returns:
+        Success message
+    """
+    if not confirm:
+        raise ValueError("Deletion requires confirmation=True")
+    
+    if not _is_safe_path(path, root):
+        raise ValueError(f"Access denied: {path} is outside workspace")
+    
+    normalized_path = path.lstrip('/\\')
+    target_path = _get_workspace_root(root) / normalized_path
+    
+    if not target_path.exists():
+        return f"File not found: {path}"
+    
+    if not target_path.is_file():
+        return f"{path} is not a file."
+    
+    if AIOFILES_AVAILABLE:
+        await aiofiles.os.remove(target_path)
+    else:
+        await asyncio.to_thread(os.remove, target_path)
+    
+    return f"Successfully deleted {path}"
+
+
+# ========================================
+# Sync fallbacks for when aiofiles unavailable
+# ========================================
+
+def _read_file_sync(path: Path, encoding: str) -> str:
+    with open(path, 'r', encoding=encoding) as f:
+        return f.read()
+
+
+def _write_file_sync(path: Path, content: str, encoding: str) -> None:
+    with open(path, 'w', encoding=encoding) as f:
+        f.write(content)
+
+
+def _append_file_sync(path: Path, content: str, encoding: str) -> None:
+    with open(path, 'a', encoding=encoding) as f:
+        f.write(content)

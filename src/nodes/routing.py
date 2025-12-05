@@ -127,34 +127,10 @@ def route_after_worker(state: OrchestratorState):
                 test_tasks.append(t)
                 updated_tasks.append(t)
             else:
-                # Non-test tasks (plan/build) skip QA but MUST be merged
-                print(f"  Task {t['id'][:8]} ({phase}) skipping QA - merging to main...", flush=True)
-                
-                # Merge to main
-                wt_manager = state.get("_wt_manager")
-                merge_success = False
-                if wt_manager and not state.get("mock_mode", False):
-                    try:
-                        result = wt_manager.merge_to_main(t["id"])
-                        if result.success:
-                            print(f"  [MERGED] Task {t['id'][:8]} merged successfully", flush=True)
-                            merge_success = True
-                        else:
-                            print(f"  [MERGE FAILED] Task {t['id'][:8]}: {result.error_message}", flush=True)
-                            t["status"] = "failed"
-                            # Add failure reason to description or AAR?
-                            if "aar" in t and t["aar"]:
-                                t["aar"]["summary"] += f"\n\nMERGE FAILURE: {result.error_message}"
-                    except Exception as e:
-                        print(f"  [MERGE ERROR] Task {t['id'][:8]}: {e}", flush=True)
-                        t["status"] = "failed"
-                else:
-                    # Mock mode or no manager
-                    merge_success = True
-                
-                if merge_success:
-                    t["status"] = "complete"
-                
+                # Non-test tasks (plan/build) skip QA and go straight to complete
+                # Worker.py already handled the merge, so we just mark it complete
+                print(f"  Task {t['id'][:8]} ({phase}) skipping QA - marking complete...", flush=True)
+                t["status"] = "complete"
                 updated_tasks.append(t)
         else:
             updated_tasks.append(t)

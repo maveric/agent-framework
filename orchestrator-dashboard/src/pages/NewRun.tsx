@@ -34,7 +34,7 @@ export function NewRun() {
                 payload.workspace = workspacePath.trim();
             }
 
-            const response = await fetch('http://localhost:8085/api/runs', {
+            const response = await fetch('/api/runs', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

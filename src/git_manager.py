@@ -312,6 +312,25 @@ class WorktreeManager:
         if not info:
             raise ValueError(f"No worktree for task: {task_id}")
         
+        # CRITICAL: Check for uncommitted changes in the worktree
+        # This indicates the worker didn't properly complete (crash, bug, etc.)
+        status_check = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=info.worktree_path,
+            capture_output=True,
+            text=True
+        )
+        
+        if status_check.stdout.strip():
+            error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n{status_check.stdout}"
+            print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+            return MergeResult(
+                success=False,
+                task_id=task_id,
+                conflict=False,
+                error_message=error_msg
+            )
+        
         # Switch to main
         subprocess.run(
             ["git", "checkout", self.main_branch],
@@ -319,6 +338,24 @@ class WorktreeManager:
             check=True,
             capture_output=True
         )
+        
+        # Check for uncommitted changes in main repo (should never happen with worktrees)
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True
+        )
+        
+        if status_result.stdout.strip():
+            error_msg = f"Uncommitted changes in main repo - worktree isolation may be broken:\n{status_result.stdout}"
+            print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+            return MergeResult(
+                success=False,
+                task_id=task_id,
+                conflict=False,
+                error_message=error_msg
+            )
         
         # Attempt merge
         result = subprocess.run(
@@ -391,9 +428,40 @@ def initialize_git_repo(repo_path: Path) -> None:
             capture_output=True
         )
         
-        # Create initial commit to establish 'main' branch
+        # Create default .gitignore for framework-internal directories
+        gitignore_path = repo_path / ".gitignore"
+        gitignore_content = """# Agent Framework Internal Directories
+.llm_logs/
+.worktrees/
+logs/
+
+# Git
+.git/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+"""
+        gitignore_path.write_text(gitignore_content, encoding="utf-8")
+        
+        # Stage and commit the .gitignore
         subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", "Initial commit"],
+            ["git", "add", ".gitignore"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True
+        )
+        
+        # Create initial commit with .gitignore
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit with .gitignore"],
             cwd=repo_path,
             check=True,
             capture_output=True

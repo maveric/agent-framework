@@ -110,11 +110,37 @@ def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[st
                         if merge_result.success:
                             print(f"  Merged to main", flush=True)
                         else:
-                            print(f"  Warning: Merge failed: {merge_result.error_message}", flush=True)
+                            # Merge failed - this should trigger Phoenix retry
+                            print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
+                            # Override the result to failed status
+                            result = WorkerResult(
+                                status="failed",
+                                result_path=result.result_path,
+                                aar=AAR(
+                                    summary=f"Merge failed: {merge_result.error_message[:200]}",
+                                    approach=result.aar.approach if result.aar else "unknown",
+                                    challenges=[merge_result.error_message] if result.aar else [],
+                                    decisions_made=result.aar.decisions_made if result.aar else [],
+                                    files_modified=result.aar.files_modified if result.aar else []
+                                ),
+                                messages=result.messages if hasattr(result, 'messages') else []
+                            )
                     except Exception as e:
-                        print(f"  Warning: Merge exception: {e}", flush=True)
+                        print(f"  ❌ Merge exception: {e}", flush=True)
                         import traceback
                         traceback.print_exc()
+                        # Override to failed
+                        result = WorkerResult(
+                            status="failed",
+                            result_path="",
+                            aar=AAR(
+                                summary=f"Merge exception: {str(e)[:200]}",
+                                approach="failed",
+                                challenges=[str(e)],
+                                decisions_made=[],
+                                files_modified=[]
+                            )
+                        )
                         
             except Exception as e:
                 print(f"  Warning: Failed to commit: {e}", flush=True)
@@ -1067,7 +1093,11 @@ def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
         Platform - {PLATFORM}
         CRITICAL - SHELL COMMAND SYNTAX:
         {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
+        **BEST PRACTICE - AVOID CHAINING**:
+        - ❌ BAD: cd backend && python app.py (Fails on Windows)
+        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
+        - ✅ GOOD: python backend/app.py (Run from root)
+        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
     
     Remember: agents-work/ has plans and test results. Your code goes in the project root.
     
@@ -1144,11 +1174,14 @@ def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
 - Use `read_file()` for FILES only, use `list_directory()` for directories
 - Use `run_python()` to execute Python code
 - Use `run_shell()` to execute shell commands
-    NOTE:
-        Platform - {PLATFORM}
-        CRITICAL - SHELL COMMAND SYNTAX:
-        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
+Platform - {PLATFORM}
+CRITICAL - SHELL COMMAND SYNTAX:
+{'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+**BEST PRACTICE - AVOID CHAINING**:
+        - ❌ BAD: cd backend && python app.py (Fails on Windows)
+        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
+        - ✅ GOOD: python backend/app.py (Run from root)
+        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
 
 
 Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
@@ -1262,6 +1295,14 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     7. Create the `agents-work/test-results/` directory if it does not exist
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
+    Platform - {PLATFORM}
+    CRITICAL - SHELL COMMAND SYNTAX:
+    {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+    **BEST PRACTICE - AVOID CHAINING**:
+        - ❌ BAD: cd backend && python app.py (Fails on Windows)
+        - ❌ BAD: cd backend; python app.py (State is lost between tool calls)
+        - ✅ GOOD: python backend/app.py (Run from root)
+        - ✅ GOOD: npm run build --prefix frontend (Use --prefix for npm)
     
     **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
     - NEVER run blocking commands like `python app.py`, `flask run`, or `npm start` directly
@@ -1305,11 +1346,6 @@ def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = No
     - **NO INFRASTRUCTURE TESTING**: Do NOT test deployment, CI/CD, monitoring, or any infrastructure not in the task
     - **STICK TO THE TASK**: If task says "test CRUD API", test ONLY that. NOT: authentication, rate limiting, caching, etc.
     - **IF NOT IN TASK**: Don't test it. Period.
-    NOTE:
-        Platform - {PLATFORM}
-        CRITICAL - SHELL COMMAND SYNTAX:
-        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-        {'- Example: cd mydir; python script.py' if platform.system() == 'Windows' else '- Example: cd mydir && python script.py'}
     """
     
     return _execute_react_loop(task, tools, system_prompt, state, config)

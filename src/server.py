@@ -36,7 +36,7 @@ from langgraph_definition import create_orchestrator
 from config import OrchestratorConfig
 from state import OrchestratorState
 from git_manager import WorktreeManager, initialize_git_repo
-from orchestrator_types import worker_result_to_dict, task_to_dict
+from orchestrator_types import worker_result_to_dict, task_to_dict, TaskStatus
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -217,7 +217,7 @@ app = FastAPI(title="Agent Orchestrator API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For dev only
+    allow_origins=os.getenv("FRONTEND_URL", "*").split(",") if os.getenv("FRONTEND_URL") != "*" else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -367,9 +367,7 @@ async def list_runs():
                 
                 # Check for interrupts/pauses
                 is_interrupted = False
-                if state_snapshot.next:
-                     is_interrupted = True
-                elif state_snapshot.tasks and len(state_snapshot.tasks) > 0 and state_snapshot.tasks[0].interrupts:
+                if state_snapshot.tasks and len(state_snapshot.tasks) > 0 and state_snapshot.tasks[0].interrupts:
                      is_interrupted = True
                      
                 if strat_status == "complete":
@@ -528,7 +526,30 @@ async def get_run(run_id: str):
                     break
         
         if not interrupt_data:
+            # Fallback: Check for tasks manually marked as waiting_human
+            # This handles cases where we manually updated state but didn't create a LangGraph interrupt
+            if state_snapshot and state_snapshot.values:
+                tasks = state_snapshot.values.get("tasks", [])
+                for t in tasks:
+                    # Handle both dict and object access
+                    status = t.get("status") if isinstance(t, dict) else getattr(t, "status", None)
+                    task_id = t.get("id") if isinstance(t, dict) else getattr(t, "id", None)
+                    
+                    if status == "waiting_human" or status == TaskStatus.WAITING_HUMAN:
+                        logger.info(f"🔍 Found waiting_human task in get_run: {task_id}")
+                        interrupt_data = {
+                            "task_id": task_id,
+                            "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in tasks],
+                            "reason": "Restored from persisted state"
+                        }
+                        break
+        
+        if not interrupt_data:
             logger.info("ℹ️ No interrupt data found in get_run")
+        else:
+            # Ensure it's added to the response
+            run_data["interrupt_data"] = interrupt_data
+            run_data["status"] = "interrupted" # Force status to interrupted if we found data
         
         if state_snapshot and state_snapshot.values:
             state = state_snapshot.values
@@ -600,9 +621,113 @@ async def replan_run(run_id: str):
         
         logger.info(f"Replan requested for run {run_id}. Director will re-integrate pending tasks.")
         return {"status": "replan_requested"}
-        
     except Exception as e:
         logger.error(f"Failed to set replan_requested flag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/runs/{run_id}/tasks/{task_id}/interrupt")
+async def interrupt_task(run_id: str, task_id: str):
+    """
+    Force interrupt a specific task:
+    1. Cancel the running orchestrator task
+    2. Update the specific task status to WAITING_HUMAN
+    3. Update run status to 'interrupted'
+    """
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    # 1. Cancel the running task if it exists
+    if run_id in running_tasks:
+        logger.info(f"Force interrupting run {run_id} for task {task_id}")
+        task = running_tasks[run_id]
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            logger.info(f"Run {run_id} cancelled successfully")
+        except Exception as e:
+            logger.error(f"Error cancelling run {run_id}: {e}")
+            
+    # 2. Update state to mark task as waiting_human
+    try:
+        orchestrator = get_orchestrator_graph()
+        thread_id = runs_index[run_id]["thread_id"]
+        config = {"configurable": {"thread_id": thread_id}}
+        
+        # Get current state
+        current_state = await orchestrator.aget_state(config)
+        if not current_state:
+             raise HTTPException(status_code=404, detail="State not found")
+             
+        tasks = current_state.values.get("tasks", [])
+        task_found = False
+        
+        # Modify the specific task
+        updated_tasks = []
+        for t in tasks:
+            # Handle both object and dict representation
+            t_id = t.id if hasattr(t, "id") else t.get("id")
+            
+            if t_id == task_id:
+                logger.info(f"Marking task {task_id} as WAITING_HUMAN")
+                task_found = True
+                
+                # Update status
+                if hasattr(t, "status"):
+                    t.status = TaskStatus.WAITING_HUMAN
+                    t.updated_at = datetime.now()
+                else:
+                    t["status"] = "waiting_human"
+                    t["updated_at"] = datetime.now().isoformat()
+            
+            updated_tasks.append(t)
+            
+        if not task_found:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found in state")
+            
+        # Persist the update
+        # We update the 'tasks' key in the state
+        # Note: We need to ensure we're passing the right format (dicts or objects) based on what the reducer expects.
+        # The reducer expects a list of Task objects or dicts that it merges.
+        # Since we are updating existing tasks, we should pass the modified list.
+        
+        # Convert all to dicts to be safe for the update
+        tasks_payload = [task_to_dict(t) if hasattr(t, "status") else t for t in updated_tasks]
+        
+        await orchestrator.aupdate_state(config, {"tasks": tasks_payload})
+        logger.info(f"State updated for run {run_id}")
+        
+        # 3. Update run status and persist interrupt data
+        interrupt_data = {
+            "task_id": task_id,
+            "tasks": tasks_payload,
+            "reason": "Force interrupted by user"
+        }
+        runs_index[run_id]["status"] = "interrupted"
+        runs_index[run_id]["interrupt_data"] = interrupt_data
+        
+        # Broadcast update - send BOTH state_update (for general UI) and interrupted (for modal)
+        await manager.broadcast_to_run(run_id, {
+            "type": "state_update", 
+            "payload": {
+                "status": "interrupted",
+                "tasks": tasks_payload,
+                "interrupt_data": interrupt_data
+            }
+        })
+        
+        await manager.broadcast_to_run(run_id, {
+            "type": "interrupted", 
+            "payload": {
+                "status": "interrupted",
+                "data": interrupt_data
+            }
+        })
+        
+        return {"status": "interrupted", "task_id": task_id}
+        
+    except Exception as e:
+        logger.error(f"Error updating state for interrupt: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1008,6 +1133,27 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
         file_handler.close()
         logger.info(f"📝 Closed log file: {log_file}")
 
+# Mount static files for production deployment (Option A)
+# Only mount if the dist directory exists
+import os as _os
+from pathlib import Path as _Path
+
+dist_path = _Path(__file__).parent.parent / "orchestrator-dashboard" / "dist"
+if dist_path.exists():
+    from fastapi.staticfiles import StaticFiles
+    
+    # Mount static files for all routes except /api and /ws
+    app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="static")
+    logger.info(f"📦 Serving static files from {dist_path}")
+else:
+    logger.info("📦 No static files found. Run 'npm run build' in orchestrator-dashboard/ for production deployment.")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8085)
+    
+    # Allow configuration via environment variables
+    host = _os.getenv("SERVER_HOST", "0.0.0.0")
+    port = int(_os.getenv("SERVER_PORT", "8085"))
+    
+    logger.info(f"🚀 Starting server on {host}:{port}")
+    uvicorn.run(app, host=host, port=port)

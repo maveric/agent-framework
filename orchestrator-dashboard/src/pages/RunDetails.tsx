@@ -2,7 +2,7 @@ import { useParams } from 'react-router-dom';
 import { useMemo, useState, useEffect } from 'react';
 import { apiClient } from '../api/client';
 import { useWebSocketStore } from '../api/websocket';
-import { ChevronDown, ChevronUp, LayoutGrid, List, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, LayoutGrid, List, X, Hand } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskGraph } from '../components/TaskGraph';
 import { TaskDetailsContent } from '../components/TaskDetailsContent';
@@ -169,18 +169,6 @@ export function RunDetails() {
         };
     }, [runId, addMessageHandler, subscribe, unsubscribe]);
 
-    const handleReplan = async () => {
-        if (!runId) return;
-        setIsReplanning(true);
-        try {
-            await apiClient(`/api/runs/${runId}/replan`, { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to trigger replan:', error);
-        } finally {
-            setIsReplanning(false);
-        }
-    };
-
     const sortedTasks = useMemo(() => {
         if (!run?.tasks) return [];
         // Sort by status priority then ID
@@ -200,6 +188,37 @@ export function RunDetails() {
             return a.id.localeCompare(b.id);
         });
     }, [run?.tasks]);
+
+    const handleReplan = async () => {
+        if (!runId) return;
+        setIsReplanning(true);
+        try {
+            await apiClient(`/api/runs/${runId}/replan`, { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to trigger replan:', error);
+        } finally {
+            setIsReplanning(false);
+        }
+    };
+
+    const handleInterrupt = async (taskId: string) => {
+        if (!runId) return;
+        if (!confirm('Are you sure you want to force interrupt this task? This will stop the run and move the task to the Human Queue.')) return;
+
+        try {
+            await apiClient(`/api/runs/${runId}/tasks/${taskId}/interrupt`, {
+                method: 'POST'
+            });
+            // Re-fetch run details to update UI
+            const data = await apiClient<RunDetails>(`/api/runs/${runId}`);
+            setRun(data);
+        } catch (error) {
+            console.error('Failed to interrupt task:', error);
+            alert('Failed to interrupt task: ' + error);
+        }
+    };
+
+
 
     if (isLoading) {
         return (
@@ -405,6 +424,8 @@ export function RunDetails() {
                                                 </div>
                                             )}
 
+
+
                                             {expandedTasks.has(task.id) && (
                                                 <div className="mt-4 pt-4 border-t border-slate-700">
                                                     <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />
@@ -448,12 +469,24 @@ export function RunDetails() {
                                                         <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
                                                     </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => setSelectedTaskId(null)}
-                                                    className="text-slate-400 hover:text-slate-200 p-1 hover:bg-slate-700 rounded"
-                                                >
-                                                    <X className="w-4 h-4" />
-                                                </button>
+                                                <div className="flex items-center gap-2">
+                                                    {task.status === 'active' && (
+                                                        <button
+                                                            onClick={() => handleInterrupt(task.id)}
+                                                            className="flex items-center gap-1.5 px-2 py-1 bg-red-900/20 hover:bg-red-900/40 text-red-400 text-xs rounded border border-red-800/50 transition-colors"
+                                                            title="Force Interrupt Task"
+                                                        >
+                                                            <Hand className="w-3 h-3" />
+                                                            Interrupt
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={() => setSelectedTaskId(null)}
+                                                        className="text-slate-400 hover:text-slate-200 p-1 hover:bg-slate-700 rounded"
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                </div>
                                             </div>
                                             <div className="p-4 overflow-y-auto flex-1">
                                                 <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />

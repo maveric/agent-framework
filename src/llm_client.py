@@ -97,3 +97,37 @@ def get_llm(model_config: Optional[ModelConfig] = None):
         raise ValueError(f"Unsupported LLM provider: {provider}")
     
     return llm
+
+
+async def ainvoke_llm(llm, messages, **kwargs):
+    """
+    Async wrapper for LLM invocation.
+    
+    LangChain LLMs support async via .ainvoke() method.
+    This wrapper provides a consistent interface.
+    
+    Args:
+        llm: LLM instance from get_llm()
+        messages: List of messages to send
+        **kwargs: Additional arguments to pass to ainvoke
+        
+    Returns:
+        LLM response
+    """
+    return await llm.ainvoke(messages, **kwargs)
+
+
+async def astream_llm(llm, messages, **kwargs):
+    """
+    Async streaming wrapper for LLM invocation.
+    
+    Args:
+        llm: LLM instance from get_llm()
+        messages: List of messages to send
+        **kwargs: Additional arguments
+        
+    Yields:
+        Chunks of the LLM response
+    """
+    async for chunk in llm.astream(messages, **kwargs):
+        yield chunk

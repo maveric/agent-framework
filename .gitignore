@@ -18,6 +18,7 @@ ENV/
 temp_test_env/
 dist/
 projects/
+.worktrees/
 
 # Node
 node_modules/
