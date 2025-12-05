@@ -532,12 +532,18 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
         for t in all_tasks
     )
     
+    # Initialize result dict
+    result = {}
+    
     if all_terminal and all_tasks:
         print("Director: All tasks in terminal states - marking run as COMPLETE", flush=True)
         result["strategy_status"] = "complete"
     
     # Return updates and logs
-    result = {**result, "tasks": updates, "replan_requested": False} if updates else result
+    if updates:
+        result["tasks"] = updates
+    result["replan_requested"] = False
+    
     if director_messages:
         # We use a special key "director" for these logs. 
         # The frontend will need to be updated to display them, or we can attach them to a dummy task.
