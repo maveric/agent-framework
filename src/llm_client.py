@@ -87,7 +87,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",  # OpenRouter API endpoint
             max_retries=5,
-            timeout=600.0,  # 10 minute timeout for slow models (increased from 60s)
+            timeout=60.0,
             default_headers={
                 "HTTP-Referer": "https://github.com/yourusername/agent-framework",  # Optional but recommended
                 "X-Title": "Agent Framework"  # Optional but recommended

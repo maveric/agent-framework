@@ -1090,6 +1090,217 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
         except Exception as e:
             logger.error(f"Error checking final state: {e}")
 
+# =============================================================================
+# CONTINUOUS DISPATCH EXECUTION (Non-blocking worker dispatch)
+# =============================================================================
+
+async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
+    """
+    Run the orchestrator with continuous task dispatch.
+    
+    Unlike LangGraph's superstep model which blocks until ALL workers complete,
+    this loop dispatches workers as background tasks and immediately continues
+    to check for newly-ready tasks.
+    
+    Flow:
+        Director → spawn(workers) → poll completions → Director → spawn more...
+    """
+    from task_queue import TaskCompletionQueue
+    from nodes.director import director_node
+    from nodes.worker import worker_node
+    from nodes.strategist import strategist_node
+    from orchestrator_types import task_to_dict
+    
+    
+    # Get max concurrent workers from config
+    orch_config = state.get("orch_config")
+    max_concurrent = getattr(orch_config, "max_concurrent_workers", 5) if orch_config else 5
+    task_queue = TaskCompletionQueue(max_concurrent=max_concurrent)
+    iteration = 0
+    max_iterations = 500  # Safety limit
+    
+    logger.info(f"🚀 Starting continuous dispatch loop for run {run_id}")
+    
+    try:
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # ========== PHASE 1: Process completed workers ==========
+            completed = task_queue.collect_completed()
+            for c in completed:
+                logger.info(f"  📥 Processing completed task: {c.task_id[:12]}")
+                
+                for task in state.get("tasks", []):
+                    if task.get("id") == c.task_id:
+                        if c.error:
+                            task["status"] = "failed"
+                            task["error"] = str(c.error)
+                            logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
+                        else:
+                            # Worker returns state updates with modified task
+                            if c.result and isinstance(c.result, dict):
+                                # Find the updated task in the result
+                                result_tasks = c.result.get("tasks", [])
+                                for rt in result_tasks:
+                                    if rt.get("id") == c.task_id:
+                                        # Merge updates
+                                        task.update(rt)
+                                        break
+                            logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
+                        break
+                
+                # Broadcast state update
+                await _broadcast_state_update(run_id, state)
+            
+            # ========== PHASE 2: Run Director (evaluates readiness, creates tasks) ==========
+            logger.info(f"  ▶️  Director cycle {iteration}")
+            
+            # Director modifies state directly
+            director_result = await director_node(state, run_config)
+            if director_result:
+                # Merge director updates into state
+                for key, value in director_result.items():
+                    if key != "_wt_manager":  # Don't overwrite internal objects
+                        state[key] = value
+            
+            # ========== PHASE 3: Find and dispatch ready tasks ==========
+            ready_tasks = [t for t in state.get("tasks", []) if t.get("status") == "ready"]
+            
+            # Dispatch ready tasks (up to available slots)
+            dispatched = 0
+            for task in ready_tasks[:task_queue.available_slots]:
+                task_id = task.get("id")
+                if task_queue.is_running(task_id):
+                    continue  # Already running
+                
+                # Mark as active
+                task["status"] = "active"
+                task["started_at"] = datetime.now().isoformat()
+                
+                # Create worktree if needed
+                wt_manager = state.get("_wt_manager")
+                if wt_manager and not state.get("mock_mode", False):
+                    try:
+                        wt_manager.create_worktree(task_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to create worktree: {e}")
+                
+                # Spawn worker as background task
+                worker_state = {**state, "task_id": task_id}
+                task_queue.spawn(task_id, worker_node(worker_state, run_config))
+                dispatched += 1
+                
+                logger.info(f"  🚀 Dispatched: {task_id[:12]} ({task.get('assigned_worker_profile', 'unknown')})")
+            
+            if dispatched > 0:
+                await _broadcast_state_update(run_id, state)
+            
+            # ========== PHASE 4: Run Strategist for completed test tasks ==========
+            test_complete = [t for t in state.get("tasks", []) 
+                           if t.get("status") == "complete" 
+                           and t.get("phase") == "test"
+                           and not t.get("qa_verdict")]  # Not yet QA'd
+            
+            for task in test_complete:
+                logger.info(f"  🔍 QA evaluating: {task.get('id', '')[:12]}")
+                strategist_result = await strategist_node({**state, "task_id": task.get("id")}, run_config)
+                if strategist_result:
+                    for key, value in strategist_result.items():
+                        if key == "tasks":
+                            # Update the specific task
+                            for rt in value:
+                                for t in state["tasks"]:
+                                    if t.get("id") == rt.get("id"):
+                                        t.update(rt)
+                        elif key != "_wt_manager":
+                            state[key] = value
+                await _broadcast_state_update(run_id, state)
+            
+            # ========== PHASE 5: Check completion ==========
+            all_tasks = state.get("tasks", [])
+            
+            # Exit conditions
+            terminal_statuses = {"complete", "abandoned", "waiting_human"}
+            all_terminal = all(t.get("status") in terminal_statuses for t in all_tasks) if all_tasks else False
+            
+            if all_terminal and not task_queue.has_work:
+                logger.info(f"✅ All tasks complete! Ending run {run_id}")
+                runs_index[run_id]["status"] = "completed"
+                await _broadcast_state_update(run_id, state)
+                break
+            
+            # Check for HITL interrupts
+            waiting_human = [t for t in all_tasks if t.get("status") == "waiting_human"]
+            if waiting_human and not task_queue.has_work:
+                logger.info(f"⏸️  Run paused for human intervention")
+                runs_index[run_id]["status"] = "interrupted"
+                break
+            
+            # No work and no ready tasks? Check if we're stuck
+            if not task_queue.has_work and not ready_tasks and not test_complete:
+                # Check for planned tasks that might become ready
+                planned = [t for t in all_tasks if t.get("status") == "planned"]
+                if not planned:
+                    logger.warning(f"⚠️  No more work to do, but not all tasks complete")
+                    break
+                # Otherwise director will evaluate readiness on next cycle
+            
+            # ========== PHASE 6: Wait for completions ==========
+            if task_queue.has_work:
+                # Wait a bit for workers to complete
+                await task_queue.wait_for_any(timeout=1.0)
+            else:
+                # Small delay to prevent tight loop
+                await asyncio.sleep(0.1)
+            
+            # Update run status
+            runs_index[run_id].update({
+                "status": "running",
+                "updated_at": datetime.now().isoformat(),
+                "task_counts": {
+                    "planned": len([t for t in all_tasks if t.get("status") == "planned"]),
+                    "active": len([t for t in all_tasks if t.get("status") == "active"]),
+                    "completed": len([t for t in all_tasks if t.get("status") == "complete"]),
+                    "failed": len([t for t in all_tasks if t.get("status") == "failed"]),
+                }
+            })
+        
+        if iteration >= max_iterations:
+            logger.error(f"❌ Max iterations ({max_iterations}) reached for run {run_id}")
+            runs_index[run_id]["status"] = "failed"
+    
+    except Exception as e:
+        logger.error(f"❌ Continuous dispatch error: {e}")
+        import traceback
+        traceback.print_exc()
+        runs_index[run_id]["status"] = "failed"
+        await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+    
+    finally:
+        # Cancel any remaining workers
+        await task_queue.cancel_all()
+        
+        # Final broadcast
+        await manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
+        logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
+
+
+async def _broadcast_state_update(run_id: str, state: dict):
+    """Broadcast state update to connected clients."""
+    try:
+        serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
+        await manager.broadcast_to_run(run_id, {
+            "type": "state_update",
+            "payload": {
+                "tasks": serialized_tasks,
+                "status": runs_index[run_id].get("status", "running"),
+                "task_counts": runs_index[run_id].get("task_counts", {})
+            }
+        })
+    except Exception as e:
+        logger.error(f"Failed to broadcast state: {e}")
+
+
 async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: dict, workspace_path: Any):
     """Core execution logic for the run."""
     from pathlib import Path
@@ -1174,7 +1385,9 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
             }
         }
         
-        await _stream_and_broadcast(orchestrator, initial_state, run_config, run_id)
+        # Use continuous dispatch (non-blocking worker execution)
+        # instead of LangGraph's blocking superstep model
+        await _continuous_dispatch_loop(run_id, initial_state, run_config)
 
     except Exception as e:
         logger.error(f"Critical error in run execution logic: {e}")
