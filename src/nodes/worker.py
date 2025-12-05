@@ -921,6 +921,15 @@ async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     is_windows = platform.system() == 'Windows'
     correct_path = "python folder\\\\script.py" if is_windows else "python folder/script.py"
     correct_pytest = "python -m pytest tests\\\\" if is_windows else "python -m pytest tests/"
+    
+    # Shared venv path at workspace root (not in worktree)
+    workspace_path = state.get("_workspace_path", ".")
+    if is_windows:
+        venv_python = f"{workspace_path}\\\\.venv\\\\Scripts\\\\python.exe"
+        venv_pip = f"{workspace_path}\\\\.venv\\\\Scripts\\\\pip.exe"
+    else:
+        venv_python = f"{workspace_path}/.venv/bin/python"
+        venv_pip = f"{workspace_path}/.venv/bin/pip"
     platform_warning = f"""
 **🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
 {"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
@@ -952,12 +961,13 @@ CRITICAL INSTRUCTIONS:
 
 Remember: agents-work/ has plans and test results. Your code goes in the project root.
 
-**🔒 DEPENDENCY ISOLATION - MANDATORY 🔒**:
+**🔒 DEPENDENCY ISOLATION - SHARED VENV 🔒**:
 - **NEVER install packages globally** - this pollutes the host machine
-- **Python**: Check for `.venv/` first. If not exists, create with `python -m venv .venv`
-  - Run: `.venv\\Scripts\\python.exe` (Windows) or `.venv/bin/python` (Unix)
-  - Install: `.venv\\Scripts\\pip.exe install package` (Windows)
-  - **NEVER** use bare `pip install` or `python -m pip install` without venv
+- **Python**: A SHARED venv exists at the workspace root. Use it:
+  - Run: `{venv_python}` 
+  - Install: `{venv_pip} install package`
+  - If packages are missing: `{venv_pip} install -r requirements.txt`
+  - **NEVER** use bare `pip install` or `python -m pip install`
 - **Node.js**: Use `npm install` (creates local node_modules, already isolated)
   - Run via: `npx`, `npm run`, or `node ./node_modules/.bin/tool`
 - **Other stacks**: Check design_spec.md for isolation requirements
@@ -1155,6 +1165,16 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     tools = [read_file, write_file, list_directory, run_python, run_shell, create_subtasks]
     tools = _bind_tools(tools, state, WorkerProfile.TESTER)
     
+    # Shared venv path at workspace root (not in worktree)
+    is_windows = platform.system() == 'Windows'
+    workspace_path = state.get("_workspace_path", ".")
+    if is_windows:
+        venv_python = f"{workspace_path}\\.venv\\Scripts\\python.exe"
+        venv_pip = f"{workspace_path}\\.venv\\Scripts\\pip.exe"
+    else:
+        venv_python = f"{workspace_path}/.venv/bin/python"
+        venv_pip = f"{workspace_path}/.venv/bin/pip"
+    
     # Create a clean filename from task description
     task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
     task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
@@ -1178,10 +1198,11 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     8. If tests fail, include real error messages
     9. For small projects (HTML/JS), document manual tests if no test framework available
     
-    **🔒 DEPENDENCY ISOLATION - MANDATORY 🔒**:
-    - **Python**: Use venv python - `.venv\\Scripts\\python.exe test.py` (Windows) or `.venv/bin/python test.py` (Unix)
-      - If .venv doesn't exist, create with `python -m venv .venv`
-      - Install test deps: `.venv\\Scripts\\pip.exe install pytest` (Windows)
+    **🔒 DEPENDENCY ISOLATION - SHARED VENV 🔒**:
+    - **Python**: A SHARED venv exists at the workspace root. Use it:
+      - Run tests: `{venv_python} test.py`
+      - Install deps: `{venv_pip} install pytest`
+      - **NEVER** create a new venv or use bare `pip install`
     - **Node.js**: Use `npm test` or `npx jest` (uses local node_modules)
     
     Platform - {PLATFORM}
@@ -1190,8 +1211,8 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     **BEST PRACTICE - AVOID CHAINING**:
         - ❌ FORBIDDEN: cd backend && python test.py
         - ❌ FORBIDDEN: cd . && python test.py
-        - ✅ CORRECT: .venv\\Scripts\\python.exe backend\\test.py (Windows)
-        - ✅ CORRECT: python backend/test.py (if venv activated)
+        - ✅ CORRECT: `{venv_python} backend\\test.py` (Windows)
+        - ✅ CORRECT: `{venv_python} backend/test.py` (Unix)
     
     **🚨🚨🚨 CRITICAL - BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
     **BANNED COMMANDS** (these NEVER exit and will freeze the agent):
