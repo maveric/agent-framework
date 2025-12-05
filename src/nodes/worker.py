@@ -408,11 +408,7 @@ async def _execute_react_loop(
     
     print(f"  Starting ReAct agent...", flush=True)
     
-    # LOOP DETECTION: Track consecutive tool calls to detect infinite loops
-    # This catches patterns like: write_file → write_file → write_file (20x)
-    consecutive_tool_tracker = {}  # {tool_name: count}
-    last_tool_name = None
-    LOOP_THRESHOLD = 10
+    # NOTE: The recursion_limit=150 is the circuit breaker for infinite loops.
     
     # Invoke agent
     # We use a recursion limit to prevent infinite loops
@@ -484,69 +480,10 @@ async def _execute_react_loop(
     messages = result["messages"]
     last_message = messages[-1]
     
-    # LOOP DETECTION: Check for repetitive tool calls
-    tool_call_sequence = []
-    for msg in messages:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            for tc in msg.tool_calls:
-                tool_name = tc.get("name")
-                if tool_name:
-                    tool_call_sequence.append(tool_name)
-    
-    # Count consecutive calls
-    loop_detected = False
-    loop_tool = None
-    loop_count = 0
-    
-    if tool_call_sequence:
-        from collections import Counter
-        # Look for runs of the same tool
-        max_consecutive = 1
-        current_tool = None
-        current_count = 0
-        
-        for tool in tool_call_sequence:
-            if tool == current_tool:
-                current_count += 1
-                if current_count > max_consecutive:
-                    max_consecutive = current_count
-                    loop_tool = current_tool
-                    loop_count = current_count
-            else:
-                current_tool = tool
-                current_count = 1
-        
-        if max_consecutive >= LOOP_THRESHOLD:
-            loop_detected = True
-            print(f"  [LOOP DETECTED] '{loop_tool}' called {loop_count} times consecutively", flush=True)
-            print(f"  [LOOP DETECTED] Task failed - LLM stuck in repetitive pattern", flush=True)
-            
-            # FAIL THE TASK with clear feedback for retry
-            from orchestrator_types import AAR
-            workspace_path = state.get("_workspace_path")
-            result_path = log_llm_response(task.id, result, [], status="failed", workspace_path=workspace_path)
-            
-            return WorkerResult(
-                status="failed",
-                result_path=result_path,
-                aar=AAR(
-                    summary=f"LOOP DETECTED: Task failed due to repetitive tool usage. The LLM called '{loop_tool}' {loop_count} times in a row.",
-                    approach="ReAct agent execution - interrupted due to loop",
-                    challenges=[
-                        f"Loop pattern detected: {loop_tool} called {loop_count} times consecutively",
-                        "This often indicates wrapper scripts calling wrapper scripts",
-                        "Task may be too complex and needs to be broken down into smaller subtasks",
-                        "Or: Approach needs to be simplified to avoid recursion"
-                    ],
-                    decisions_made=[
-                        "Terminated execution to prevent infinite loop",
-                        "Recommend breaking task into smaller pieces or using simpler approach"
-                    ],
-                    files_modified=[]
-                ),
-                suggested_tasks=[],
-                messages=result["messages"] if "messages" in result else []
-            )
+    # NOTE: Loop detection removed. The recursion_limit=150 is the real circuit breaker.
+    # Previous detection counted consecutive calls to same tool NAME without checking
+    # if the arguments were different, causing false positives on test workers that
+    # legitimately run many different shell commands in a row.
     
     # Identify modified files and suggested tasks from tool calls
     # CRITICAL: Only count files as modified if the tool call SUCCEEDED
