@@ -53,6 +53,112 @@ class MergeResult:
     conflict: bool = False
     conflicting_files: List[str] = field(default_factory=list)
     error_message: str = ""
+    llm_resolved: bool = False  # True if LLM resolved the conflict
+
+
+def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) -> bool:
+    """
+    Use LLM to resolve merge conflicts.
+    
+    Args:
+        repo_path: Path to git repository (main worktree)
+        conflicted_files: List of files with conflicts
+        
+    Returns:
+        True if all conflicts were resolved, False otherwise
+    """
+    from config import get_model
+    from langchain_core.messages import HumanMessage, SystemMessage
+    
+    print(f"  🤖 LLM attempting to resolve {len(conflicted_files)} conflict(s)...", flush=True)
+    
+    try:
+        # Get coder model for merge resolution
+        model = get_model("coder")
+        
+        for file_path in conflicted_files:
+            full_path = repo_path / file_path
+            
+            if not full_path.exists():
+                print(f"  ⚠️ Conflicted file not found: {file_path}", flush=True)
+                continue
+            
+            # Read the conflicted file (has <<<<<<, =======, >>>>>> markers)
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                conflicted_content = f.read()
+            
+            # Check if it actually has conflict markers
+            if "<<<<<<" not in conflicted_content:
+                print(f"  ⚠️ No conflict markers in {file_path}, skipping", flush=True)
+                continue
+            
+            print(f"  🔧 Resolving: {file_path}", flush=True)
+            
+            # Create merge resolution prompt
+            system_prompt = """You are a code merge expert. You will receive a file with git merge conflict markers.
+Your job is to intelligently merge the code by combining both versions.
+
+RULES:
+1. Output ONLY the resolved file content, nothing else
+2. Remove all conflict markers (<<<<<<, =======, >>>>>>)
+3. Combine both versions logically - don't just pick one
+4. For code files (like app.py), combine all functions/endpoints from both versions
+5. Preserve proper syntax and formatting
+6. Do NOT add any explanation or markdown - just the resolved code"""
+
+            user_prompt = f"""Resolve this merge conflict by combining both versions:
+
+FILE: {file_path}
+
+{conflicted_content}
+
+Output the resolved file content:"""
+
+            # Call LLM
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            
+            response = model.invoke(messages)
+            resolved_content = response.content.strip()
+            
+            # Remove any markdown code blocks if LLM added them
+            if resolved_content.startswith("```"):
+                lines = resolved_content.split("\n")
+                # Remove first and last lines (```python and ```)
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                resolved_content = "\n".join(lines)
+            
+            # Verify no conflict markers remain
+            if "<<<<<<" in resolved_content or "=======" in resolved_content or ">>>>>>" in resolved_content:
+                print(f"  ❌ LLM resolution still has conflict markers, aborting", flush=True)
+                return False
+            
+            # Write resolved content
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(resolved_content)
+            
+            # Stage the resolved file
+            subprocess.run(
+                ["git", "add", file_path],
+                cwd=repo_path,
+                check=True,
+                capture_output=True
+            )
+            
+            print(f"  ✅ Resolved: {file_path}", flush=True)
+        
+        return True
+        
+    except Exception as e:
+        print(f"  ❌ LLM merge resolution failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 @dataclass
@@ -386,7 +492,45 @@ class WorktreeManager:
             info.merged_at = datetime.now()
             return MergeResult(success=True, task_id=task_id)
         else:
-            # Conflict - abort merge
+            # Merge conflict detected - try LLM resolution before aborting
+            print(f"  ⚠️ Merge conflict detected for {task_id}", flush=True)
+            
+            # Get list of conflicted files
+            status_result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            conflicted_files = [f for f in status_result.stdout.strip().split('\n') if f]
+            
+            if conflicted_files:
+                print(f"  📝 Conflicted files: {conflicted_files}", flush=True)
+                
+                # Try LLM-assisted resolution
+                if _llm_resolve_conflict(self.repo_path, conflicted_files):
+                    # LLM resolved the conflicts - complete the merge
+                    commit_result = subprocess.run(
+                        ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - LLM resolved conflicts"],
+                        cwd=self.repo_path,
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if commit_result.returncode == 0:
+                        print(f"  ✅ LLM successfully resolved merge conflict for {task_id}", flush=True)
+                        info.status = WorktreeStatus.MERGED
+                        info.merged_at = datetime.now()
+                        return MergeResult(
+                            success=True, 
+                            task_id=task_id, 
+                            llm_resolved=True,
+                            conflicting_files=conflicted_files
+                        )
+                    else:
+                        print(f"  ❌ Failed to commit LLM resolution: {commit_result.stderr}", flush=True)
+            
+            # LLM resolution failed or no conflicted files - abort merge
             subprocess.run(
                 ["git", "merge", "--abort"],
                 cwd=self.repo_path,
@@ -400,6 +544,7 @@ class WorktreeManager:
                 success=False,
                 task_id=task_id,
                 conflict=True,
+                conflicting_files=conflicted_files,
                 error_message=error_output
             )
     
