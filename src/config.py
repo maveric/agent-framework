@@ -53,15 +53,15 @@ class OrchestratorConfig:
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
         provider="openrouter",
-        model_name="minimax/minimax-m2",
+        model_name="x-ai/grok-4.1-fast",
         temperature=0.5
     ))
 
     planner_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
-        provider="openai",
-        model_name="gpt-4.1-mini",
+        provider="openrouter",
+        model_name="x-ai/grok-4.1-fast",
         temperature=0.5
     ))
     

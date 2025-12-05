@@ -46,7 +46,6 @@ fi
 
 # Create necessary directories
 echo "Creating required directories..."
-mkdir -p projects/workspace
 mkdir -p logs
 
 # Setup frontend (if orchestrator-dashboard exists)

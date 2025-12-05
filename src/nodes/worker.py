@@ -1114,7 +1114,7 @@ Your goal is to create a detailed implementation plan for YOUR COMPONENT and bre
 CRITICAL INSTRUCTIONS:
 1. **READ THE SPEC FIRST**: Check `design_spec.md` in the project root - this is YOUR CONTRACT
 2. Explore the codebase using `list_directory` and `read_file`
-3. Write your plan to `agents-work/plans/plan-{{component}}.md` using `write_file`
+3. Write your plan to `agents-work/plans/plan-{{component}}-{task.id[:8]}.md` using `write_file` (UNIQUE filename with task ID!)
 4. **CREATE COMMIT-LEVEL TASKS**: Use `create_subtasks` to define atomic, reviewable changes:
    
    GRANULARITY: Think in terms of GIT COMMITS
