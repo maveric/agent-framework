@@ -680,57 +680,57 @@ async def _execute_react_loop(
 
 
 def _create_read_file_wrapper(tool, worktree_path):
-    def read_file_wrapper(path: str, encoding: str = "utf-8"):
+    async def read_file_wrapper(path: str, encoding: str = "utf-8"):
         """Read the contents of a file."""
-        return tool(path, encoding, root=worktree_path)
+        return await tool(path, encoding, root=worktree_path)
     return read_file_wrapper
 
 def _create_write_file_wrapper(tool, worktree_path):
-    def write_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
+    async def write_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
         """Write content to a file."""
-        return tool(path, content, encoding, root=worktree_path)
+        return await tool(path, content, encoding, root=worktree_path)
     return write_file_wrapper
 
 def _create_append_file_wrapper(tool, worktree_path):
-    def append_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
+    async def append_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
         """Append content to an existing file."""
-        return tool(path, content, encoding, root=worktree_path)
+        return await tool(path, content, encoding, root=worktree_path)
     return append_file_wrapper
 
 def _create_list_directory_wrapper(tool, worktree_path):
-    def list_directory_wrapper(path: str = ".", recursive: bool = False, pattern: str = "*"):
+    async def list_directory_wrapper(path: str = ".", recursive: bool = False, pattern: str = "*"):
         """List files and directories."""
-        return tool(path, recursive, pattern, root=worktree_path)
+        return await tool(path, recursive, pattern, root=worktree_path)
     return list_directory_wrapper
 
 def _create_file_exists_wrapper(tool, worktree_path):
-    def file_exists_wrapper(path: str):
+    async def file_exists_wrapper(path: str):
         """Check if a file or directory exists."""
-        return tool(path, root=worktree_path)
+        return await tool(path, root=worktree_path)
     return file_exists_wrapper
 
 def _create_delete_file_wrapper(tool, worktree_path):
-    def delete_file_wrapper(path: str, confirm: bool):
+    async def delete_file_wrapper(path: str, confirm: bool):
         """Delete a file."""
-        return tool(path, confirm, root=worktree_path)
+        return await tool(path, confirm, root=worktree_path)
     return delete_file_wrapper
 
 def _create_run_python_wrapper(tool, worktree_path, workspace_path=None):
-    def run_python_wrapper(code: str, timeout: int = 30):
+    async def run_python_wrapper(code: str, timeout: int = 30):
         """Execute Python code using shared venv if available."""
-        return tool(code, timeout, cwd=worktree_path, workspace_path=workspace_path)
+        return await tool(code, timeout, cwd=worktree_path, workspace_path=workspace_path)
     return run_python_wrapper
 
 def _create_run_shell_wrapper(tool, worktree_path):
-    def run_shell_wrapper(command: str, timeout: int = 30):
+    async def run_shell_wrapper(command: str, timeout: int = 30):
         """Execute shell command."""
-        return tool(command, timeout, cwd=worktree_path)
+        return await tool(command, timeout, cwd=worktree_path)
     return run_shell_wrapper
 
 def _create_subtasks_wrapper(tool, worktree_path):
     def create_subtasks_wrapper(subtasks: List[Dict[str, Any]]):
         """Create subtasks for the project."""
-        return tool(subtasks)
+        return tool(subtasks)  # This one is sync (create_subtasks is sync)
     return create_subtasks_wrapper
 
 def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerProfile = None) -> List[Callable]:
@@ -756,39 +756,43 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
     bound_tools = []
     for tool in tools:
         # Check if tool accepts 'root' argument (filesystem tools)
-        if tool.__name__ in ["read_file", "write_file", "append_file", "list_directory", "file_exists", "delete_file"]:
+        # NOTE: Handle both sync names (read_file) and async names (read_file_async)
+        fs_tools = ["read_file", "write_file", "append_file", "list_directory", "file_exists", "delete_file",
+                    "read_file_async", "write_file_async", "append_file_async", "list_directory_async", 
+                    "file_exists_async", "delete_file_async"]
+        if tool.__name__ in fs_tools:
             
             # Use factory functions to avoid closure loop variable capture issues
-            if tool.__name__ == "read_file":
+            if tool.__name__ in ["read_file", "read_file_async"]:
                 wrapper = _create_read_file_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="read_file"))
                 
-            elif tool.__name__ == "write_file":
+            elif tool.__name__ in ["write_file", "write_file_async"]:
                 wrapper = _create_write_file_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="write_file"))
                 
-            elif tool.__name__ == "append_file":
+            elif tool.__name__ in ["append_file", "append_file_async"]:
                 wrapper = _create_append_file_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="append_file"))
                 
-            elif tool.__name__ == "list_directory":
+            elif tool.__name__ in ["list_directory", "list_directory_async"]:
                 wrapper = _create_list_directory_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="list_directory"))
                 
-            elif tool.__name__ == "file_exists":
+            elif tool.__name__ in ["file_exists", "file_exists_async"]:
                 wrapper = _create_file_exists_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="file_exists"))
                 
-            elif tool.__name__ == "delete_file":
+            elif tool.__name__ in ["delete_file", "delete_file_async"]:
                 wrapper = _create_delete_file_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="delete_file"))
                 
-        elif tool.__name__ in ["run_python", "run_shell"]:
+        elif tool.__name__ in ["run_python", "run_shell", "run_python_async", "run_shell_async"]:
             workspace_path = state.get("_workspace_path")  # For shared venv lookup
-            if tool.__name__ == "run_python":
+            if tool.__name__ in ["run_python", "run_python_async"]:
                 wrapper = _create_run_python_wrapper(tool, worktree_path, workspace_path=workspace_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="run_python"))
-            elif tool.__name__ == "run_shell":
+            elif tool.__name__ in ["run_shell", "run_shell_async"]:
                 wrapper = _create_run_shell_wrapper(tool, worktree_path)
                 bound_tools.append(StructuredTool.from_function(wrapper, name="run_shell"))
         
