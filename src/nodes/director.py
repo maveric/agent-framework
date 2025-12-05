@@ -426,7 +426,8 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     # 1. Check for Active Planners (Blocking Condition)
     # We still want to wait for the initial planning phase to complete globally
     planner_tasks = [t for t in all_tasks if t.assigned_worker_profile == WorkerProfile.PLANNER]
-    active_planners = [t for t in planner_tasks if t.status not in [TaskStatus.COMPLETE, TaskStatus.FAILED]]
+    # NOTE: AWAITING_QA counts as "done" for planners - they don't need QA, their output is suggestions
+    active_planners = [t for t in planner_tasks if t.status not in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA]]
     
     if active_planners:
         print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
