@@ -67,14 +67,17 @@ def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) -> bool:
     Returns:
         True if all conflicts were resolved, False otherwise
     """
-    from config import get_model
+    from llm_client import get_llm
+    from config import OrchestratorConfig
     from langchain_core.messages import HumanMessage, SystemMessage
     
     print(f"  🤖 LLM attempting to resolve {len(conflicted_files)} conflict(s)...", flush=True)
     
     try:
-        # Get coder model for merge resolution
-        model = get_model("coder")
+        # Get coder model config for merge resolution
+        orch_config = OrchestratorConfig()
+        model_config = orch_config.coder_model or orch_config.worker_model
+        model = get_llm(model_config)
         
         for file_path in conflicted_files:
             full_path = repo_path / file_path
