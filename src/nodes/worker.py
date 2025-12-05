@@ -23,10 +23,14 @@ from llm_client import get_llm
 from config import OrchestratorConfig
 from llm_logger import log_llm_request, validate_request_size, log_llm_response
 
-# Import tools
+# Import tools (ASYNC versions for non-blocking execution)
 from tools import (
-    read_file, write_file, list_directory, file_exists, 
-    run_python, run_shell
+    read_file_async as read_file, 
+    write_file_async as write_file, 
+    list_directory_async as list_directory, 
+    file_exists_async as file_exists, 
+    run_python_async as run_python, 
+    run_shell_async as run_shell
 )
 
 from langchain_core.runnables import RunnableConfig
