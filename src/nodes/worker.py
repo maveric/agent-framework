@@ -919,13 +919,15 @@ async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     
     # Platform-specific shell warning (must be at TOP to be seen)
     is_windows = platform.system() == 'Windows'
+    correct_path = "python folder\\\\script.py" if is_windows else "python folder/script.py"
+    correct_pytest = "python -m pytest tests\\\\" if is_windows else "python -m pytest tests/"
     platform_warning = f"""
 **🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
 {"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
 - ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
 - ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
-- ✅ CORRECT: `python folder/script.py` (Run from project root)
-- ✅ CORRECT: `python -m pytest tests/` (Use -m for modules)
+- ✅ CORRECT: `{correct_path}` (Run from project root)
+- ✅ CORRECT: `{correct_pytest}` (Use -m for modules)
 The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 """
 
@@ -1026,12 +1028,13 @@ async def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
 
     # Platform-specific shell warning
     is_windows = platform.system() == 'Windows'
+    correct_path = "python folder\\\\script.py" if is_windows else "python folder/script.py"
     platform_warning = f"""
 **🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
 {"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
 - ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
 - ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
-- ✅ CORRECT: `python folder/script.py` (Run from project root)
+- ✅ CORRECT: `{correct_path}` (Run from project root)
 The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 """
 
@@ -1170,7 +1173,7 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     **BEST PRACTICE - AVOID CHAINING**:
         - ❌ FORBIDDEN: cd backend && python test.py
         - ❌ FORBIDDEN: cd . && python test.py
-        - ✅ CORRECT: .venv\\Scripts\\python.exe backend/test.py (Windows)
+        - ✅ CORRECT: .venv\\Scripts\\python.exe backend\\test.py (Windows)
         - ✅ CORRECT: python backend/test.py (if venv activated)
     
     **CRITICAL WARNING - DO NOT HANG THE PROCESS**:
