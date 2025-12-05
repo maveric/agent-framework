@@ -702,12 +702,26 @@ async def interrupt_task(run_id: str, task_id: str):
         await orchestrator.aupdate_state(config, {"tasks": tasks_payload})
         logger.info(f"State updated for run {run_id}")
         
-        # 3. Update run status and persist interrupt data
+        # 3. Build complete interrupt data matching server-initiated format
+        # This needs to match what director.py line 370-381 creates
+        interrupted_task_dict = next((t for t in tasks_payload if t.get("id") == task_id), None)
+        if not interrupted_task_dict:
+            raise HTTPException(status_code=500, detail="Task not found after update")
+            
         interrupt_data = {
+            "type": "manual_interrupt",
             "task_id": task_id,
-            "tasks": tasks_payload,
-            "reason": "Force interrupted by user"
+            "task_description": interrupted_task_dict.get("description", ""),
+            "component": interrupted_task_dict.get("component", ""),
+            "phase": interrupted_task_dict.get("phase", "build"),
+            "retry_count": interrupted_task_dict.get("retry_count", 0),
+            "failure_reason": "Manually interrupted by user",
+            "acceptance_criteria": interrupted_task_dict.get("acceptance_criteria", []),
+            "assigned_worker_profile": interrupted_task_dict.get("assigned_worker_profile", "code_worker"),
+            "depends_on": interrupted_task_dict.get("depends_on", [])
         }
+        
+        # Update run status and persist interrupt data
         runs_index[run_id]["status"] = "interrupted"
         runs_index[run_id]["interrupt_data"] = interrupt_data
         
