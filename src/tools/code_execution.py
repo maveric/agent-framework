@@ -123,25 +123,68 @@ def run_shell(command: str, timeout: int = 30, cwd: str = None) -> str:
     print(f"DEBUG: run_shell command='{command}' cwd={cwd}", flush=True)
     
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd or os.getcwd(),
-            env=env
-        )
+        # Use Popen instead of run to properly handle process groups
+        # This ensures child processes (like Flask) are killed on timeout
+        import signal
+        
+        if platform.system() == 'Windows':
+            # Windows: Use CREATE_NEW_PROCESS_GROUP
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            # Unix: Use process group
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                preexec_fn=os.setsid
+            )
+        
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group to cleanup child processes
+            if platform.system() == 'Windows':
+                # Windows: Send CTRL_BREAK_EVENT to process group
+                try:
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                except:
+                    pass
+                # Then force kill
+                process.kill()
+            else:
+                # Unix: Kill the entire process group
+                import os
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            
+            # Wait for cleanup
+            try:
+                process.wait(timeout=2)
+            except:
+                process.kill()
+                process.wait()
+            
+            return f"Error: Command timed out after {timeout} seconds (killed process and children)"
         
         output = []
-        if result.stdout:
-            output.append(result.stdout)
-        if result.stderr:
-            output.append(result.stderr)
+        if stdout:
+            output.append(stdout)
+        if stderr:
+            output.append(stderr)
             
         return "\n".join(output) if output else "No output"
         
-    except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds"
     except Exception as e:
         return f"Error executing command: {str(e)}"

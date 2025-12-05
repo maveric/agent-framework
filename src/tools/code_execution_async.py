@@ -93,13 +93,28 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
         env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
     
     try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd or os.getcwd(),
-            env=env
-        )
+        # Create process with proper process group handling
+        if platform.system() == 'Windows':
+            # Windows: Use CREATE_NEW_PROCESS_GROUP
+            import subprocess
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+        else:
+            # Unix: Use process group
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd or os.getcwd(),
+                env=env,
+                preexec_fn=os.setsid
+            )
         
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -107,9 +122,24 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            process.kill()
+            # Kill the entire process group
+            if platform.system() == 'Windows':
+                import signal
+                try:
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                except:
+                    pass
+                process.kill()
+            else:
+                # Unix: Kill process group
+                import signal
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except:
+                    process.kill()
+            
             await process.wait()
-            return f"Error: Command timed out after {timeout} seconds"
+            return f"Error: Command timed out after {timeout} seconds (killed process and children)"
         
         output = []
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
