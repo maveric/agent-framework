@@ -404,19 +404,23 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                     "depends_on": task.depends_on
                 }
                 
-                # CRITICAL: This interrupt() call PAUSES the graph execution HERE
-                # The graph will NOT continue past this point until human provides resolution
-                # When resumed with Command(resume=resolution), the director_node will restart
-                # from the beginning. When it reaches this interrupt() call again, it will return the resolution.
-                resolution = interrupt(interrupt_data)
+                # Try to use LangGraph interrupt() for HITL
+                # If we're running outside LangGraph context (continuous dispatch), 
+                # just return with updates - the WAITING_HUMAN status will pause the task
+                try:
+                    resolution = interrupt(interrupt_data)
+                    
+                    if resolution:
+                        print(f"Director: Resumed with resolution: {resolution}", flush=True)
+                        return _process_human_resolution(state, resolution)
+                except RuntimeError as e:
+                    if "outside of a runnable context" in str(e):
+                        print(f"  (Running outside LangGraph - task paused with WAITING_HUMAN status)", flush=True)
+                        # Return updates so the WAITING_HUMAN status is saved
+                        # The continuous dispatch loop will detect this and pause the run
+                    else:
+                        raise
                 
-                if resolution:
-                    print(f"Director: Resumed with resolution: {resolution}", flush=True)
-                    return _process_human_resolution(state, resolution)
-                
-                # If we get here (and didn't return), it means we just interrupted (first pass)
-                # The interrupt() raises an exception, so this line is technically unreachable
-                # unless running in a context that suppresses the interrupt exception.
                 continue
         
         # Standard readiness evaluation for planned tasks
