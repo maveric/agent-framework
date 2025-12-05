@@ -243,7 +243,6 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
             started = t.get("started_at")
             updated = t.get("updated_at")
             if started and updated:
-                from datetime import datetime
                 try:
                     start_dt = datetime.fromisoformat(started.replace('Z', '+00:00'))
                     end_dt = datetime.fromisoformat(updated.replace('Z', '+00:00'))
