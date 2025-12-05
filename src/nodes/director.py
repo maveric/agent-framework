@@ -931,6 +931,11 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
            - Frontend tasks MUST depend on their corresponding Backend tasks.
            - **Commit granularity**: Each task should be one atomic commit
            - **Parallel when possible**: Tasks within same feature can run parallel if deps allow
+           - **SERIALIZE E2E/INTEGRATION TESTS**: Tests that start servers (e2e, integration, playwright) MUST run sequentially.
+             * Add dependencies between e2e tests so only one runs at a time
+             * Prevents port conflicts (all tests use same port)
+             * Example: E2E test #2 depends_on: [build deps, "E2E test #1"]
+             * Unit tests can still run in parallel
            - **Example flow**: 
             * Database schema → API endpoint → UI component → Integration test
                 * NOT: All backend → All frontend → All tests
@@ -941,6 +946,8 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
         - Then, identify all TEST tasks.
         - For each TEST task, find the BUILD task it verifies and add it to `depends_on`.
         - For each FRONTEND task, find the BACKEND task it needs and add it to `depends_on`.
+        - **SERIALIZE E2E**: Find all e2e/integration tests (look for keywords: e2e, integration, playwright, end-to-end).
+          Chain them: each e2e test (except first) depends on the previous e2e test.
         
         CRITICAL:
         - Do not invent new tasks unless necessary for integration.
