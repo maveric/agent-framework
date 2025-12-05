@@ -76,20 +76,28 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # Execute handler
     print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
     
-    # PERF: Time the task execution
+    # PERF: Calculate task execution time
+    # Use started_at from task if available (when it became ACTIVE), otherwise measure from now
     import time
-    task_start_time = time.time()
+    from datetime import datetime
+    
+    if hasattr(task, 'started_at') and task.started_at:
+        # Calculate from when task became ACTIVE
+        task_start_time = task.started_at.timestamp()
+    else:
+        # Fallback: measure from worker entry (less accurate)
+        task_start_time = time.time()
     
     try:
         result = await handler(task, state, config)
         
-        # PERF: Log execution time
+        # PERF: Log execution time from ACTIVE status
         task_duration = time.time() - task_start_time
-        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) completed in {task_duration:.1f}s", flush=True)
+        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) completed in {task_duration:.1f}s (active time)", flush=True)
         
     except Exception as e:
         task_duration = time.time() - task_start_time
-        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) FAILED after {task_duration:.1f}s", flush=True)
+        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) FAILED after {task_duration:.1f}s (active time)", flush=True)
         import traceback
         error_details = traceback.format_exc()
         print(f"Worker Error Details:", flush=True)
