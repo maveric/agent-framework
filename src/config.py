@@ -60,8 +60,8 @@ class OrchestratorConfig:
     planner_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
-        provider="openrouter",
-        model_name="deepseek/deepseek-v3.2-exp",
+        provider="openai",
+        model_name="gpt-4.1-mini",
         temperature=0.5
     ))
     

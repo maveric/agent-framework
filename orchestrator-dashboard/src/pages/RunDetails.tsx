@@ -212,6 +212,25 @@ export function RunDetails() {
             // Re-fetch run details to update UI
             const data = await apiClient<RunDetails>(`/api/runs/${runId}`);
             setRun(data);
+
+            // IMPORTANT: Populate interrupt modal with task data
+            const interruptedTask = data.tasks.find(t => t.id === taskId);
+            if (interruptedTask) {
+                // Build interrupt data from task
+                const newInterruptData = {
+                    task_id: interruptedTask.id,
+                    task_description: interruptedTask.description,
+                    failure_reason: `Manually interrupted by user from ${interruptedTask.status} status`,
+                    retry_count: interruptedTask.retry_count || 0,
+                    acceptance_criteria: interruptedTask.acceptance_criteria || [],
+                    component: interruptedTask.component,
+                    phase: interruptedTask.phase,
+                    assigned_worker_profile: interruptedTask.assigned_worker_profile || 'code_worker',
+                    depends_on: interruptedTask.depends_on || []
+                };
+                setInterruptData(newInterruptData);
+                setShowInterruptModal(true);
+            }
         } catch (error) {
             console.error('Failed to interrupt task:', error);
             alert('Failed to interrupt task: ' + error);
