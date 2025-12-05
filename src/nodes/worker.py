@@ -1176,16 +1176,16 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
         venv_python = f"{workspace_path}/.venv/bin/python"
         venv_pip = f"{workspace_path}/.venv/bin/pip"
     
-    # Create a clean filename from task description
-    task_desc = task.description[:50].lower().replace(" ", "-").replace(",", "")
-    task_desc = "".join(c for c in task_desc if c.isalnum() or c == "-")
+    # CRITICAL: Use component field for filename to match what QA expects
+    # QA looks for: agents-work/test-results/test-{component}.md
+    task_filename = task.component if task.component else task.id
     
     system_prompt = f"""You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
 
 🚨🚨🚨 YOUR #1 MANDATORY REQUIREMENT - READ THIS FIRST 🚨🚨🚨
 **BEFORE YOU FINISH, YOU MUST CREATE THIS FILE:**
     
-    File path: `agents-work/test-results/test-{task_desc}.md`
+    File path: `agents-work/test-results/test-{task_filename}.md`
     
 **YOUR TASK WILL AUTOMATICALLY FAIL IF THIS FILE DOES NOT EXIST!**
 
@@ -1196,7 +1196,7 @@ The file must contain:
 
 Example - use write_file to create this:
 ```markdown
-# Test Results: {task_desc}
+# Test Results: {task_filename}
 
 ## Command Run
 `python -m pytest tests/test_api.py -v`
@@ -1224,7 +1224,7 @@ CRITICAL RULES:
 4. Verify file existence with `list_directory` before running tests
 5. Focus on unit testing THIS feature (not integration)
 6. Capture REAL output (errors, pass/fail, counts)
-7. **WRITE THE RESULTS FILE** - `agents-work/test-results/test-{task_desc}.md`
+7. **WRITE THE RESULTS FILE** - `agents-work/test-results/test-{task_filename}.md`
 8. Create the `agents-work/test-results/` directory if it does not exist
 9. If tests fail, include real error messages
 10. For small projects (HTML/JS), document manual tests if no test framework available
@@ -1276,7 +1276,7 @@ finally:
       ```
     **CRITICAL INSTRUCTION**:
     The agents-work/ folder is for agent artifacts, NOT project code.
-    Write test files to the project root, but test RESULTS **must** be written to to agents-work/test-results/test-{task_desc}.md or your task will not pass QA.
+    Write test files to the project root, but test RESULTS **must** be written to to agents-work/test-results/test-{task_filename}.md or your task will not pass QA.
     
     **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
     - **TEST ONLY WHAT'S ASSIGNED**: Only test the specific feature/component in your task description
