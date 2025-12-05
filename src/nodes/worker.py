@@ -117,54 +117,57 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     if result.status == "complete" and result.aar and result.aar.files_modified:
         if wt_manager and not state.get("mock_mode", False):
             try:
-                commit_msg = f"[{task_id}] {task.phase.value if hasattr(task, 'phase') else 'work'}: {result.aar.summary[:50]}"
-                commit_hash = wt_manager.commit_changes(
-                    task_id,
-                    commit_msg,
-                    result.aar.files_modified
-                )
-                if commit_hash:
-                    print(f"  Committed: {commit_hash[:8]}", flush=True)
-                    
-                    # Merge to main immediately for now to allow subsequent tasks to see changes
-                    # In a full flow, this might be gated by QA, but for linear dependencies we need it.
-                    try:
-                        print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
-                        merge_result = wt_manager.merge_to_main(task_id)
-                        if merge_result.success:
-                            print(f"  Merged to main", flush=True)
-                        else:
-                            # Merge failed - this should trigger Phoenix retry
-                            print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
-                            # Override the result to failed status
+                # Filter out response.md - it's a debug fallback, not real work
+                files_to_commit = [f for f in result.aar.files_modified if not f.endswith("response.md")]
+                if files_to_commit:
+                    commit_msg = f"[{task_id}] {task.phase.value if hasattr(task, 'phase') else 'work'}: {result.aar.summary[:50]}"
+                    commit_hash = wt_manager.commit_changes(
+                        task_id,
+                        commit_msg,
+                        files_to_commit
+                    )
+                    if commit_hash:
+                        print(f"  Committed: {commit_hash[:8]}", flush=True)
+                        
+                        # Merge to main immediately for now to allow subsequent tasks to see changes
+                        # In a full flow, this might be gated by QA, but for linear dependencies we need it.
+                        try:
+                            print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
+                            merge_result = wt_manager.merge_to_main(task_id)
+                            if merge_result.success:
+                                print(f"  Merged to main", flush=True)
+                            else:
+                                # Merge failed - this should trigger Phoenix retry
+                                print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
+                                # Override the result to failed status
+                                result = WorkerResult(
+                                    status="failed",
+                                    result_path=result.result_path,
+                                    aar=AAR(
+                                        summary=f"Merge failed: {merge_result.error_message[:200]}",
+                                        approach=result.aar.approach if result.aar else "unknown",
+                                        challenges=[merge_result.error_message] if result.aar else [],
+                                        decisions_made=result.aar.decisions_made if result.aar else [],
+                                        files_modified=result.aar.files_modified if result.aar else []
+                                    ),
+                                    messages=result.messages if hasattr(result, 'messages') else []
+                                )
+                        except Exception as e:
+                            print(f"  ❌ Merge exception: {e}", flush=True)
+                            import traceback
+                            traceback.print_exc()
+                            # Override to failed
                             result = WorkerResult(
                                 status="failed",
-                                result_path=result.result_path,
+                                result_path="",
                                 aar=AAR(
-                                    summary=f"Merge failed: {merge_result.error_message[:200]}",
-                                    approach=result.aar.approach if result.aar else "unknown",
-                                    challenges=[merge_result.error_message] if result.aar else [],
-                                    decisions_made=result.aar.decisions_made if result.aar else [],
-                                    files_modified=result.aar.files_modified if result.aar else []
-                                ),
-                                messages=result.messages if hasattr(result, 'messages') else []
+                                    summary=f"Merge exception: {str(e)[:200]}",
+                                    approach="failed",
+                                    challenges=[str(e)],
+                                    decisions_made=[],
+                                    files_modified=[]
+                                )
                             )
-                    except Exception as e:
-                        print(f"  ❌ Merge exception: {e}", flush=True)
-                        import traceback
-                        traceback.print_exc()
-                        # Override to failed
-                        result = WorkerResult(
-                            status="failed",
-                            result_path="",
-                            aar=AAR(
-                                summary=f"Merge exception: {str(e)[:200]}",
-                                approach="failed",
-                                challenges=[str(e)],
-                                decisions_made=[],
-                                files_modified=[]
-                            )
-                        )
                         
             except Exception as e:
                 print(f"  Warning: Failed to commit: {e}", flush=True)

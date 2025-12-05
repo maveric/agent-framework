@@ -230,22 +230,34 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     all_tasks = [_dict_to_task(t) for t in tasks]
     updates = []
     
-    # PERF: Print batch summary of recently completed tasks
-    completed_tasks = [t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"]
-    failed_tasks = [t for t in tasks if t.get("status") == "failed"]
-    active_tasks = [t for t in tasks if t.get("status") == "active"]
-    ready_tasks = [t for t in tasks if t.get("status") == "ready"]
+    # PERF: Print batch summary ONLY when counts change
+    completed_count = len([t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"])
+    failed_count = len([t for t in tasks if t.get("status") == "failed"])
+    active_count = len([t for t in tasks if t.get("status") == "active"])
+    ready_count = len([t for t in tasks if t.get("status") == "ready"])
     
-    if completed_tasks or failed_tasks or active_tasks:
+    # Track previous counts in state
+    prev_counts = state.get("_director_prev_counts", {})
+    current_counts = {
+        "complete": completed_count,
+        "failed": failed_count, 
+        "active": active_count,
+        "ready": ready_count
+    }
+    
+    # Only print if counts have changed
+    if current_counts != prev_counts and (completed_count or failed_count or active_count):
         print(f"\n{'='*60}", flush=True)
         print(f"📊 BATCH STATUS SUMMARY", flush=True)
         print(f"{'='*60}", flush=True)
-        print(f"  ✅ Complete/QA: {len(completed_tasks)}", flush=True)
-        print(f"  🔄 Active:      {len(active_tasks)}", flush=True)
-        print(f"  📋 Ready:       {len(ready_tasks)}", flush=True)
-        print(f"  ❌ Failed:      {len(failed_tasks)}", flush=True)
+        print(f"  ✅ Complete/QA: {completed_count}", flush=True)
+        print(f"  🔄 Active:      {active_count}", flush=True)
+        print(f"  📋 Ready:       {ready_count}", flush=True)
+        print(f"  ❌ Failed:      {failed_count}", flush=True)
         
         # Show individual task timings for recently changed tasks
+        completed_tasks = [t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"]
+        failed_tasks = [t for t in tasks if t.get("status") == "failed"]
         for t in [*completed_tasks[-5:], *failed_tasks[-3:]]:  # Last 5 complete, 3 failed
             status_icon = "✅" if t.get("status") in ["complete", "awaiting_qa"] else "❌"
             task_id = t.get("id", "?")[:8]
@@ -429,7 +441,9 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     # NOTE: AWAITING_QA counts as "done" for planners - they don't need QA, their output is suggestions
     active_planners = [t for t in planner_tasks if t.status not in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA]]
     
-    if active_planners:
+    # Only print waiting message when count changes
+    prev_active_planners = state.get("_prev_active_planners", -1)
+    if active_planners and len(active_planners) != prev_active_planners:
         print(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans.", flush=True)
     elif replan_requested:
         # MANUAL REPLAN TRIGGER
