@@ -955,6 +955,24 @@ The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 
     # Stronger system prompt to force file creation
     system_prompt = f"""You are a software engineer. Implement the requested feature.
+
+⚠️ CRITICAL: NEVER HTML-ESCAPE CODE ⚠️
+When calling write_file, you MUST pass raw, unescaped code EXACTLY as it should appear in the file.
+
+WRONG (will break ALL code files):
+- &lt;div&gt; instead of <div>
+- &quot;hello&quot; instead of "hello"  
+- &amp;lt; instead of &lt;
+- &gt; instead of >
+- &amp; instead of &
+
+CORRECT - Write the LITERAL characters:
+- <html><body><div class="example">
+- "hello world" or 'test'
+- if (x < y && a > b)
+
+HTML/XML entities will completely DESTROY all code files. Write raw strings ONLY.
+
 {platform_warning}
 
 CRITICAL INSTRUCTIONS:
@@ -1045,7 +1063,32 @@ finally:
 - Do NOT modify the file just to "touch" it.
 - Use the `report_existing_implementation` tool to prove you checked it.
 - Provide the file path and a summary of why it's correct.
+
+**IF YOUR TASK INVOLVES WRITING TESTS**:
+If your task description includes writing tests, running tests, or verifying functionality:
+1. Write the test files to the appropriate location (e.g., `tests/` folder)
+2. Run the tests using `run_shell` or `run_python`
+3. **MANDATORY**: Write a test results file to `agents-work/test-results/test-{{component}}.md`
+
+Use this template:
+```markdown
+# Test Results: {{component}}
+
+## Command Run
+`python -m pytest tests/test_example.py -v`
+
+## Output
+```
+(paste actual test output here)
+```
+
+## Summary
+✅ All tests passed (X/Y) OR ❌ X tests failed
+```
+
+If you don't create the results file, QA will fail your task.
 """
+
     
     return await _execute_react_loop(task, tools, system_prompt, state, config)
 

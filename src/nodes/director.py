@@ -619,7 +619,10 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     # Return updates and logs
     if updates:
         result["tasks"] = updates
-    result["replan_requested"] = False
+    
+    # Only clear replan_requested if it was set
+    if state.get("replan_requested"):
+        result["replan_requested"] = False
     
     # Save state for log de-duplication
     result["_director_prev_counts"] = current_counts
@@ -919,13 +922,13 @@ def _evaluate_readiness(task: Task, all_tasks: List[Task]) -> TaskStatus:
             return TaskStatus.BLOCKED
             
         if not dep:
-            print(f"  Task {task.id} waiting: Dependency {dep_id} NOT FOUND", flush=True)
+            # print(f"  Task {task.id} waiting: Dependency {dep_id} NOT FOUND", flush=True)
             return TaskStatus.PLANNED
             
         if dep.status != TaskStatus.COMPLETE:
             # Only print if dependency is not PLANNED (to avoid spamming for deep chains)
-            if dep.status != TaskStatus.PLANNED:
-                print(f"  Task {task.id} waiting: {dep.component} ({dep.id}) is {dep.status}", flush=True)
+            # if dep.status != TaskStatus.PLANNED:
+            #     print(f"  Task {task.id} waiting: {dep.component} ({dep.id}) is {dep.status}", flush=True)
             return TaskStatus.PLANNED
     
     return TaskStatus.READY

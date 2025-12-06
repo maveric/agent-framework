@@ -9,6 +9,8 @@ import { TaskDetailsContent } from '../components/TaskDetailsContent';
 import { InterruptModal } from '../components/InterruptModal';
 import { LogPanel } from '../components/LogPanel';
 import { CancelRunButton } from '../components/CancelRunButton';
+import { RestartRunButton } from '../components/RestartRunButton';
+
 interface Task {
     id: string;
     description: string;
@@ -304,6 +306,10 @@ export function RunDetails() {
                             {isReplanning ? 'Replanning...' : 'Trigger Replan'}
                         </button>
                         <CancelRunButton
+                            runId={runId!}
+                            status={run?.status || ''}
+                        />
+                        <RestartRunButton
                             runId={runId!}
                             status={run?.status || ''}
                         />

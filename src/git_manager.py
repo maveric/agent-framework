@@ -510,7 +510,51 @@ class WorktreeManager:
             if conflicted_files:
                 print(f"  📝 Conflicted files: {conflicted_files}", flush=True)
                 
-                # Try LLM-assisted resolution
+                # Fast-path: Auto-resolve test result and doc files (disposable)
+                auto_resolve_patterns = ['agents-work/test-results/', 'agents-work/plans/']
+                auto_resolved = []
+                for cf in conflicted_files[:]:  # Copy list to allow modification
+                    if any(pattern in cf for pattern in auto_resolve_patterns):
+                        # Just accept the incoming (theirs) version for these files
+                        try:
+                            subprocess.run(
+                                ["git", "checkout", "--theirs", cf],
+                                cwd=self.repo_path,
+                                check=True,
+                                capture_output=True
+                            )
+                            subprocess.run(
+                                ["git", "add", cf],
+                                cwd=self.repo_path,
+                                check=True,
+                                capture_output=True
+                            )
+                            auto_resolved.append(cf)
+                            conflicted_files.remove(cf)
+                            print(f"  ✅ Auto-resolved (accept incoming): {cf}", flush=True)
+                        except Exception as e:
+                            print(f"  ⚠️ Failed to auto-resolve {cf}: {e}", flush=True)
+                
+                # If all conflicts are auto-resolved, we can proceed without LLM
+                if not conflicted_files:
+                    commit_result = subprocess.run(
+                        ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - auto-resolved conflicts"],
+                        cwd=self.repo_path,
+                        capture_output=True,
+                        text=True
+                    )
+                    if commit_result.returncode == 0:
+                        print(f"  ✅ All conflicts auto-resolved for {task_id}", flush=True)
+                        info.status = WorktreeStatus.MERGED
+                        info.merged_at = datetime.now()
+                        return MergeResult(
+                            success=True,
+                            task_id=task_id,
+                            llm_resolved=False,
+                            conflicting_files=auto_resolved
+                        )
+                
+                # Try LLM-assisted resolution for remaining files
                 if _llm_resolve_conflict(self.repo_path, conflicted_files):
                     # LLM resolved the conflicts - complete the merge
                     commit_result = subprocess.run(

@@ -115,6 +115,23 @@ class ConnectionManager:
         if websocket not in self.subscriptions[run_id]:
             self.subscriptions[run_id].append(websocket)
             logger.info(f"Subscribed to {run_id}. Total subscribers: {len(self.subscriptions[run_id])}")
+            
+            # IMMEDIATELY send current state so client doesn't have to wait for next task update
+            if run_id in runs_index:
+                run_data = runs_index[run_id]
+                try:
+                    await websocket.send_json({
+                        "type": "state_update",
+                        "run_id": run_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "payload": {
+                            "status": run_data.get("status", "running"),
+                            "task_counts": run_data.get("task_counts", {}),
+                            "objective": run_data.get("objective", ""),
+                        }
+                    })
+                except Exception as e:
+                    logger.error(f"Error sending initial state: {e}")
 
     async def unsubscribe(self, websocket: WebSocket, run_id: str):
         if run_id in self.subscriptions and websocket in self.subscriptions[run_id]:
@@ -177,6 +194,10 @@ async def lifespan(app: FastAPI):
         traceback.print_exc()
         raise
     
+    # Initialize our custom runs table
+    from run_persistence import init_runs_table
+    await init_runs_table()
+    
     logger.info("Starting Orchestrator Server")
     
     # Register signal handlers for cleanup
@@ -238,6 +259,9 @@ runs_index: Dict[str, Dict[str, Any]] = {}
 
 # Track running background tasks for cancellation
 running_tasks: Dict[str, Any] = {}  # run_id -> asyncio.Task
+
+# Store full run states for restart capability
+run_states: Dict[str, Dict[str, Any]] = {}  # run_id -> full state dict
 
 # Global checkpointer (initialized at startup)
 global_checkpointer = None
@@ -340,97 +364,57 @@ async def ensure_run_in_index(run_id: str) -> bool:
 
 @app.get("/api/runs", response_model=List[RunSummary])
 async def list_runs():
-    # Query the DB for all threads using async checkpointer
-    summaries = []
+    """List all runs from database and merge with in-memory active runs."""
+    from run_persistence import list_all_runs
     
-    try:
-        # Ensure graph/checkpointer is initialized
-        orchestrator = get_orchestrator_graph()
-        logger.info("📊 /api/runs called - querying database...")
-        # Get async connection from checkpointer
-        conn = global_checkpointer.conn
-        cursor = await conn.cursor()
+    logger.info("📊 /api/runs called - querying database...")
+    
+    # Get runs from our custom table
+    db_runs = await list_all_runs()
+    
+    # Convert to RunSummary objects
+    summaries = []
+    seen_run_ids = set()
+    
+    for run_data in db_runs:
+        run_id = run_data.get("run_id")
+        seen_run_ids.add(run_id)
         
-        # Get distinct thread_ids
-        await cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
-        rows = await cursor.fetchall()
-        thread_ids = [row[0] for row in rows]
+        summaries.append(RunSummary(
+            run_id=run_id,
+            objective=run_data.get("objective", ""),
+            status=run_data.get("status", "unknown"),
+            created_at=run_data.get("created_at", ""),
+            updated_at=run_data.get("updated_at", ""),
+            task_counts=run_data.get("task_counts", {}),
+            tags=run_data.get("tags", []),
+            workspace_path=run_data.get("workspace_path", "")
+        ))
         
-        for thread_id in thread_ids:
-            # Get latest state for this thread
-            config = {"configurable": {"thread_id": thread_id}}
-            state_snapshot = await orchestrator.aget_state(config)
-            
-            if state_snapshot and state_snapshot.values:
-                state = state_snapshot.values
-                
-                # Extract info
-                run_id = state.get("run_id", thread_id)
-                objective = state.get("objective", "Unknown")
-                
-                strat_status = state.get("strategy_status", "progressing")
-                
-                # Check for interrupts/pauses
-                is_interrupted = False
-                if state_snapshot.tasks and len(state_snapshot.tasks) > 0 and state_snapshot.tasks[0].interrupts:
-                     is_interrupted = True
-                     
-                if strat_status == "complete":
-                    status = "completed"
-                elif is_interrupted:
-                    status = "waiting_human" # Or "interrupted", but waiting_human is more descriptive for queue
-                elif strat_status == "paused_human_requested":
-                    status = "paused"
-                elif strat_status == "paused_infra_error":
-                    status = "failed"
-                elif strat_status == "blocked":
-                    status = "blocked"
-                elif strat_status == "stagnating":
-                    status = "stagnating"
-                else:
-                    status = "running"
-                
-                created_at = state.get("created_at", "")
-                updated_at = state.get("updated_at", "")
-                
-                tasks = state.get("tasks", [])
-                task_counts = {
-                    "planned": len([t for t in tasks if getattr(t, "status", "") == "planned"]),
-                    "completed": len([t for t in tasks if getattr(t, "status", "") == "complete"]),
-                    "failed": len([t for t in tasks if getattr(t, "status", "") == "failed"]),
-                    "active": len([t for t in tasks if getattr(t, "status", "") == "active"]),
-                }
-                
-                summaries.append(RunSummary(
-                    run_id=run_id,
-                    objective=objective,
-                    status=status,
-                    created_at=created_at,
-                    updated_at=updated_at,
-                    task_counts=task_counts,
-                    tags=state.get("tags", []),
-                    workspace_path=state.get("_workspace_path", "")
-                ))
-                
-                # Also update runs_index for other endpoints
-                runs_index[run_id] = {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "objective": objective,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                    "task_counts": task_counts,
-                    "tags": state.get("tags", [])
-                }
-                
-    except Exception as e:
-        logger.error(f"Error listing runs: {e}")
+        # Update runs_index for other endpoints
+        if run_id not in runs_index:
+            runs_index[run_id] = run_data
+    
+    # CRITICAL: Include active runs from in-memory runs_index
+    # These may not be in the database yet
+    for run_id, run_data in runs_index.items():
+        if run_id not in seen_run_ids:
+            summaries.append(RunSummary(
+                run_id=run_data.get("run_id", run_id),
+                objective=run_data.get("objective", ""),
+                status=run_data.get("status", "running"),
+                created_at=run_data.get("created_at", ""),
+                updated_at=run_data.get("updated_at", ""),
+                task_counts=run_data.get("task_counts", {}),
+                tags=run_data.get("tags", []),
+                workspace_path=run_data.get("workspace_path", "")
+            ))
     
     # Sort by created_at descending (most recent first)
     summaries.sort(key=lambda x: x.created_at, reverse=True)
         
     return summaries
+
 
 @app.post("/api/runs")
 async def create_run(request: CreateRunRequest, background_tasks: BackgroundTasks):
@@ -501,6 +485,8 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
 
 @app.get("/api/runs/{run_id}")
 async def get_run(run_id: str):
+    from run_persistence import load_run_state
+    
     # Try to refresh from DB if not in memory
     if run_id not in runs_index:
         await list_runs()
@@ -508,92 +494,72 @@ async def get_run(run_id: str):
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
         
-    # Retrieve latest state from graph
     run_data = runs_index[run_id]
     
-    # Get detailed state from checkpointer
-    # Get detailed state from checkpointer
-    try:
-        orchestrator = get_orchestrator_graph()
-        config = {"configurable": {"thread_id": run_data["thread_id"]}}
+    # First try in-memory state
+    state = run_states.get(run_id)
+    
+    # Fallback to database
+    if not state:
+        state = await load_run_state(run_id)
+    
+    if state:
+        # Serialize task memories
+        task_memories = {}
+        raw_memories = state.get("task_memories", {})
+        logger.info(f"🔍 get_run found task_memories for: {list(raw_memories.keys())}")
+        for task_id, messages in raw_memories.items():
+            task_memories[task_id] = _serialize_messages(messages)
         
-        # Use aget_state to get the full snapshot including interrupts
-        state_snapshot = await orchestrator.aget_state(config)
-        
+        # Check for interrupt data
         interrupt_data = None
-        if state_snapshot.tasks:
-            # Check for interrupts in the tasks
-            for task in state_snapshot.tasks:
-                if task.interrupts:
-                    # We assume the first interrupt holds our data
-                    interrupt_data = task.interrupts[0].value
-                    logger.info(f"🔍 Found interrupt in get_run: {interrupt_data}")
-                    break
-        
-        if not interrupt_data:
-            # Fallback: Check for tasks manually marked as waiting_human
-            # This handles cases where we manually updated state but didn't create a LangGraph interrupt
-            if state_snapshot and state_snapshot.values:
-                tasks = state_snapshot.values.get("tasks", [])
-                for t in tasks:
-                    # Handle both dict and object access
-                    status = t.get("status") if isinstance(t, dict) else getattr(t, "status", None)
-                    task_id = t.get("id") if isinstance(t, dict) else getattr(t, "id", None)
-                    
-                    if status == "waiting_human" or status == TaskStatus.WAITING_HUMAN:
-                        logger.info(f"🔍 Found waiting_human task in get_run: {task_id}")
-                        interrupt_data = {
-                            "task_id": task_id,
-                            "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in tasks],
-                            "reason": "Restored from persisted state"
-                        }
-                        break
+        tasks = state.get("tasks", [])
+        for t in tasks:
+            status = t.get("status") if isinstance(t, dict) else getattr(t, "status", None)
+            task_id = t.get("id") if isinstance(t, dict) else getattr(t, "id", None)
+            
+            if status == "waiting_human" or status == TaskStatus.WAITING_HUMAN:
+                logger.info(f"🔍 Found waiting_human task in get_run: {task_id}")
+                interrupt_data = {
+                    "task_id": task_id,
+                    "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in tasks],
+                    "reason": "Restored from persisted state"
+                }
+                break
         
         if not interrupt_data:
             logger.info("ℹ️ No interrupt data found in get_run")
         else:
-            # Ensure it's added to the response
             run_data["interrupt_data"] = interrupt_data
-            run_data["status"] = "interrupted" # Force status to interrupted if we found data
+            run_data["status"] = "interrupted"
         
-        if state_snapshot and state_snapshot.values:
-            state = state_snapshot.values
-            
-            # Serialize task memories
-            task_memories = {}
-            raw_memories = state.get("task_memories", {})
-            logger.info(f"🔍 get_run found task_memories for: {list(raw_memories.keys())}")
-            for task_id, messages in raw_memories.items():
-                task_memories[task_id] = _serialize_messages(messages)
-            
-            return {
-                **run_data,
-                "spec": state.get("spec", {}),
-                "strategy_status": state.get("strategy_status", "active"),
-                "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])],
-                "insights": state.get("insights", []),
-                "design_log": state.get("design_log", []),
-                "guardian": state.get("guardian", {}),
-                "workspace_path": state.get("_workspace_path", ""),
-                "model_config": _serialize_orch_config(state.get("orch_config")),
-                "task_memories": task_memories,
-                "interrupt_data": interrupt_data  # Include persistent interrupt data
-            }
-    except Exception as e:
-        logger.error(f"Error getting run details: {e}")
-        import traceback
-        traceback.print_exc()
-
+        return {
+            **run_data,
+            "spec": state.get("spec", {}),
+            "strategy_status": state.get("strategy_status", "active"),
+            "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in tasks],
+            "insights": state.get("insights", []),
+            "design_log": state.get("design_log", []),
+            "guardian": state.get("guardian", {}),
+            "workspace_path": state.get("_workspace_path", run_data.get("workspace_path", "")),
+            "model_config": _serialize_orch_config(state.get("orch_config")),
+            "task_memories": task_memories,
+            "interrupt_data": interrupt_data
+        }
+    
+    # No state found - return minimal data
+    logger.warning(f"⚠️ No state found for run {run_id}")
     return {
         **run_data,
         "spec": {},
-        "strategy_status": "active",
+        "strategy_status": "unknown",
         "tasks": [],
         "insights": [],
         "design_log": [],
         "guardian": {},
         "task_memories": {}
     }
+
 
 @app.post("/api/runs/{run_id}/pause")
 async def pause_run(run_id: str):
@@ -757,6 +723,8 @@ async def interrupt_task(run_id: str, task_id: str):
 @app.post("/api/runs/{run_id}/cancel")
 async def cancel_run(run_id: str):
     """Cancel a running task."""
+    from run_persistence import save_run_state
+    
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
     
@@ -776,6 +744,10 @@ async def cancel_run(run_id: str):
     runs_index[run_id]["status"] = "cancelled"
     runs_index[run_id]["updated_at"] = datetime.now().isoformat()
     
+    # Save cancelled state to database
+    if run_id in run_states:
+        await save_run_state(run_id, run_states[run_id], status="cancelled")
+    
     # Broadcast cancellation
     await manager.broadcast_to_run(run_id, {
         "type": "cancelled",
@@ -789,6 +761,76 @@ async def cancel_run(run_id: str):
     })
     
     return {"status": "cancelled", "run_id": run_id}
+
+
+@app.post("/api/runs/{run_id}/restart")
+async def restart_run(run_id: str):
+    """Restart a stopped/crashed/cancelled run from its last state."""
+    from run_persistence import load_run_state
+    
+    state = None
+    
+    # Try in-memory first
+    if run_id in run_states:
+        state = run_states[run_id]
+    else:
+        # Try database
+        state = await load_run_state(run_id)
+    
+    if not state:
+        if run_id not in runs_index:
+            raise HTTPException(status_code=404, detail="Run not found - no state available to restart")
+        return {"status": "error", "message": "No saved state available for restart. Run data exists but full state was lost."}
+    
+    # Check if already running
+    if run_id in running_tasks and not running_tasks[run_id].done():
+        return {"status": "already_running", "message": "Run is already active"}
+
+    
+    # Get workspace and thread info from state
+    workspace_path = state.get("_workspace_path", "")
+    thread_id = runs_index.get(run_id, {}).get("thread_id", f"thread_{run_id}")
+    
+    # Rebuild run_config
+    run_config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "mock_mode": state.get("mock_mode", False)
+        }
+    }
+    
+    # Reset any 'active' tasks back to 'ready' so they get re-dispatched
+    tasks = state.get("tasks", [])
+    for task in tasks:
+        if task.get("status") == "active":
+            task["status"] = "ready"
+            logger.info(f"  Reset active task {task.get('id')} to ready for restart")
+    
+    # Update status
+    runs_index[run_id]["status"] = "running"
+    runs_index[run_id]["updated_at"] = datetime.now().isoformat()
+    
+    logger.info(f"🔄 Restarting run {run_id}")
+    
+    # Create new background task for the dispatch loop
+    task = asyncio.create_task(_continuous_dispatch_loop(run_id, state, run_config))
+    running_tasks[run_id] = task
+    
+    # Cleanup when done
+    def cleanup(t):
+        logger.info(f"Cleaned up task for run {run_id}")
+        if run_id in running_tasks:
+            del running_tasks[run_id]
+    
+    task.add_done_callback(cleanup)
+    
+    # Broadcast update
+    await manager.broadcast({
+        "type": "run_list_update",
+        "payload": list(runs_index.values())
+    })
+    
+    return {"status": "restarted", "run_id": run_id, "message": "Run restarted from saved state"}
 
 @app.get("/api/runs/{run_id}/interrupts")
 async def get_interrupts(run_id: str):
@@ -1123,7 +1165,8 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     
     try:
         while iteration < max_iterations:
-            iteration += 1
+            # Reset activity flag for this cycle
+            activity_occurred = False
             
             # ========== PHASE 1: Process completed workers ==========
             completed = task_queue.collect_completed()
@@ -1146,18 +1189,50 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                         # Merge updates
                                         task.update(rt)
                                         break
-                            logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
+                            # Merge tool outputs/messages to task_memories (for chat log in UI)
+                                if "messages" in c.result:
+                                    messages = c.result["messages"]
+                                    if messages:
+                                        current_memories = state.get("task_memories", {})
+                                        # Use update to avoid overwriting other task memories
+                                        # But we want to replace THIS task's memory with the full log
+                                        current_memories[c.task_id] = messages
+                                        state["task_memories"] = current_memories
+                                
+                                        state["task_memories"] = current_memories
+                                
+                                logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
+                                
+                                # Log files modified if any
+                                if task.get("aar") and task["aar"].get("files_modified"):
+                                    files = task["aar"]["files_modified"]
+                                    logger.info(f"     📂 Modified {len(files)} file(s): {', '.join(files)}")
+                                
+                                # Activity occurred
+                                activity_occurred = True
                         break
+                
+                # Save checkpoint to database after worker updates
+                # TODO: Fix persistence - aupdate_state triggers old graph execution
+                # if completed:
+                #     try:
+                #         orchestrator = get_orchestrator_graph()
+                #         await orchestrator.aupdate_state(run_config, state, as_node="worker")
+                #     except Exception as e:
+                #         logger.error(f"Failed to save checkpoint: {e}")
                 
                 # Broadcast state update
                 await _broadcast_state_update(run_id, state)
             
             # ========== PHASE 2: Run Director (evaluates readiness, creates tasks) ==========
-            # logger.info(f"  ▶️  Director cycle {iteration}") # Spammy
-            
             # Director modifies state directly
             director_result = await director_node(state, run_config)
             if director_result:
+                # Only count as activity if meaningful state changed (ignore internal counters)
+                meaningful_keys = ["tasks", "insights", "design_log", "replan_requested"]
+                if any(key in director_result for key in meaningful_keys):
+                    activity_occurred = True
+                
                 # Merge director updates into state (applying reducers)
                 for key, value in director_result.items():
                     if key == "tasks":
@@ -1170,6 +1245,13 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                         state["design_log"] = design_log_reducer(state.get("design_log", []), value)
                     elif key != "_wt_manager":  # Don't overwrite internal objects
                         state[key] = value
+                
+                # TODO: Fix persistence - aupdate_state triggers old graph execution
+                # try:
+                #     orchestrator = get_orchestrator_graph()
+                #     await orchestrator.aupdate_state(run_config, state, as_node="director")
+                # except Exception as e:
+                #     logger.error(f"Failed to save checkpoint: {e}")
             
             # ========== PHASE 3: Find and dispatch ready tasks ==========
             ready_tasks = [t for t in state.get("tasks", []) if t.get("status") == "ready"]
@@ -1197,6 +1279,7 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 worker_state = {**state, "task_id": task_id}
                 task_queue.spawn(task_id, worker_node(worker_state, run_config))
                 dispatched += 1
+                activity_occurred = True
                 
                 logger.info(f"  🚀 Dispatched: {task_id[:12]} ({task.get('assigned_worker_profile', 'unknown')})")
             
@@ -1215,6 +1298,7 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 logger.info(f"  🔍 QA evaluating: {task.get('id', '')[:12]}")
                 strategist_result = await strategist_node({**state, "task_id": task.get("id")}, run_config)
                 if strategist_result:
+                    activity_occurred = True
                     for key, value in strategist_result.items():
                         if key == "tasks":
                             # Update the specific task
@@ -1236,6 +1320,11 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             if all_terminal and not task_queue.has_work:
                 logger.info(f"✅ All tasks complete! Ending run {run_id}")
                 runs_index[run_id]["status"] = "completed"
+                
+                # Save completed state to database
+                from run_persistence import save_run_state
+                await save_run_state(run_id, state, status="completed")
+                
                 await _broadcast_state_update(run_id, state)
                 break
             
@@ -1244,9 +1333,12 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             if waiting_human and not task_queue.has_work:
                 logger.info(f"⏸️  Run paused for human intervention")
                 runs_index[run_id]["status"] = "interrupted"
+                
+                # Save interrupted state to database
+                from run_persistence import save_run_state
+                await save_run_state(run_id, state, status="interrupted")
                 break
             
-            # No work and no ready tasks? Check if we're stuck
             # No work and no ready tasks? Check if we're stuck
             if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa:
                 # Check for planned tasks that might become ready
@@ -1274,6 +1366,11 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 # Small delay to prevent tight loop
                 await asyncio.sleep(0.1)
             
+            # Only increment iteration if something actually happened
+            # This prevents 500 max_iterations from being reached just by idling
+            if activity_occurred:
+                iteration += 1
+            
             # Update run status
             runs_index[run_id].update({
                 "status": "running",
@@ -1285,16 +1382,35 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                     "failed": len([t for t in all_tasks if t.get("status") == "failed"]),
                 }
             })
+            
+            # Save full state for restart capability (both in-memory and database)
+            run_states[run_id] = state.copy()
+            
+            # Persist to database
+            from run_persistence import save_run_state
+            await save_run_state(run_id, state, status="running")
         
         if iteration >= max_iterations:
             logger.error(f"❌ Max iterations ({max_iterations}) reached for run {run_id}")
             runs_index[run_id]["status"] = "failed"
+            
+            # Save failed state to database
+            from run_persistence import save_run_state
+            await save_run_state(run_id, state, status="failed")
     
     except Exception as e:
         logger.error(f"❌ Continuous dispatch error: {e}")
         import traceback
         traceback.print_exc()
         runs_index[run_id]["status"] = "failed"
+        
+        # Save error state to database
+        try:
+            from run_persistence import save_run_state
+            await save_run_state(run_id, state, status="failed")
+        except Exception as e2:
+            logger.error(f"Failed to save error checkpoint: {e2}")
+        
         await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
     
     finally:
@@ -1310,12 +1426,20 @@ async def _broadcast_state_update(run_id: str, state: dict):
     """Broadcast state update to connected clients."""
     try:
         serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
+        
+        # Serialize task_memories (LLM conversations)
+        task_memories = {}
+        raw_memories = state.get("task_memories", {})
+        for task_id, messages in raw_memories.items():
+            task_memories[task_id] = _serialize_messages(messages)
+
         await manager.broadcast_to_run(run_id, {
             "type": "state_update",
             "payload": {
                 "tasks": serialized_tasks,
                 "status": runs_index[run_id].get("status", "running"),
-                "task_counts": runs_index[run_id].get("task_counts", {})
+                "task_counts": runs_index[run_id].get("task_counts", {}),
+                "task_memories": task_memories
             }
         })
     except Exception as e:
