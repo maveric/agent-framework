@@ -1107,6 +1107,37 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
     spec_content = spec.get("content", "No design specification available")
     objective = state.get("objective", "")
     
+    # [NEW] Get Existing Pending/Active Tasks for Context
+    # We want the LLM to be aware of what's already running or planned so it can
+    # 1. Avoid duplication
+    # 2. Reorganize/Link new suggestions to the correct place in the tree
+    existing_tasks = state.get("tasks", [])
+    relevant_existing_tasks = []
+    
+    for t_dict in existing_tasks:
+        # We only care about active process tasks to integrate with
+        # We filter out COMPLETE/FAILED/ABANDONED/WAITING_HUMAN/AWAITING_QA (mostly)
+        # Actually, AWAITING_QA tasks are effectively complete.
+        status = t_dict.get("status")
+        if status in [TaskStatus.ACTIVE, TaskStatus.PLANNED, TaskStatus.READY]:
+            # Extract title from description if possible
+            desc = t_dict.get("description", "")
+            title = "Untitled"
+            if "Title: " in desc:
+                 title = desc.split("Title: ")[-1].strip()
+            
+            relevant_existing_tasks.append({
+                "id": t_dict.get("id"),
+                "title": title,
+                "component": t_dict.get("component"),
+                "phase": t_dict.get("phase"),
+                "status": status,
+                "description": desc,
+                "depends_on": t_dict.get("depends_on", [])
+            })
+
+    print(f"  Including {len(relevant_existing_tasks)} active/pending tasks in integration context.", flush=True)
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """You are the Lead Architect integrating project plans.
         
@@ -1115,59 +1146,47 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
         DESIGN SPECIFICATION (THE SCOPE BOUNDARY):
         {spec_content}
         
+        EXISTING ACTIVE/PENDING TASKS (THE RUNNING SYSTEM):
+        {existing_tasks_json}
+        
         INPUT: Proposed tasks from planners and workers.
         
         YOUR JOB - IN THIS EXACT ORDER:
-        1. **Deduplicate**: Merge duplicate or nearly-identical tasks.
+        1. **Deduplicate & Merge**: 
+           - Check if proprosed tasks already exist in "EXISTING TASKS".
+           - unmatched proposed tasks should be added.
+           - If a proposed task matches an EXISTING task, UPDATE it (keep ID if possible? No, you return a list, we match by title).
+           - MERGE duplicate suggestions.
         
         2. **Validate Scope**: Check EACH task against the design specification.
            - REJECT tasks that are not in the spec (accessibility, CI/CD, extensive testing utilities, etc.)
            - APPROVE tasks that implement the spec
            - Be strict - only what's in the spec gets built
            
-        3. **Identify Gaps**: After rejecting out-of-scope tasks, check for broken dependencies.
-           - Did rejection create orphaned tasks?
-           - Are there missing links between components? (e.g., backend ↔ frontend integration)
-           - Do tests depend on non-existent tasks?
+        3. **Integration & Reorganization**:
+           - You MUST Output the FULL list of tasks that should be in the plan (Existing + New).
+           - **CRITICAL**: You can (and should) REWIRE dependencies of EXISTING ACTIVE tasks if necessary to fix the tree.
+           - Ensure proper `depends_on` using EXACT TITLES.
            
-        4. **Fill Gaps (YOU HAVE AUTHORITY)**: Create minimal necessary tasks to bridge gaps.
-           - Example: If backend and frontend exist but no integration test, create one
-           - Example: If frontend depends on rejected API utility, create minimal API connection task
-           - Keep it minimal - ONLY what's needed for dependencies to work
-        
-        5. **Link Dependencies**: Create a SINGLE unified dependency tree.
-           - **NO SILOS**: Frontend, Backend, and Tests must be interconnected
-           - **Backend first**: Frontend MUST depend on backend API being built
-           - **Tests last**: ALL test tasks MUST depend on what they're testing
-           - **Integration tests**: MUST depend on BOTH frontend AND backend completion
-           - **CRITICAL**: Every task must trace back to root - no independent trees
-           - Example flow: Backend DB → Backend API → Frontend → Integration Tests
-           - If you see disconnected trees, ADD dependency links to connect them
-
-        6. **MANDATORY TEST VALIDATION**: 
-           - Check if ANY tasks have phase="test" (e.g., test_worker, validation, verification, E2E)
-           - If NO test tasks exist: 
-             * CREATE a "Final validation: [project name] test suite" task with phase="test"
-             * This task must depend on ALL leaf tasks (tasks that nothing else depends on)
-             * Assigned to test_worker profile
-             * Acceptance criteria: Run all tests and verify functionality
-           - The project MUST end with a test phase - it should be the final step in the dependency chain
+        4. **Dependency Rules**:
+           - **Backend first**: Frontend MUST depend on backend API.
+           - **Tests last**: ALL test tasks MUST depend on what they're testing.
+           - **Integration tests**: MUST depend on BOTH frontend AND backend.
+           - **No independent trees**: Every task must trace back to root (or other tasks).
            
-        7. **Return**: Two lists:
-           - `tasks`: Approved + gap-filling tasks with correct depends_on
-           - `rejected_tasks`: Out-of-scope tasks with reasons
+        5. **Return**: Two lists:
+           - `tasks`: The COMPLETE validated task list (Existing + New).
+           - `rejected_tasks`: Out-of-scope tasks with reasons.
         
         CRITICAL RULES:
-        - Design spec is LAW - reject anything not in it
-        - After rejection, you MUST check for gaps
-        - You MAY create minimal bridge tasks to fix broken dependencies
-        - **EVERY PROJECT MUST HAVE AT LEAST ONE TEST TASK** - create one if missing!
-        - No cycles in dependencies
-        - Use EXACT TITLES for depends_on
+        - Design spec is LAW.
+        - INCLUDE ALL RELEVANT EXISTING TASKS in your output list if they are still valid.
+        - If an existing task is no longer valid, do NOT include it (effectively removing it, or we handle abandonment later).
+        - **EVERY PROJECT MUST HAVE AT LEAST ONE TEST TASK**.
         """),
         ("user", "Proposed Tasks:\n{tasks_json}")
     ])
-
+    
     structured_llm = llm.with_structured_output(IntegrationResponse)
     
     print("  Calling LLM for plan integration with scope validation...", flush=True)
@@ -1189,15 +1208,18 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
                 "objective": objective,
                 "spec_content_length": len(spec_content),
                 "tasks_input_count": len(tasks_input),
-                "tasks_input": tasks_input  # Full list of 78 tasks
+                "existing_tasks_count": len(relevant_existing_tasks),
+                "tasks_input": tasks_input,
+                "existing_tasks_input": relevant_existing_tasks
             }, f, indent=2)
-        print(f"  [LOG] Director request: {request_log} ({len(tasks_input)} tasks)", flush=True)
+        print(f"  [LOG] Director request: {request_log} ({len(tasks_input)} new + {len(relevant_existing_tasks)} existing)", flush=True)
     
     try:
         response = await structured_llm.ainvoke(prompt.format(
             objective=objective,
             spec_content=spec_content[:3000],  # Truncate if too long
-            tasks_json=str(tasks_input)
+            tasks_json=str(tasks_input),
+            existing_tasks_json=str(relevant_existing_tasks)
         ), config={"callbacks": []})
         
         # LOG: Director integration response

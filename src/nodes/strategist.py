@@ -62,8 +62,8 @@ CRITICAL: Distinguish between ACTUAL test execution vs aspirational documentatio
 
 Respond in this EXACT format:
 VERDICT: PASS or FAIL
-FEEDBACK: One sentence explaining why
-SUGGESTIONS: Comma-separated list of 2-3 improvements (or "None" if passing)
+FEEDBACK: Detailed description all reasons for verdict
+SUGGESTIONS: Comma-separated list of up to 7 improvements (or "None" if passing)
 
 Be strict:
 - FAIL if tests weren't actually executed
@@ -192,6 +192,25 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                             test_results_path = worktree_path / file
                         break
             
+            # Check for PROACTIVE FIXES (suggested_tasks) from the worker
+            # If the worker suggested fixes, we skip strict QA and reset to PLANNED
+            # so the Director can integrate the new tasks into the tree.
+            # EXCEPTION: Planners naturally produce suggested_tasks as their output, so we don't reset them.
+            if task.get("suggested_tasks") and task.get("assigned_worker_profile") != "planner_worker":
+                print(f"  [QA SKIP] Task {task_id} has suggested tasks. Resetting to PLANNED for Director integration.", flush=True)
+                task["status"] = "planned"
+                task["updated_at"] = datetime.now().isoformat()
+                updates.append(task)
+                
+                # Add a log entry
+                qa_messages = [
+                    SystemMessage(content="QA Evaluation Process"),
+                    HumanMessage(content=f"Worker proposed {len(task.get('suggested_tasks'))} fix tasks. Deferring to Director for integration."),
+                    SystemMessage(content="Verdict: PENDING INTEGRATION\nAction: Reset to PLANNED")
+                ]
+                task_memories[task_id] = qa_messages
+                continue
+
             # Check phase - only TEST tasks strictly require test result files
             task_phase = task.get("phase", "build") # Default to build if not set
             

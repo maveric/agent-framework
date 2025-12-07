@@ -610,12 +610,42 @@ async def replan_run(run_id: str):
         
         # Set replan_requested flag - director will handle blocking and waiting
         # Must use async version since this is an async function
-        await orchestrator.aupdate_state(config, {"replan_requested": True})
+        # [FIX] Added as_node="director" to resolve Ambiguous Update Error
+        await orchestrator.aupdate_state(config, {"replan_requested": True}, as_node="director")
         
         logger.info(f"Replan requested for run {run_id}. Director will re-integrate pending tasks.")
         return {"status": "replan_requested"}
     except Exception as e:
         logger.error(f"Failed to set replan_requested flag: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/runs/{run_id}/tasks/{task_id}")
+async def delete_task(run_id: str, task_id: str):
+    """Mark a task as ABANDONED and trigger replan."""
+    if run_id not in runs_index:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    try:
+        orchestrator = get_orchestrator_graph()
+        config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
+        
+        # Update task status to ABANDONED and request replan
+        # sending as_node="director" to attribute the change to the director
+        await orchestrator.aupdate_state(
+            config, 
+            {
+                "tasks": [{"id": task_id, "status": "abandoned", "updated_at": datetime.now().isoformat()}],
+                "replan_requested": True
+            },
+            as_node="director"
+        )
+        
+        logger.info(f"Task {task_id} marked ABANDONED and replan requested for run {run_id}.")
+        return {"status": "abandoned", "replan_requested": True}
+    except Exception as e:
+        logger.error(f"Failed to delete task: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
