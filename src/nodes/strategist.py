@@ -307,11 +307,9 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                     HumanMessage(content=f"Test Results:\n{test_content[:500]}..." if test_content else "No test content"),
                     SystemMessage(content=f"Verdict: {'PASS' if qa_verdict['passed'] else 'FAIL'}\nFeedback: {qa_verdict['overall_feedback']}")
                 ]
-                # Get existing memories for this task (from worker), or empty list
-                # CRITICAL: Use state.get to read current memories, not task_memories dict
-                existing_memories = state.get("task_memories", {}).get(task_id, [])
-                # Append new QA messages to existing messages
-                task_memories[task_id] = existing_memories + qa_messages
+                # CRITICAL: Return ONLY the new QA messages. 
+                # The server's reducer will handle appending them to the existing worker history.
+                task_memories[task_id] = qa_messages
             
     # PENDING REORG: Show countdown after task completion
     pending_reorg = state.get("pending_reorg", False)

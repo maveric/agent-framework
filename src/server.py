@@ -1387,6 +1387,8 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                 for t in state["tasks"]:
                                     if t.get("id") == rt.get("id"):
                                         t.update(rt)
+                        elif key == "task_memories":
+                            state["task_memories"] = task_memories_reducer(state.get("task_memories", {}), value)
                         elif key != "_wt_manager":
                             state[key] = value
                 await _broadcast_state_update(run_id, state)

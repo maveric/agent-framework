@@ -821,11 +821,39 @@ Be specific enough that workers can implement without ambiguity."""),
 
     ])
     
+    # LOG: Director spec creation request
+    from pathlib import Path
+    import json
+    if workspace_path:
+        log_dir = Path(workspace_path) / ".llm_logs" / "director"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        request_log = log_dir / f"spec_request_{timestamp}.json"
+        with open(request_log, 'w', encoding='utf-8') as f:
+            json.dump({
+                "timestamp": datetime.now().isoformat(),
+                "type": "spec_creation",
+                "objective": objective,
+                "project_context_length": len(project_context)
+            }, f, indent=2)
+        print(f"  [LOG] Director spec request: {request_log}", flush=True)
+    
     try:
         spec_response = await llm.ainvoke(spec_prompt.format(objective=objective, project_context=project_context))
         spec_content = str(spec_response.content)
-
         
+        # LOG: Director spec response
+        if workspace_path:
+            response_log = log_dir / f"spec_response_{timestamp}.json"
+            with open(response_log, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "timestamp": datetime.now().isoformat(),
+                    "type": "spec_creation",
+                    "spec_length": len(spec_content),
+                    "spec_preview": spec_content[:1000] + "..." if len(spec_content) > 1000 else spec_content
+                }, f, indent=2)
+            print(f"  [LOG] Director spec response: {response_log} ({len(spec_content)} chars)", flush=True)        
         # Write spec to workspace
         if workspace_path:
             from pathlib import Path
@@ -905,27 +933,6 @@ Create planner tasks following this schema. Order them: infrastructure → featu
 
 Design Spec Summary:
 {spec_summary}
-
-Create feature-level planner tasks based on the design spec. Remember:
-- Infrastructure first (if needed)
-- User features in logical order
-- Validation last""")
-])
-    
-    try:
-        # Use first 500 chars of spec as summary
-        spec_summary = spec_content[:500] + "..." if len(spec_content) > 500 else spec_content
-        
-        response = await structured_llm.ainvoke(decomp_prompt.format(
-            objective=objective,
-            spec_summary=spec_summary
-        ))
-        
-        tasks = []
-        for t_def in response.tasks:
-            # Ensure it's a planner task
-            if t_def.phase.lower() != "plan":
-                print(f"  Warning: Director tried to create {t_def.phase} task, converting to 'plan'", flush=True)
             
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
