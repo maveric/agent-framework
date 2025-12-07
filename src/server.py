@@ -1255,16 +1255,15 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                         task.update(rt)
                                         break
                             # Merge tool outputs/messages to task_memories (for chat log in UI)
-                                if "messages" in c.result:
-                                    messages = c.result["messages"]
-                                    if messages:
-                                        current_memories = state.get("task_memories", {})
-                                        # Use update to avoid overwriting other task memories
-                                        # But we want to replace THIS task's memory with the full log
-                                        current_memories[c.task_id] = messages
-                                        state["task_memories"] = current_memories
-                                
-                                        state["task_memories"] = current_memories
+                                if "task_memories" in c.result:
+                                    worker_memories = c.result["task_memories"]
+                                    if worker_memories:
+                                        # Apply reducer to preserve existing memories
+                                        state["task_memories"] = task_memories_reducer(
+                                            state.get("task_memories", {}), 
+                                            worker_memories
+                                        )
+
                                 
                                 logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
                                 
