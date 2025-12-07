@@ -1143,12 +1143,60 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
     structured_llm = llm.with_structured_output(IntegrationResponse)
     
     print("  Calling LLM for plan integration with scope validation...", flush=True)
+    
+    # LOG: Director integration request
+    # Save the full request for debugging
+    from pathlib import Path
+    import json
+    workspace_path = state.get("_workspace_path")
+    if workspace_path:
+        log_dir = Path(workspace_path) / ".llm_logs" / "director"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        request_log = log_dir / f"integration_request_{timestamp}.json"
+        with open(request_log, 'w', encoding='utf-8') as f:
+            json.dump({
+                "timestamp": datetime.now().isoformat(),
+                "objective": objective,
+                "spec_content_length": len(spec_content),
+                "tasks_input_count": len(tasks_input),
+                "tasks_input": tasks_input  # Full list of 78 tasks
+            }, f, indent=2)
+        print(f"  [LOG] Director request: {request_log} ({len(tasks_input)} tasks)", flush=True)
+    
     try:
         response = await structured_llm.ainvoke(prompt.format(
             objective=objective,
             spec_content=spec_content[:3000],  # Truncate if too long
             tasks_json=str(tasks_input)
         ), config={"callbacks": []})
+        
+        # LOG: Director integration response
+        if workspace_path:
+            response_log = log_dir / f"integration_response_{timestamp}.json"
+            with open(response_log, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "timestamp": datetime.now().isoformat(),
+                    "tasks_returned": len(response.tasks) if hasattr(response, 'tasks') else 0,
+                    "tasks_rejected": len(response.rejected_tasks) if hasattr(response, 'rejected_tasks') else 0,
+                    "total_accounted": (len(response.tasks) if hasattr(response, 'tasks') else 0) + 
+                                       (len(response.rejected_tasks) if hasattr(response, 'rejected_tasks') else 0),
+                    "tasks_input_count": len(tasks_input),
+                    "MISSING_COUNT": len(tasks_input) - 
+                                     ((len(response.tasks) if hasattr(response, 'tasks') else 0) + 
+                                      (len(response.rejected_tasks) if hasattr(response, 'rejected_tasks') else 0)),
+                    "response_tasks": [{"title": t.title, "phase": t.phase, "depends_on": t.depends_on} 
+                                       for t in response.tasks] if hasattr(response, 'tasks') else [],
+                    "rejected_tasks": [{"title": t.title, "reason": t.reason} 
+                                       for t in response.rejected_tasks] if hasattr(response, 'rejected_tasks') else []
+                }, f, indent=2)
+            print(f"  [LOG] Director response: {response_log}", flush=True)
+            print(f"  [LOG] Input: {len(tasks_input)} tasks → Output: {len(response.tasks)} approved + {len(response.rejected_tasks)} rejected", flush=True)
+            missing = len(tasks_input) - (len(response.tasks) + len(response.rejected_tasks))
+            if missing > 0:
+                print(f"  [WARNING] {missing} tasks UNACCOUNTED FOR by LLM (deduplicated/merged)!", flush=True)
+        
     except Exception as e:
         print(f"  Integration LLM Error: {e}", flush=True)
         # Fallback: Return tasks as-is (converted to Task objects)
