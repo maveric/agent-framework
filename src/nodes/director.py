@@ -725,16 +725,30 @@ async def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict
     llm = get_llm(model_config)
     
     # STEP 0: Explore existing project structure (if workspace exists)
+    # Using direct filesystem access (not tools) since director is trusted
     project_context = ""
     if workspace_path:
         print("Director: Exploring existing project structure...", flush=True)
-        from tools import read_file_async, list_directory_async
         from pathlib import Path
+        import os
         
         try:
             # List root directory
-            root_listing = await list_directory_async(str(workspace_path))
-            project_context += f"## Existing Project Structure\n```\n{root_listing}\n```\n\n"
+            ws_path = Path(workspace_path)
+            if ws_path.exists():
+                entries = os.listdir(ws_path)
+                # Format as a tree-like listing
+                listing_lines = []
+                for entry in sorted(entries):
+                    entry_path = ws_path / entry
+                    if entry_path.is_dir():
+                        listing_lines.append(f"📁 {entry}/")
+                    else:
+                        listing_lines.append(f"📄 {entry}")
+                root_listing = "\n".join(listing_lines[:50])  # Limit to 50 entries
+                if len(entries) > 50:
+                    root_listing += f"\n... and {len(entries) - 50} more files"
+                project_context += f"## Existing Project Structure\n```\n{root_listing}\n```\n\n"
             
             # Check for common config files
             common_files = [
@@ -744,10 +758,10 @@ async def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict
             ]
             
             for filename in common_files:
-                filepath = Path(workspace_path) / filename
+                filepath = ws_path / filename
                 if filepath.exists():
                     try:
-                        content = await read_file_async(str(filepath))
+                        content = filepath.read_text(encoding="utf-8")
                         # Truncate very long files
                         if len(content) > 2000:
                             content = content[:2000] + "\n... (truncated)"
@@ -759,6 +773,7 @@ async def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict
             print(f"  Project exploration complete. Found {len(project_context)} chars of context.", flush=True)
         except Exception as e:
             print(f"  Warning: Project exploration failed: {e}", flush=True)
+
     
     # STEP 1: Write design specification
     print("Director: Creating design specification...", flush=True)
