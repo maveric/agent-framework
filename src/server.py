@@ -600,23 +600,86 @@ async def resume_run(run_id: str):
 
 @app.post("/api/runs/{run_id}/replan")
 async def replan_run(run_id: str):
-    """Trigger a re-planning of pending tasks."""
+    """
+    Trigger a re-planning: Pause all active tasks → LLM reorganizes → Resume with new tree.
+    
+    Flow:
+    1. Cancel any running worker coroutines
+    2. Reset ACTIVE tasks back to PLANNED
+    3. Set replan_requested flag in shared memory
+    4. Restart the dispatch loop (Director will see flag and call _integrate_plans)
+    """
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
     
     try:
-        orchestrator = get_orchestrator_graph()
-        config = {"configurable": {"thread_id": runs_index[run_id]["thread_id"]}}
+        # 1. Get current state from shared memory
+        state = run_states.get(run_id)
+        if not state:
+            # Try loading from DB
+            from run_persistence import load_run_state
+            state = await load_run_state(run_id)
+            if not state:
+                raise HTTPException(status_code=404, detail="Run state not found")
         
-        # Set replan_requested flag - director will handle blocking and waiting
-        # Must use async version since this is an async function
-        # [FIX] Added as_node="director" to resolve Ambiguous Update Error
-        await orchestrator.aupdate_state(config, {"replan_requested": True}, as_node="director")
+        # 2. Cancel running dispatch loop (this stops all active workers)
+        if run_id in running_tasks:
+            logger.info(f"🛑 Cancelling current dispatch loop for replan...")
+            running_tasks[run_id].cancel()
+            try:
+                await running_tasks[run_id]
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
         
-        logger.info(f"Replan requested for run {run_id}. Director will re-integrate pending tasks.")
-        return {"status": "replan_requested"}
+        # 3. Reset ACTIVE tasks to PLANNED (they'll be re-dispatched after reorg)
+        tasks = state.get("tasks", [])
+        reset_count = 0
+        for task in tasks:
+            if task.get("status") == "active":
+                task["status"] = "planned"
+                task["updated_at"] = datetime.now().isoformat()
+                reset_count += 1
+        
+        logger.info(f"🔄 Reset {reset_count} active tasks to PLANNED for reorg")
+        
+        # 4. Set replan_requested flag in shared memory (Director will see this)
+        state["replan_requested"] = True
+        run_states[run_id] = state
+        
+        # 5. Restart dispatch loop with updated state
+        run_config = {
+            "configurable": {
+                "thread_id": runs_index[run_id]["thread_id"],
+                "mock_mode": state.get("mock_mode", False)
+            }
+        }
+        
+        runs_index[run_id]["status"] = "running"
+        runs_index[run_id]["updated_at"] = datetime.now().isoformat()
+        
+        task = asyncio.create_task(_continuous_dispatch_loop(run_id, state, run_config))
+        running_tasks[run_id] = task
+        
+        def cleanup(t):
+            running_tasks.pop(run_id, None)
+        task.add_done_callback(cleanup)
+        
+        logger.info(f"✅ Replan triggered for run {run_id}. Director will reorganize tasks.")
+        
+        # Broadcast update
+        await manager.broadcast_to_run(run_id, {
+            "type": "state_update",
+            "payload": {"status": "running", "message": "Replanning in progress..."}
+        })
+        
+        return {"status": "replan_triggered", "tasks_reset": reset_count}
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to set replan_requested flag: {e}")
+        logger.error(f"Failed to trigger replan: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

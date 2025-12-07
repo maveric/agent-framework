@@ -1152,37 +1152,37 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
         INPUT: Proposed tasks from planners and workers.
         
         YOUR JOB - IN THIS EXACT ORDER:
-        1. **Deduplicate & Merge**: 
-           - Check if proprosed tasks already exist in "EXISTING TASKS".
-           - unmatched proposed tasks should be added.
-           - If a proposed task matches an EXISTING task, UPDATE it (keep ID if possible? No, you return a list, we match by title).
-           - MERGE duplicate suggestions.
+        
+        1. **Smart Deduplication**: 
+           - Merge ONLY truly duplicate tasks (same work, same outcome).
+           - **DO NOT over-deduplicate tests**: If planners propose unit tests for Backend AND unit tests for Frontend, keep BOTH. They test different things.
+           - Unit tests per component are GOOD. Integration tests are ALSO good.
+           - When in doubt, keep the task rather than merging.
         
         2. **Validate Scope**: Check EACH task against the design specification.
-           - REJECT tasks that are not in the spec (accessibility, CI/CD, extensive testing utilities, etc.)
-           - APPROVE tasks that implement the spec
-           - Be strict - only what's in the spec gets built
+           - REJECT tasks clearly outside the spec (CI/CD pipelines, accessibility features not requested, etc.)
+           - APPROVE tasks that implement features in the spec
+           - Tests are ALWAYS in scope if they test something in scope
            
-        3. **Integration & Reorganization**:
-           - You MUST Output the FULL list of tasks that should be in the plan (Existing + New).
-           - **CRITICAL**: You can (and should) REWIRE dependencies of EXISTING ACTIVE tasks if necessary to fix the tree.
-           - Ensure proper `depends_on` using EXACT TITLES.
-           
-        4. **Dependency Rules**:
-           - **Backend first**: Frontend MUST depend on backend API.
-           - **Tests last**: ALL test tasks MUST depend on what they're testing.
-           - **Integration tests**: MUST depend on BOTH frontend AND backend.
-           - **No independent trees**: Every task must trace back to root (or other tasks).
-           
-        5. **Return**: Two lists:
-           - `tasks`: The COMPLETE validated task list (Existing + New).
-           - `rejected_tasks`: Out-of-scope tasks with reasons.
+        3. **Dependency Wiring**:
+           - **Backend first**: Frontend tasks MUST depend on their backend APIs.
+           - **Tests depend on what they test**: Unit tests depend on the code they test. E2E tests depend on full stack.
+           - **No orphan trees**: Every task should connect to the main dependency graph.
+           - You CAN rewire dependencies of existing tasks if needed to fix the graph.
+        
+        4. **Output**:
+           - Return the COMPLETE task list (existing + new, merged as needed).
+           - Use EXACT task titles in `depends_on` fields.
+        
+        MANDATORY REQUIREMENT - TEST TASKS:
+        ⚠️ Your output MUST include AT LEAST ONE task with phase="test".
+        This could be unit tests, integration tests, E2E tests, or a final validation task.
+        If you fail to include any test tasks, your response will be REJECTED and you will be asked to try again.
         
         CRITICAL RULES:
-        - Design spec is LAW.
-        - INCLUDE ALL RELEVANT EXISTING TASKS in your output list if they are still valid.
-        - If an existing task is no longer valid, do NOT include it (effectively removing it, or we handle abandonment later).
-        - **EVERY PROJECT MUST HAVE AT LEAST ONE TEST TASK**.
+        - Design spec defines what to build. Tests for those features are always valid.
+        - Include all valid existing tasks in your output.
+        - Do NOT over-merge tests! Backend unit tests ≠ Frontend unit tests.
         """),
         ("user", "Proposed Tasks:\n{tasks_json}")
     ])
@@ -1246,6 +1246,52 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
             missing = len(tasks_input) - (len(response.tasks) + len(response.rejected_tasks))
             if missing > 0:
                 print(f"  [WARNING] {missing} tasks UNACCOUNTED FOR by LLM (deduplicated/merged)!", flush=True)
+        
+        # ENFORCEMENT: Check for at least one test task
+        test_tasks = [t for t in response.tasks if hasattr(t, 'phase') and t.phase.lower() == 'test']
+        
+        if not test_tasks:
+            print("  ⚠️  NO TEST TASKS in LLM response! Retrying with enforcement message...", flush=True)
+            
+            # Build retry prompt with scolding message
+            retry_user_message = f"""Your previous response did NOT include any tasks with phase="test".
+
+This is a MANDATORY requirement. Every project MUST have at least one test task.
+
+Please review the task list again and include appropriate test tasks:
+- Unit tests for backend components
+- Unit tests for frontend components  
+- Integration tests
+- E2E tests
+- Or at minimum, a final validation test task
+
+Original proposed tasks:
+{tasks_json}
+
+Reread the instructions carefully and provide a complete task list INCLUDING TEST TASKS."""
+
+            try:
+                retry_prompt = ChatPromptTemplate.from_messages([
+                    ("system", prompt.messages[0].prompt.template),  # Reuse system prompt
+                    ("user", retry_user_message)
+                ])
+                
+                response = await structured_llm.ainvoke(retry_prompt.format(
+                    objective=objective,
+                    spec_content=spec_content[:3000],
+                    tasks_json=str(tasks_input),
+                    existing_tasks_json=str(relevant_existing_tasks)
+                ), config={"callbacks": []})
+                
+                # Check again
+                test_tasks = [t for t in response.tasks if hasattr(t, 'phase') and t.phase.lower() == 'test']
+                if test_tasks:
+                    print(f"  ✅ Retry successful! Got {len(test_tasks)} test task(s).", flush=True)
+                else:
+                    print(f"  ❌ Retry still has no test tasks. Proceeding anyway.", flush=True)
+                    
+            except Exception as retry_error:
+                print(f"  Retry failed: {retry_error}. Proceeding with original response.", flush=True)
         
     except Exception as e:
         print(f"  Integration LLM Error: {e}", flush=True)
