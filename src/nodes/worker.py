@@ -65,15 +65,16 @@ def _detect_modified_files_via_git(worktree_path) -> list[str]:
         
         if result.returncode == 0:
             # Parse git status output
-            # Format: XY filename
+            # Format: XY filename (or XY  filename with varying whitespace)
             # X = status in index, Y = status in worktree
             # M = modified, A = added, D = deleted, R = renamed, etc.
             for line in result.stdout.strip().split('\n'):
-                if line:
-                    # Extract filename (everything after first 3 characters)
-                    # Handle both "M  file.py" and " M file.py" formats
+                if line and len(line) >= 4:  # At least "XY f" where f is a filename
+                    # Use split to handle variable whitespace between status and filename
+                    # The first 2 chars are status, rest is filename with possible leading space
                     status_part = line[:2]
-                    filename = line[3:].strip()
+                    # Find the filename - skip the status chars and any whitespace
+                    filename = line[2:].lstrip()
                     
                     # Skip if filename is empty or is in .git directory
                     if filename and not filename.startswith('.git/'):
@@ -83,6 +84,7 @@ def _detect_modified_files_via_git(worktree_path) -> list[str]:
                         
                         files_modified.append(filename)
                         print(f"  [GIT-TRACKED] {status_part.strip()} {filename}", flush=True)
+
             
             print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
         else:
