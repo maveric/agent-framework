@@ -724,8 +724,45 @@ async def _decompose_objective(objective: str, spec: Dict[str, Any], state: Dict
     
     llm = get_llm(model_config)
     
+    # STEP 0: Explore existing project structure (if workspace exists)
+    project_context = ""
+    if workspace_path:
+        print("Director: Exploring existing project structure...", flush=True)
+        from tools import read_file_async, list_directory_async
+        from pathlib import Path
+        
+        try:
+            # List root directory
+            root_listing = await list_directory_async(str(workspace_path))
+            project_context += f"## Existing Project Structure\n```\n{root_listing}\n```\n\n"
+            
+            # Check for common config files
+            common_files = [
+                "package.json", "requirements.txt", "pyproject.toml", 
+                "README.md", "design_spec.md", "tsconfig.json",
+                "vite.config.ts", "vite.config.js"
+            ]
+            
+            for filename in common_files:
+                filepath = Path(workspace_path) / filename
+                if filepath.exists():
+                    try:
+                        content = await read_file_async(str(filepath))
+                        # Truncate very long files
+                        if len(content) > 2000:
+                            content = content[:2000] + "\n... (truncated)"
+                        project_context += f"## {filename}\n```\n{content}\n```\n\n"
+                        print(f"  Read: {filename}", flush=True)
+                    except Exception as e:
+                        print(f"  Warning: Could not read {filename}: {e}", flush=True)
+            
+            print(f"  Project exploration complete. Found {len(project_context)} chars of context.", flush=True)
+        except Exception as e:
+            print(f"  Warning: Project exploration failed: {e}", flush=True)
+    
     # STEP 1: Write design specification
     print("Director: Creating design specification...", flush=True)
+
     
     spec_prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a Lead Architect creating a design specification.
@@ -736,11 +773,15 @@ CRITICAL INSTRUCTIONS:
 3. You have leeway to make architectural decisions that best serve the objective
 4. Focus on MVP - deliver the core functionality requested, avoid unnecessary extras
 5. **ALWAYS include dependency isolation** to prevent package pollution across projects
+6. **CONSIDER EXISTING PROJECT STRUCTURE** - if files already exist, build upon them rather than recreating
+
+{project_context}
 
 OUTPUT:
 Write a design specification in markdown format with these sections:
 - **Overview**: Brief project summary
 - **Components**: List each component (Backend, Frontend, etc.)
+- **Existing Code Analysis**: If project files exist, describe what's already there and what needs work
 - **Dependency Isolation**: MANDATORY instructions for isolated environments
   * Python: Use `python -m venv .venv` and activate it before installing packages
   * Node.js: Use `npm install` (creates local node_modules)
@@ -762,11 +803,13 @@ Write a design specification in markdown format with these sections:
 
 Be specific enough that workers can implement without ambiguity."""),
         ("user", "Objective: {objective}")
+
     ])
     
     try:
-        spec_response = await llm.ainvoke(spec_prompt.format(objective=objective))
+        spec_response = await llm.ainvoke(spec_prompt.format(objective=objective, project_context=project_context))
         spec_content = str(spec_response.content)
+
         
         # Write spec to workspace
         if workspace_path:

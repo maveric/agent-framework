@@ -1274,22 +1274,23 @@ AVOID THESE PATTERNS:
     result = await _execute_react_loop(task, tools, system_prompt, state, config)
     
     # VALIDATION: Planners MUST create tasks
-    if not result.suggested_tasks or len(result.suggested_tasks) == 0:
+    if not result or not result.suggested_tasks or len(result.suggested_tasks) == 0:
         print(f"  [ERROR] Planner {task.id} completed without creating any tasks!", flush=True)
         # Return failed result
         from orchestrator_types import AAR
         return WorkerResult(
             status="failed",
-            result_path=result.result_path,
+            result_path=result.result_path if result else "",
             aar=AAR(
                 summary="FAILED: Planner did not create any tasks. Must call create_subtasks.",
                 approach="N/A",
                 challenges=["Did not call create_subtasks"],
                 decisions_made=[],
-                files_modified=result.aar.files_modified if result.aar else []
+                files_modified=result.aar.files_modified if result and result.aar else []
             ),
             suggested_tasks=[]
         )
+
     
     print(f"  [SUCCESS] Planner created {len(result.suggested_tasks)} tasks", flush=True)
     return result
