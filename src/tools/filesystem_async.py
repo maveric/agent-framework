@@ -30,20 +30,34 @@ PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
 def _get_workspace_root(root: Optional[Path] = None) -> Path:
     """Get workspace root from argument or default."""
     if root:
-        return root
+        return Path(root)
     return WORKSPACE_ROOT
 
 
 def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
     """Ensure path is within workspace."""
-    workspace_root = _get_workspace_root(root)
+    workspace_root = _get_workspace_root(root).resolve()
     try:
         normalized_path = path.lstrip('/\\')
         target = (workspace_root / normalized_path).resolve()
-        workspace_str = str(workspace_root.resolve())
+        
+        # Robust comparison handling case sensitivity
+        root_str = str(workspace_root)
         target_str = str(target)
-        return target_str.startswith(workspace_str)
-    except Exception:
+        
+        # On Windows, normalize case for comparison
+        if platform.system() == "Windows":
+            root_str = root_str.lower()
+            target_str = target_str.lower()
+            
+        is_safe = target_str.startswith(root_str)
+        
+        if not is_safe:
+            print(f"  [SECURITY] Access denied: {target_str} is not in {root_str}", flush=True)
+            
+        return is_safe
+    except Exception as e:
+        print(f"  [SECURITY] Path check error: {e}", flush=True)
         return False
 
 

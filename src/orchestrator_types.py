@@ -799,6 +799,38 @@ def dict_to_worker_result(data: Dict[str, Any]) -> WorkerResult:
         messages=data.get("messages", []),
     )
 
+def serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
+    """Serialize LangChain messages to dicts for persistence."""
+    if not messages:
+        return []
+    
+    serialized = []
+    for msg in messages:
+        # If already a dict (from database), return as-is
+        if isinstance(msg, dict):
+            serialized.append(msg)
+            continue
+            
+        # Basic fields
+        m_dict = {
+            "type": msg.type,
+            "content": msg.content,
+        }
+        
+        # Add specific fields based on type
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            m_dict["tool_calls"] = msg.tool_calls
+            
+        if hasattr(msg, "tool_call_id") and msg.tool_call_id:
+            m_dict["tool_call_id"] = msg.tool_call_id
+            
+        if hasattr(msg, "name") and msg.name:
+            m_dict["name"] = msg.name
+            
+        serialized.append(m_dict)
+        
+    return serialized
+
 def _dict_to_suggested_task(data: Dict[str, Any]) -> SuggestedTask:
     return SuggestedTask(
         suggested_id=data["suggested_id"],
@@ -982,4 +1014,5 @@ __all__ = [
     "dict_to_qa_verdict",
     "blackboard_to_dict",
     "dict_to_blackboard",
+    "serialize_messages",
 ]

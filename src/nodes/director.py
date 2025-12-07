@@ -928,11 +928,32 @@ RULES:
 - Features should be user-facing capabilities, NOT technical components
 
 OUTPUT:
-Create planner tasks following this schema. Order them: infrastructure → features → validation."""),
+Create planner tasks following this schema. Order them: infrastructure -> features -> validation."""),
     ("user", """Objective: {objective}
 
 Design Spec Summary:
 {spec_summary}
+
+Create feature-level planner tasks based on the design spec. Remember:
+- Infrastructure first (if needed)
+- User features in logical order
+- Validation last""")
+])
+    
+    try:
+        # Use first 500 chars of spec as summary
+        spec_summary = spec_content[:500] + "..." if len(spec_content) > 500 else spec_content
+        
+        response = await structured_llm.ainvoke(decomp_prompt.format(
+            objective=objective,
+            spec_summary=spec_summary
+        ))
+        
+        tasks = []
+        for t_def in response.tasks:
+            # Ensure it's a planner task
+            if t_def.phase.lower() != "plan":
+                print(f"  Warning: Director tried to create {t_def.phase} task, converting to 'plan'", flush=True)
             
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
@@ -1052,8 +1073,8 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
              * Example: E2E test #2 depends_on: [build deps, "E2E test #1"]
              * Unit tests can still run in parallel
            - **Example flow**: 
-            * Database schema → API endpoint → UI component → Integration test
-                * NOT: All backend → All frontend → All tests
+            * Database schema -> API endpoint -> UI component -> Integration test
+                * NOT: All backend -> All frontend -> All tests
         3. **Return**: The final, clean list of tasks with CORRECT `depends_on` lists (use exact titles).
         
         CHAIN OF THOUGHT (Internal):
@@ -1199,7 +1220,7 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
                                        for t in response.rejected_tasks] if hasattr(response, 'rejected_tasks') else []
                 }, f, indent=2)
             print(f"  [LOG] Director response: {response_log}", flush=True)
-            print(f"  [LOG] Input: {len(tasks_input)} tasks → Output: {len(response.tasks)} approved + {len(response.rejected_tasks)} rejected", flush=True)
+            print(f"  [LOG] Input: {len(tasks_input)} tasks -> Output: {len(response.tasks)} approved + {len(response.rejected_tasks)} rejected", flush=True)
             missing = len(tasks_input) - (len(response.tasks) + len(response.rejected_tasks))
             if missing > 0:
                 print(f"  [WARNING] {missing} tasks UNACCOUNTED FOR by LLM (deduplicated/merged)!", flush=True)

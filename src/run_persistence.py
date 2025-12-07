@@ -11,6 +11,7 @@ import os
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from orchestrator_types import serialize_messages
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,18 @@ async def save_run_state(run_id: str, state: Dict[str, Any], status: str = "runn
             # Skip internal/non-serializable objects
             if key.startswith('_') or key in ['orch_config']:
                 continue
+                
+            # SPECIAL HANDLING: Serialize task memories (LLM logs)
+            if key == "task_memories":
+                try:
+                    state_copy[key] = {
+                        tid: serialize_messages(msgs) 
+                        for tid, msgs in value.items()
+                    }
+                except Exception as e:
+                    logger.error(f"Failed to serialize task_memories: {e}")
+                continue
+                
             try:
                 # Test if serializable
                 json.dumps(value)

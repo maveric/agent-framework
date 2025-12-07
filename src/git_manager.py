@@ -192,6 +192,26 @@ class WorktreeManager:
             return self.worktree_base / f"{safe_id}_retry_{retry_num}"
         return self.worktree_base / safe_id
     
+    def _restore_worktree_info(self, task_id: str) -> Optional[WorktreeInfo]:
+        """Attempt to restore worktree info from disk if missing from memory."""
+        # Check primary path (retry 0)
+        # TODO: Handle retries correctly (would need to scan for latest)
+        wt_path = self._worktree_path(task_id, 0)
+        
+        if wt_path.exists() and (wt_path / ".git").exists():
+            branch_name = self._task_branch_name(task_id)
+            info = WorktreeInfo(
+                task_id=task_id,
+                branch_name=branch_name,
+                worktree_path=wt_path,
+                status=WorktreeStatus.ACTIVE
+            )
+            self.worktrees[task_id] = info
+            print(f"  [RECOVERY] Restored worktree info for {task_id} from disk", flush=True)
+            return info
+            
+        return None
+    
     def create_worktree(
         self,
         task_id: str,
@@ -311,6 +331,9 @@ class WorktreeManager:
         """
         info = self.worktrees.get(task_id)
         if not info:
+            info = self._restore_worktree_info(task_id)
+            
+        if not info:
             raise ValueError(f"No worktree for task: {task_id}")
         
         wt_path = info.worktree_path
@@ -418,6 +441,9 @@ class WorktreeManager:
             MergeResult indicating success or conflict
         """
         info = self.worktrees.get(task_id)
+        if not info:
+            info = self._restore_worktree_info(task_id)
+            
         if not info:
             raise ValueError(f"No worktree for task: {task_id}")
         
@@ -598,6 +624,10 @@ class WorktreeManager:
     def cleanup_worktree(self, task_id: str) -> None:
         """Remove a worktree (but keep branch)."""
         info = self.worktrees.get(task_id)
+        if not info:
+            # Try to restore to ensure we can cleanup
+            info = self._restore_worktree_info(task_id)
+        
         if not info:
             return
         

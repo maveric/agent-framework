@@ -1438,6 +1438,12 @@ finally:
     - **NO INFRASTRUCTURE TESTING**: Do NOT test deployment, CI/CD, monitoring, or any infrastructure not in the task
     - **STICK TO THE TASK**: If task says "test CRUD API", test ONLY that. NOT: authentication, rate limiting, caching, etc.
     - **IF NOT IN TASK**: Don't test it. Period.
+
+    **HANDLING FAILURES - BE PROACTIVE:**
+    - If tests FAIL, don't just stop. Analyze the failure.
+    - If you identify the root cause (e.g., mismatch between backend/frontend, missing API field, logic error), use `create_subtasks` to propose a plan to fix it.
+    - Example: "Found that backend returns 'id' but frontend expects '_id'. Suggested task: Update frontend model to match backend."
+    - This allows you to propose holistic fixes rather than just failing the task.
     """
     
     return await _execute_react_loop(task, tools, system_prompt, state, config)
