@@ -953,11 +953,28 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 # CRITICAL: Always use continuous dispatch loop, not super-step mode
                 # Load current state from database to continue where we left off
                 from run_persistence import load_run_state
+                from pathlib import Path
                 
                 state = await load_run_state(run_id)
                 if not state:
                     logger.error(f"   No saved state found for run {run_id}")
                     return
+                
+                # CRITICAL: Reinitialize _wt_manager after loading from DB
+                # The _wt_manager object is not serializable, so we must recreate it
+                workspace_path = state.get("_workspace_path")
+                if workspace_path:
+                    workspace_path_obj = Path(workspace_path)
+                    worktree_base = workspace_path_obj / ".worktrees"
+                    worktree_base.mkdir(exist_ok=True)
+                    state["_wt_manager"] = WorktreeManager(
+                        repo_path=workspace_path_obj,
+                        worktree_base=worktree_base
+                    )
+                    logger.info(f"   Restored _workspace_path: {workspace_path}")
+                    logger.info(f"   Reinitialized _wt_manager at: {worktree_base}")
+                else:
+                    logger.warning(f"   ⚠️ _workspace_path not found in loaded state!")
                 
                 # Apply the resolution directly to state
                 # The director will process it via pending_resolution

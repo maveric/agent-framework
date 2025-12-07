@@ -99,18 +99,22 @@ async def load_run_state(run_id: str) -> Optional[Dict[str, Any]]:
     Load a run's full state from the database.
     
     Returns:
-        State dict or None if not found
+        State dict or None if not found (includes _workspace_path if available)
     """
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
-                "SELECT state_json FROM runs WHERE run_id = ?",
+                "SELECT state_json, workspace_path FROM runs WHERE run_id = ?",
                 (run_id,)
             )
             row = await cursor.fetchone()
             
             if row and row[0]:
-                return json.loads(row[0])
+                state = json.loads(row[0])
+                # Restore _workspace_path from the separate column
+                if row[1]:
+                    state["_workspace_path"] = row[1]
+                return state
             return None
             
     except Exception as e:

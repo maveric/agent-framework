@@ -175,57 +175,57 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     if result.status == "complete" and result.aar and result.aar.files_modified:
         if wt_manager and not state.get("mock_mode", False):
             try:
-                # Filter out response.md - it's a debug fallback, not real work
-                files_to_commit = [f for f in result.aar.files_modified if not f.endswith("response.md")]
-                if files_to_commit:
-                    commit_msg = f"[{task_id}] {task.phase.value if hasattr(task, 'phase') else 'work'}: {result.aar.summary[:50]}"
-                    commit_hash = wt_manager.commit_changes(
-                        task_id,
-                        commit_msg,
-                        files_to_commit
-                    )
-                    if commit_hash:
-                        print(f"  Committed: {commit_hash[:8]}", flush=True)
-                        
-                        # Merge to main immediately for now to allow subsequent tasks to see changes
-                        # In a full flow, this might be gated by QA, but for linear dependencies we need it.
-                        try:
-                            print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
-                            merge_result = wt_manager.merge_to_main(task_id)
-                            if merge_result.success:
-                                print(f"  Merged to main", flush=True)
-                            else:
-                                # Merge failed - this should trigger Phoenix retry
-                                print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
-                                # Override the result to failed status
-                                result = WorkerResult(
-                                    status="failed",
-                                    result_path=result.result_path,
-                                    aar=AAR(
-                                        summary=f"Merge failed: {merge_result.error_message[:200]}",
-                                        approach=result.aar.approach if result.aar else "unknown",
-                                        challenges=[merge_result.error_message] if result.aar else [],
-                                        decisions_made=result.aar.decisions_made if result.aar else [],
-                                        files_modified=result.aar.files_modified if result.aar else []
-                                    ),
-                                    messages=result.messages if hasattr(result, 'messages') else []
-                                )
-                        except Exception as e:
-                            print(f"  ❌ Merge exception: {e}", flush=True)
-                            import traceback
-                            traceback.print_exc()
-                            # Override to failed
+                # CRITICAL: Commit ALL changes in the worktree to prevent "MERGE BLOCKED" errors
+                # If our file detection misses anything, we still commit it
+                commit_msg = f"[{task_id}] {task.phase.value if hasattr(task, 'phase') else 'work'}: {result.aar.summary[:50]}"
+                # Pass None to commit_changes to stage ALL files (git add -A)
+                commit_hash = wt_manager.commit_changes(
+                    task_id,
+                    commit_msg,
+                    None  # Commit all changes, not just detected files
+                )
+                if commit_hash:
+                    print(f"  Committed: {commit_hash[:8]}", flush=True)
+                    
+                    # Merge to main immediately for now to allow subsequent tasks to see changes
+                    # In a full flow, this might be gated by QA, but for linear dependencies we need it.
+                    try:
+                        print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
+                        merge_result = wt_manager.merge_to_main(task_id)
+                        if merge_result.success:
+                            print(f"  Merged to main", flush=True)
+                        else:
+                            # Merge failed - this should trigger Phoenix retry
+                            print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
+                            # Override the result to failed status
                             result = WorkerResult(
                                 status="failed",
-                                result_path="",
+                                result_path=result.result_path,
                                 aar=AAR(
-                                    summary=f"Merge exception: {str(e)[:200]}",
-                                    approach="failed",
-                                    challenges=[str(e)],
-                                    decisions_made=[],
-                                    files_modified=[]
-                                )
+                                    summary=f"Merge failed: {merge_result.error_message[:200]}",
+                                    approach=result.aar.approach if result.aar else "unknown",
+                                    challenges=[merge_result.error_message] if result.aar else [],
+                                    decisions_made=result.aar.decisions_made if result.aar else [],
+                                    files_modified=result.aar.files_modified if result.aar else []
+                                ),
+                                messages=result.messages if hasattr(result, 'messages') else []
                             )
+                    except Exception as e:
+                        print(f"  ❌ Merge exception: {e}", flush=True)
+                        import traceback
+                        traceback.print_exc()
+                        # Override to failed
+                        result = WorkerResult(
+                            status="failed",
+                            result_path="",
+                            aar=AAR(
+                                summary=f"Merge exception: {str(e)[:200]}",
+                                approach="failed",
+                                challenges=[str(e)],
+                                decisions_made=[],
+                                files_modified=[]
+                            )
+                        )
                         
             except Exception as e:
                 print(f"  Warning: Failed to commit: {e}", flush=True)
@@ -884,14 +884,22 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
         elif tool.__name__ == "create_subtasks":
              # Allow Planners, Testers, and Coders to create subtasks
              if profile in [WorkerProfile.PLANNER, WorkerProfile.TESTER, WorkerProfile.CODER]:
-                 bound_tools.append(tool)
+                 bound_tools.append(StructuredTool.from_function(
+                     func=tool,
+                     name="create_subtasks", 
+                     description="Create COMMIT-LEVEL subtasks to be executed by other workers. Each task should be one atomic, reviewable change."
+                 ))
              else:
                  # Skip for other profiles
                  pass
         
         elif tool.__name__ == "report_existing_implementation":
             # Convert plain function to StructuredTool for proper LLM usage
-            bound_tools.append(StructuredTool.from_function(tool, name="report_existing_implementation"))
+            bound_tools.append(StructuredTool.from_function(
+                func=tool, 
+                name="report_existing_implementation",
+                description="Report that existing code already implements the required feature. ONLY use if you made ZERO modifications."
+            ))
                 
         else:
             bound_tools.append(tool)
