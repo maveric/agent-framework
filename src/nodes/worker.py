@@ -830,8 +830,14 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
     worktree_path = state.get("worktree_path") or state.get("_workspace_path")
     
     if not worktree_path:
-        print("WARNING: No worktree_path or _workspace_path found in state", flush=True)
-        return tools
+        # CRITICAL: Cannot proceed without a workspace path - this indicates corrupt state
+        # This usually happens when resuming a run from a database that was saved before
+        # workspace_path was properly persisted.
+        raise ValueError(
+            "Cannot bind tools: No worktree_path or _workspace_path found in state. "
+            "This run may be from before workspace persistence was fixed. "
+            "Please start a new run."
+        )
         
     print(f"DEBUG: Binding tools to path: {worktree_path}", flush=True)
     
