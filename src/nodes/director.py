@@ -1116,8 +1116,16 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
            - Example flow: Backend DB → Backend API → Frontend → Integration Tests
            - If you see disconnected trees, ADD dependency links to connect them
 
+        6. **MANDATORY TEST VALIDATION**: 
+           - Check if ANY tasks have phase="test" (e.g., test_worker, validation, verification, E2E)
+           - If NO test tasks exist: 
+             * CREATE a "Final validation: [project name] test suite" task with phase="test"
+             * This task must depend on ALL leaf tasks (tasks that nothing else depends on)
+             * Assigned to test_worker profile
+             * Acceptance criteria: Run all tests and verify functionality
+           - The project MUST end with a test phase - it should be the final step in the dependency chain
            
-        6. **Return**: Two lists:
+        7. **Return**: Two lists:
            - `tasks`: Approved + gap-filling tasks with correct depends_on
            - `rejected_tasks`: Out-of-scope tasks with reasons
         
@@ -1125,6 +1133,7 @@ async def _integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, A
         - Design spec is LAW - reject anything not in it
         - After rejection, you MUST check for gaps
         - You MAY create minimal bridge tasks to fix broken dependencies
+        - **EVERY PROJECT MUST HAVE AT LEAST ONE TEST TASK** - create one if missing!
         - No cycles in dependencies
         - Use EXACT TITLES for depends_on
         """),
