@@ -39,7 +39,63 @@ import platform
 
 PLATFORM = f"OS - {platform.system()}, Release: {platform.release()}"
 
+
+def _detect_modified_files_via_git(worktree_path) -> list[str]:
+    """
+    Use git to detect actual file changes in the worktree.
+    More reliable than parsing tool calls - catches all changes including deletions.
+    
+    Returns:
+        List of modified file paths (relative to worktree root)
+    """
+    import subprocess
+    from pathlib import Path
+    
+    files_modified = []
+    
+    try:
+        # Get list of modified, added, and deleted files using git status
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            # Parse git status output
+            # Format: XY filename
+            # X = status in index, Y = status in worktree
+            # M = modified, A = added, D = deleted, R = renamed, etc.
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    # Extract filename (everything after first 3 characters)
+                    # Handle both "M  file.py" and " M file.py" formats
+                    status_part = line[:2]
+                    filename = line[3:].strip()
+                    
+                    # Skip if filename is empty or is in .git directory
+                    if filename and not filename.startswith('.git/'):
+                        # Handle renamed files (format: "old_name -> new_name")
+                        if ' -> ' in filename:
+                            filename = filename.split(' -> ')[1]
+                        
+                        files_modified.append(filename)
+                        print(f"  [GIT-TRACKED] {status_part.strip()} {filename}", flush=True)
+            
+            print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
+        else:
+            print(f"  [GIT-WARNING] git status failed: {result.stderr}", flush=True)
+            
+    except Exception as e:
+        print(f"  [GIT-ERROR] Failed to detect file changes via git: {e}", flush=True)
+    
+    return files_modified
+
+
 async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
+
     """
     Worker: Execute task based on profile (async version).
     """
@@ -486,61 +542,6 @@ async def _execute_react_loop(
     # Extract results
     messages = result["messages"]
     last_message = messages[-1]
-
-
-def _detect_modified_files_via_git(worktree_path) -> list[str]:
-    """
-    Use git to detect actual file changes in the worktree.
-    More reliable than parsing tool calls - catches all changes including deletions.
-    
-    Returns:
-        List of modified file paths (relative to worktree root)
-    """
-    files_modified = []
-    
-    try:
-        import subprocess
-        from pathlib import Path
-        
-        # Get list of modified, added, and deleted files using git status
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0:
-            # Parse git status output
-            # Format: XY filename
-            # X = status in index, Y = status in worktree
-            # M = modified, A = added, D = deleted, R = renamed, etc.
-            for line in result.stdout.strip().split('\n'):
-                if line:
-                    # Extract filename (everything after first 3 characters)
-                    # Handle both "M  file.py" and " M file.py" formats
-                    status_part = line[:2]
-                    filename = line[3:].strip()
-                    
-                    # Skip if filename is empty or is in .git directory
-                    if filename and not filename.startswith('.git/'):
-                        # Handle renamed files (format: "old_name -> new_name")
-                        if ' -> ' in filename:
-                            filename = filename.split(' -> ')[1]
-                        
-                        files_modified.append(filename)
-                        print(f"  [GIT-TRACKED] {status_part.strip()} {filename}", flush=True)
-            
-            print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
-        else:
-            print(f"  [GIT-WARNING] git status failed: {result.stderr}", flush=True)
-            
-    except Exception as e:
-        print(f"  [GIT-ERROR] Failed to detect file changes via git: {e}", flush=True)
-    
-    return files_modified
-    
     
     # NOTE: Loop detection removed. The recursion_limit=150 is the real circuit breaker.
     # Previous detection counted consecutive calls to same tool NAME without checking
@@ -548,6 +549,7 @@ def _detect_modified_files_via_git(worktree_path) -> list[str]:
     # legitimately run many different shell commands in a row.
     
     # Identify modified files and suggested tasks from tool calls
+
     # CRITICAL: Use GIT to detect actual file changes (more reliable)
     files_modified = []
     suggested_tasks = []
