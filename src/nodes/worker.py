@@ -1185,6 +1185,40 @@ Use this template:
 ```
 
 If you don't create the results file, QA will fail your task.
+
+**🧪 SELF-VERIFICATION BEFORE COMPLETION 🧪**:
+Before considering your task complete, you MUST verify your code works in isolation:
+
+1. **Run your code**: Execute the code you wrote to verify it runs without errors
+   - For Python files: `run_python` or `run_shell` with the shared venv
+   - For Node.js: `run_shell` with npm/node commands
+   - For other languages: appropriate build/run commands
+
+2. **Basic smoke test**: Verify the core functionality works
+   - Import the module you created
+   - Call the main function/class
+   - Check for import errors, syntax errors, or obvious bugs
+
+3. **Report any failures**: If your code doesn't run:
+   - Fix the issues before completing
+   - If blocked by external dependencies, use `create_subtasks` to request fixes
+
+**Example verification pattern for Python:**
+```python
+# Quick verification script
+import sys
+sys.path.insert(0, '.')  # Ensure local imports work
+try:
+    from your_module import YourClass
+    obj = YourClass()
+    result = obj.your_method()
+    print(f"✅ Verification passed: {{result}}")
+except Exception as e:
+    print(f"❌ Verification failed: {{e}}")
+    raise
+```
+
+If you skip verification and your code fails in QA, you'll waste tokens on retry cycles.
 """
 
     
