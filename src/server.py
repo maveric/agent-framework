@@ -463,6 +463,11 @@ def _serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     
     serialized = []
     for msg in messages:
+        # If already a dict (from database), return as-is
+        if isinstance(msg, dict):
+            serialized.append(msg)
+            continue
+            
         # Basic fields
         m_dict = {
             "type": msg.type,
@@ -511,21 +516,67 @@ async def get_run(run_id: str):
         for task_id, messages in raw_memories.items():
             task_memories[task_id] = _serialize_messages(messages)
         
-        # Check for interrupt data
+        # Check for interrupt data - prioritize persisted data from state
         interrupt_data = None
-        tasks = state.get("tasks", [])
-        for t in tasks:
-            status = t.get("status") if isinstance(t, dict) else getattr(t, "status", None)
-            task_id = t.get("id") if isinstance(t, dict) else getattr(t, "id", None)
+        tasks = state.get("tasks", [])  # Define early since both branches need it
+        
+        # FIRST: Check for persisted interrupt data (most accurate after server restart)
+        if "_interrupt_data" in state:
+            logger.info(f"🔍 Found persisted _interrupt_data in state")
+            persisted = state["_interrupt_data"]
             
-            if status == "waiting_human" or status == TaskStatus.WAITING_HUMAN:
-                logger.info(f"🔍 Found waiting_human task in get_run: {task_id}")
-                interrupt_data = {
-                    "task_id": task_id,
-                    "tasks": [task_to_dict(t) if hasattr(t, "status") else t for t in tasks],
-                    "reason": "Restored from persisted state"
-                }
-                break
+            # Build full interrupt_data from persisted data
+            task_id = persisted.get("task_id")
+            interrupt_data = {
+                "task_id": task_id,
+                "task_description": persisted.get("task_description", ""),
+                "acceptance_criteria": persisted.get("acceptance_criteria", []),
+                "failure_reason": persisted.get("failure_reason", ""),
+                "retry_count": persisted.get("retry_count", 0),
+                "max_retries": persisted.get("max_retries", 3),
+                "tasks": [task_to_dict(task) if hasattr(task, "status") else task for task in tasks],
+                "reason": "Task requires human intervention"
+            }
+        
+        # FALLBACK: Search for waiting_human tasks (for backwards compatibility)
+        if not interrupt_data:
+
+            for t in tasks:
+                status = t.get("status") if isinstance(t, dict) else getattr(t, "status", None)
+                task_id = t.get("id") if isinstance(t, dict) else getattr(t, "id", None)
+                
+                if status == "waiting_human" or status == TaskStatus.WAITING_HUMAN:
+                    logger.info(f"🔍 Found waiting_human task in get_run: {task_id}")
+                    
+                    # Extract task details for the modal
+                    task_dict = t if isinstance(t, dict) else task_to_dict(t)
+                    
+                    # Get blocked_reason or escalation for failure reason
+                    failure_reason = ""
+                    if task_dict.get("blocked_reason"):
+                        blocked = task_dict["blocked_reason"]
+                        if isinstance(blocked, dict):
+                            failure_reason = blocked.get("reason", "")
+                        else:
+                            failure_reason = str(blocked)
+                    
+                    if task_dict.get("escalation"):
+                        escalation = task_dict["escalation"]
+                        if isinstance(escalation, dict):
+                            failure_reason = escalation.get("reason", failure_reason)
+                    
+                    interrupt_data = {
+                        "task_id": task_id,
+                        "task_description": task_dict.get("description", ""),
+                        "acceptance_criteria": task_dict.get("acceptance_criteria", []),
+                        "failure_reason": failure_reason,
+                        "retry_count": task_dict.get("retry_count", 0),
+                        "max_retries": task_dict.get("max_retries", 3),
+                        "tasks": [task_to_dict(task) if hasattr(task, "status") else task for task in tasks],
+                        "reason": "Task requires human intervention"
+                    }
+                    break
+
         
         if not interrupt_data:
             logger.info("ℹ️ No interrupt data found in get_run")
@@ -1101,8 +1152,19 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
                 if snapshot.tasks and len(snapshot.tasks) > 0 and snapshot.tasks[0].interrupts:
                     interrupt_data = snapshot.tasks[0].interrupts[0].value
                 
-                # Only broadcast if we actually have interrupt data
+                # CRITICAL: Persist interrupt data to state for server restart recovery
                 if interrupt_data:
+                    # Get current state and add interrupt data
+                    current_state = snapshot.values.copy() if snapshot.values else {}
+                    current_state["_interrupt_data"] = interrupt_data
+                    
+                    # Save to database with interrupt status
+                    from run_persistence import save_run_state
+                    await save_run_state(run_id, current_state, status="interrupted")
+                    
+                    # Also save to in-memory state
+                    run_states[run_id] = current_state
+                    
                     # Broadcast interrupt notification to frontend
                     await manager.broadcast_to_run(run_id, {
                         "type": "interrupted",
@@ -1119,6 +1181,7 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
                     "type": "run_list_update",
                     "payload": list(runs_index.values())
                 })
+
             else:
                 # Run actually completed
                 logger.info(f"Run {run_id} completed successfully")

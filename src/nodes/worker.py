@@ -486,6 +486,61 @@ async def _execute_react_loop(
     # Extract results
     messages = result["messages"]
     last_message = messages[-1]
+
+
+def _detect_modified_files_via_git(worktree_path) -> list[str]:
+    """
+    Use git to detect actual file changes in the worktree.
+    More reliable than parsing tool calls - catches all changes including deletions.
+    
+    Returns:
+        List of modified file paths (relative to worktree root)
+    """
+    files_modified = []
+    
+    try:
+        import subprocess
+        from pathlib import Path
+        
+        # Get list of modified, added, and deleted files using git status
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            # Parse git status output
+            # Format: XY filename
+            # X = status in index, Y = status in worktree
+            # M = modified, A = added, D = deleted, R = renamed, etc.
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    # Extract filename (everything after first 3 characters)
+                    # Handle both "M  file.py" and " M file.py" formats
+                    status_part = line[:2]
+                    filename = line[3:].strip()
+                    
+                    # Skip if filename is empty or is in .git directory
+                    if filename and not filename.startswith('.git/'):
+                        # Handle renamed files (format: "old_name -> new_name")
+                        if ' -> ' in filename:
+                            filename = filename.split(' -> ')[1]
+                        
+                        files_modified.append(filename)
+                        print(f"  [GIT-TRACKED] {status_part.strip()} {filename}", flush=True)
+            
+            print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
+        else:
+            print(f"  [GIT-WARNING] git status failed: {result.stderr}", flush=True)
+            
+    except Exception as e:
+        print(f"  [GIT-ERROR] Failed to detect file changes via git: {e}", flush=True)
+    
+    return files_modified
+    
     
     # NOTE: Loop detection removed. The recursion_limit=150 is the real circuit breaker.
     # Previous detection counted consecutive calls to same tool NAME without checking
@@ -493,19 +548,61 @@ async def _execute_react_loop(
     # legitimately run many different shell commands in a row.
     
     # Identify modified files and suggested tasks from tool calls
-    # CRITICAL: Only count files as modified if the tool call SUCCEEDED
+    # CRITICAL: Use GIT to detect actual file changes (more reliable)
     files_modified = []
     suggested_tasks = []
     explicitly_completed = False
     completion_details = {}
     
+    # PRIMARY: Use git to detect actual file changes in the worktree
+    worktree_path = state.get("worktree_path")
+    if worktree_path:
+        files_modified = _detect_modified_files_via_git(worktree_path)
+    
+    # FALLBACK: If git detection failed or found nothing, parse tool calls
+    # This also handles the case where worktree_path is not set
+    if not files_modified:
+        print(f"  [FALLBACK] Using tool-call parsing for file detection", flush=True)
+        
+        # Build a map of tool_call_id -> ToolMessage for success checking
+        tool_results = {}
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                tool_results[msg.tool_call_id] = msg
+        
+        print(f"  [DEBUG] Found {len(tool_results)} tool results", flush=True)
+        
+        for msg in messages:
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_call_id = tc.get("id")
+                    
+                    # Get the corresponding ToolMessage result
+                    tool_result = tool_results.get(tool_call_id) if tool_call_id else None
+                    
+                    if tc["name"] in ["write_file", "append_file"]:
+                        path = tc["args"].get("path")
+                        print(f"  [DEBUG] {tc['name']} call: id={tool_call_id}, path={path}, has_result={tool_result is not None}", flush=True)
+                        if path:
+                            # Only count as modified if the tool succeeded (no error in result)
+                            if tool_result:
+                                # Check if the result contains an error
+                                result_content = str(tool_result.content).lower()
+                                if "error" not in result_content and "field required" not in result_content:
+                                    files_modified.append(path)
+                                    print(f"  [TRACKED] {tc['name']}: {path}", flush=True)
+                                else:
+                                    print(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}", flush=True)
+                            else:
+                                # No result found - might be a partial execution, don't count it
+                                print(f"  [SKIP] No result found for {tc['name']} call to {path}", flush=True)
+    
+    # Parse tool calls for task creation and completion markers (not file operations)
     # Build a map of tool_call_id -> ToolMessage for success checking
     tool_results = {}
     for msg in messages:
         if isinstance(msg, ToolMessage):
             tool_results[msg.tool_call_id] = msg
-    
-    print(f"  [DEBUG] Found {len(tool_results)} tool results", flush=True)
     
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
@@ -514,25 +611,8 @@ async def _execute_react_loop(
                 
                 # Get the corresponding ToolMessage result
                 tool_result = tool_results.get(tool_call_id) if tool_call_id else None
-                
-                if tc["name"] in ["write_file", "append_file"]:
-                    path = tc["args"].get("path")
-                    print(f"  [DEBUG] {tc['name']} call: id={tool_call_id}, path={path}, has_result={tool_result is not None}", flush=True)
-                    if path:
-                        # Only count as modified if the tool succeeded (no error in result)
-                        if tool_result:
-                            # Check if the result contains an error
-                            result_content = str(tool_result.content).lower()
-                            if "error" not in result_content and "field required" not in result_content:
-                                files_modified.append(path)
-                                print(f"  [TRACKED] {tc['name']}: {path}", flush=True)
-                            else:
-                                print(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}", flush=True)
-                        else:
-                            # No result found - might be a partial execution, don't count it
-                            print(f"  [SKIP] No result found for {tc['name']} call to {path}", flush=True)
-                            
-                elif tc["name"] == "report_existing_implementation":
+
+                if tc["name"] == "report_existing_implementation":
                     explicitly_completed = True
                     completion_details = tc["args"]
                     print(f"  [LOG] Task marked as already implemented: {tc['args'].get('file_path')}", flush=True)

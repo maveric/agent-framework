@@ -78,7 +78,7 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
     
     if not task:
         print(f"  ERROR: Task {task_id} not found for resolution", flush=True)
-        return {"tasks": [task_to_dict(t) for t in tasks]}
+        return {"tasks": [task_to_dict(t) for t in tasks], "_interrupt_data": None}
     
     action = resolution.get("action")
     
@@ -162,7 +162,7 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
 
         # Trigger Replan to ensure graph integrity
         print(f"  Triggering smart replan to integrate new task...", flush=True)
-        return {"tasks": [task_to_dict(t) for t in tasks], "replan_requested": True}
+        return {"tasks": [task_to_dict(t) for t in tasks], "replan_requested": True, "_interrupt_data": None}
     
     elif action == "abandon":
         print(f"  Human abandoned task {task.id}", flush=True)
@@ -178,8 +178,11 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
     else:
         print(f"  ERROR: Unknown action '{action}'", flush=True)
     
-    # Return all tasks (including updated ones)
-    return {"tasks": [task_to_dict(t) for t in tasks]}
+    # Clear persisted interrupt data to prevent stale data on next interrupt
+    result = {"tasks": [task_to_dict(t) for t in tasks]}
+    result["_interrupt_data"] = None  # Clear it
+    return result
+
 
 
 async def director_node(state: OrchestratorState, config: RunnableConfig = None) -> Dict[str, Any]:
