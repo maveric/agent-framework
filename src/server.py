@@ -950,24 +950,26 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         
         async def resume_execution():
             try:
-                if has_real_interrupt:
-                    # Natural interrupt (from interrupt() call) - use Command(resume=...)
-                    logger.info(f"   Resuming via Command(resume=...) - natural interrupt")
-                    command = Command(resume=resolution.model_dump())
-                    await _stream_and_broadcast(orchestrator, command, config, run_id)
-                else:
-                    # Manual interrupt - store resolution in state and invoke normally
-                    logger.info(f"   Resuming via state update - manual interrupt")
-                    
-                    # Store the pending resolution in graph state for director to process
-                    await orchestrator.aupdate_state(config, {
-                        "pending_resolution": resolution.model_dump()
-                    })
-                    
-                    # Invoke graph normally (no Command) - director will pick up pending_resolution
-                    await _stream_and_broadcast(orchestrator, None, config, run_id)
+                # CRITICAL: Always use continuous dispatch loop, not super-step mode
+                # Load current state from database to continue where we left off
+                from run_persistence import load_run_state
+                
+                state = await load_run_state(run_id)
+                if not state:
+                    logger.error(f"   No saved state found for run {run_id}")
+                    return
+                
+                # Apply the resolution directly to state
+                # The director will process it via pending_resolution
+                state["pending_resolution"] = resolution.model_dump()
+                
+                logger.info(f"   Continuing dispatch loop with {len(state.get('tasks', []))} tasks")
+                
+                # Resume the continuous dispatch loop (not super-step mode!)
+                await _continuous_dispatch_loop(run_id, state, config)
                 
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
+
             except Exception as e:
                 logger.error(f"❌ Error during resume execution: {e}")
                 import traceback
