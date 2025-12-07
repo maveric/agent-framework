@@ -1666,7 +1666,32 @@ async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: 
                         capture_output=True,
                         timeout=120
                     )
+                    
                     logger.info(f"✅ Installed 'requests' in shared venv")
+                    
+                    # Install nodeenv and set up Node.js in the venv
+                    logger.info(f"Installing nodeenv for npm support...")
+                    subprocess.run(
+                        [str(pip_exe), "install", "nodeenv"],
+                        cwd=str(workspace_path),
+                        capture_output=True,
+                        timeout=120
+                    )
+                    
+                    # Add Node.js to the venv using nodeenv -p (prebuilt binaries)
+                    python_exe = venv_path / "Scripts" / "python.exe" if platform.system() == "Windows" else venv_path / "bin" / "python"
+                    try:
+                        subprocess.run(
+                            [str(python_exe), "-m", "nodeenv", "-p", "--prebuilt"],
+                            cwd=str(workspace_path),
+                            capture_output=True,
+                            timeout=300  # 5 minute timeout for node download
+                        )
+                        logger.info(f"✅ Installed Node.js/npm in shared venv via nodeenv")
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"nodeenv installation timed out - agents may need npm globally")
+                    except Exception as e:
+                        logger.warning(f"nodeenv installation failed: {e} - agents may need npm globally")
             except subprocess.TimeoutExpired:
                 logger.warning(f"Venv creation timed out - agents may need to create manually")
             except subprocess.CalledProcessError as e:
