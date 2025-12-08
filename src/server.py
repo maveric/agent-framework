@@ -1486,7 +1486,15 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                     if t.get("id") == rt.get("id"):
                                         t.update(rt)
                         elif key == "task_memories":
+                            # DEBUG: Log before and after to track memory loss
+                            for tid, msgs in value.items():
+                                existing_count = len(state.get("task_memories", {}).get(tid, []))
+                                new_count = len(msgs)
+                                logger.info(f"  [DEBUG task_memories] Strategist merging {tid[:12]}: existing={existing_count}, adding={new_count}")
                             state["task_memories"] = task_memories_reducer(state.get("task_memories", {}), value)
+                            for tid, msgs in value.items():
+                                merged_count = len(state.get("task_memories", {}).get(tid, []))
+                                logger.info(f"  [DEBUG task_memories] After merge {tid[:12]}: total={merged_count}")
                         elif key != "_wt_manager":
                             state[key] = value
                 await _broadcast_state_update(run_id, state)
