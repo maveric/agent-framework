@@ -204,6 +204,23 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 test_results_path = main_file  # Default to main
                         break
             
+            # PROACTIVE SEARCH: If no test results found in AAR, check expected location
+            # This handles cases where file was written but not tracked in files_modified
+            if not test_results_path or not test_results_path.exists():
+                task_filename = task.get("component", task_id)
+                expected_file = f"agents-work/test-results/test-{task_filename}.md"
+                
+                worktree_path = Path(workspace_path) / ".worktrees" / task_id
+                worktree_expected = worktree_path / expected_file
+                main_expected = Path(workspace_path) / expected_file
+                
+                if worktree_expected.exists():
+                    test_results_path = worktree_expected
+                    print(f"  [QA] Found test results at expected worktree path: {expected_file}", flush=True)
+                elif main_expected.exists():
+                    test_results_path = main_expected
+                    print(f"  [QA] Found test results at expected main path: {expected_file}", flush=True)
+            
             # Check for PROACTIVE FIXES (suggested_tasks) from the worker
             # If the worker suggested fixes, we skip strict QA and reset to PLANNED
             # so the Director can integrate the new tasks into the tree.
