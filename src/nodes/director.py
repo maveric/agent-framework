@@ -120,20 +120,34 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
         
         # Create new task from resolution data
         new_component = resolution.get("new_component", task.component)
-        new_phase_str = resolution.get("new_phase", task.phase.value)
+        new_phase_str = resolution.get("new_phase") or (task.phase.value if task.phase else "build")
         new_title = f"{new_component} {new_phase_str} Task".title() # Default title
         
-        # Append title to description so integrator can find it
-        new_description = resolution["new_description"]
+        # Validate required fields
+        new_description = resolution.get("new_description")
+        if not new_description:
+            print(f"  [ERROR] HITL resolution missing required field: new_description", flush=True)
+            # Return tasks unchanged with error state
+            return {"tasks": [task_to_dict(t) for t in tasks], "pending_resolution": None}
+        
+        # Validate phase is valid
+        valid_phases = ["build", "test", "plan"]
+        if new_phase_str not in valid_phases:
+            print(f"  [ERROR] Invalid phase '{new_phase_str}'. Must be one of: {valid_phases}", flush=True)
+            new_phase_str = "build"  # Default to build
+        
         if "Title: " not in new_description:
             new_description += f"\n\nTitle: {new_title}"
+        
+        # Get worker profile with validation
+        new_worker_profile_str = resolution.get("new_worker_profile") or (task.assigned_worker_profile.value if task.assigned_worker_profile else "code_worker")
 
         new_task = Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
             component=new_component,
             phase=TaskPhase(new_phase_str),
             status=TaskStatus.PLANNED,
-            assigned_worker_profile=WorkerProfile(resolution.get("new_worker_profile", task.assigned_worker_profile.value)),
+            assigned_worker_profile=WorkerProfile(new_worker_profile_str),
             description=new_description,
             acceptance_criteria=resolution.get("new_criteria", task.acceptance_criteria),
             depends_on=resolution.get("new_dependencies", []),
