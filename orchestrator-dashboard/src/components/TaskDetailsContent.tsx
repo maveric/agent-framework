@@ -1,11 +1,11 @@
 
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, UserCheck } from 'lucide-react';
 
 // Define the interface locally or import it if shared
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human' | 'awaiting_qa' | 'abandoned';
     phase: string;
     component: string;
     assigned_worker_profile?: string;
@@ -28,17 +28,44 @@ interface Task {
         type: string;
         reason: string;
         suggested_action: string;
+        blocking?: boolean;
     };
+    failure_reason?: string;
+    retry_count?: number;
 }
 
 interface TaskDetailsContentProps {
     task: Task;
     logs?: any[];
+    onResolveClick?: (task: Task) => void;
 }
 
-export function TaskDetailsContent({ task, logs }: TaskDetailsContentProps) {
+export function TaskDetailsContent({ task, logs, onResolveClick }: TaskDetailsContentProps) {
     return (
         <div className="space-y-4">
+            {/* Resolve Button for waiting_human tasks */}
+            {task.status === 'waiting_human' && onResolveClick && (
+                <div className="bg-yellow-900/20 border border-yellow-500/50 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-yellow-400">
+                            <UserCheck className="w-5 h-5" />
+                            <span className="font-medium">Requires Human Input</span>
+                        </div>
+                        <button
+                            onClick={() => onResolveClick(task)}
+                            className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-md font-medium transition-colors flex items-center gap-2"
+                        >
+                            Resolve Task
+                        </button>
+                    </div>
+                    {task.failure_reason && (
+                        <p className="text-xs text-yellow-200/70 mt-2">
+                            Reason: {task.failure_reason.slice(0, 200)}...
+                        </p>
+                    )}
+                </div>
+            )}
+
             {/* Description */}
             <div>
                 <h4 className="text-xs font-semibold text-slate-400 mb-1">Description</h4>

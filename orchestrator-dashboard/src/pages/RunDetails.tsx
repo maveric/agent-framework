@@ -14,7 +14,7 @@ import { RestartRunButton } from '../components/RestartRunButton';
 interface Task {
     id: string;
     description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human';
+    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human' | 'awaiting_qa' | 'abandoned';
     phase: string;
     component: string;
     assigned_worker_profile?: string;
@@ -38,7 +38,7 @@ interface Task {
         type: string;
         reason: string;
         suggested_action: string;
-        blocking: boolean;
+        blocking?: boolean;
     };
 }
 
@@ -239,6 +239,23 @@ export function RunDetails() {
         }
     };
 
+    // Handle clicking "Resolve" on a waiting_human task from TaskDetailsContent
+    const handleResolveClick = (task: Task) => {
+        // Build interrupt data from the task (same format as handleInterrupt)
+        const resolveData = {
+            task_id: task.id,
+            task_description: task.description,
+            failure_reason: task.aar?.summary || task.escalation?.reason || 'Task requires human review',
+            retry_count: task.retry_count || 0,
+            acceptance_criteria: task.acceptance_criteria || [],
+            component: task.component,
+            phase: task.phase,
+            assigned_worker_profile: task.assigned_worker_profile || 'code_worker',
+            depends_on: task.depends_on || []
+        };
+        setInterruptData(resolveData);
+        setShowInterruptModal(true);
+    };
 
 
     if (isLoading) {
@@ -453,7 +470,7 @@ export function RunDetails() {
 
                                             {expandedTasks.has(task.id) && (
                                                 <div className="mt-4 pt-4 border-t border-slate-700">
-                                                    <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />
+                                                    <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} onResolveClick={handleResolveClick} />
                                                 </div>
                                             )}
                                         </div>
@@ -514,7 +531,7 @@ export function RunDetails() {
                                                 </div>
                                             </div>
                                             <div className="p-4 overflow-y-auto flex-1">
-                                                <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} />
+                                                <TaskDetailsContent task={task} logs={run.task_memories?.[task.id]} onResolveClick={handleResolveClick} />
                                             </div>
                                         </>
                                     );
