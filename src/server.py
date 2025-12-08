@@ -1033,6 +1033,18 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         
         async def resume_execution():
             try:
+                # CRITICAL: Cancel any existing dispatch loop FIRST
+                # Otherwise the old loop keeps running and ignores our pending_resolution
+                if run_id in running_tasks and not running_tasks[run_id].done():
+                    logger.info(f"   Cancelling existing dispatch loop for {run_id}")
+                    running_tasks[run_id].cancel()
+                    try:
+                        await running_tasks[run_id]
+                    except asyncio.CancelledError:
+                        logger.info(f"   ✓ Old dispatch loop cancelled")
+                    except Exception as e:
+                        logger.warning(f"   Old dispatch loop ended with: {e}")
+                
                 # CRITICAL: Always use continuous dispatch loop, not super-step mode
                 # Load current state from database to continue where we left off
                 from run_persistence import load_run_state
