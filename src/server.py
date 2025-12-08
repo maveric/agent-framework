@@ -909,6 +909,22 @@ async def restart_run(run_id: str):
     workspace_path = state.get("_workspace_path", "")
     thread_id = runs_index.get(run_id, {}).get("thread_id", f"thread_{run_id}")
     
+    # CRITICAL: Reinitialize _wt_manager after loading from DB
+    # The _wt_manager object is not serializable, so we must recreate it
+    # WITHOUT THIS, workers fall back to main workspace and files leak!
+    if workspace_path:
+        from pathlib import Path
+        workspace_path_obj = Path(workspace_path)
+        worktree_base = workspace_path_obj / ".worktrees"
+        worktree_base.mkdir(exist_ok=True)
+        state["_wt_manager"] = WorktreeManager(
+            repo_path=workspace_path_obj,
+            worktree_base=worktree_base
+        )
+        logger.info(f"   Restored _wt_manager at: {worktree_base}")
+    else:
+        logger.warning(f"   ⚠️ _workspace_path not found - workers will use fallback!")
+    
     # Rebuild run_config
     run_config = {
         "configurable": {
