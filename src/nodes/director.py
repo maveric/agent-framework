@@ -189,22 +189,9 @@ def _process_human_resolution(state: OrchestratorState, resolution: dict) -> Dic
                 tasks[i] = task
                 break
         
-        # CASCADE: Also abandon any tasks that depend on this abandoned task
-        # They can never complete if their dependency is abandoned
-        abandoned_count = 0
-        for t in tasks:
-            if task_id in (t.depends_on or []):
-                if t.status not in [TaskStatus.COMPLETE, TaskStatus.ABANDONED]:
-                    t.status = TaskStatus.ABANDONED
-                    t.updated_at = datetime.now()
-                    abandoned_count += 1
-                    print(f"  Cascade-abandoned: {t.id} (depended on {task_id})", flush=True)
-        
-        if abandoned_count > 0:
-            print(f"  Total cascade-abandoned: {abandoned_count} tasks", flush=True)
-        
-        # Trigger replan to handle the gap left by abandoned tasks
-        print(f"  Triggering replan to handle abandoned task gap...", flush=True)
+        # Trigger replan so director can handle dependent tasks
+        # (dependents may need their dependencies updated or be reworked)
+        print(f"  Triggering replan to handle abandoned task...", flush=True)
         return {"tasks": [task_to_dict(t) for t in tasks], "replan_requested": True, "_interrupt_data": None}
     
     else:
