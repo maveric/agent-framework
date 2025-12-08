@@ -325,7 +325,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 wt_manager = state.get("_wt_manager")
                 if wt_manager and not mock_mode:
                     try:
-                        result = wt_manager.merge_to_main(task_id)
+                        result = await wt_manager.merge_to_main(task_id)
                         if result.success:
                             print(f"  [MERGED] Task {task_id} merged successfully", flush=True)
                         else:

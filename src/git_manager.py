@@ -56,9 +56,9 @@ class MergeResult:
     llm_resolved: bool = False  # True if LLM resolved the conflict
 
 
-def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) -> bool:
+async def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) -> bool:
     """
-    Use LLM to resolve merge conflicts.
+    Use LLM to resolve merge conflicts (async).
     
     Args:
         repo_path: Path to git repository (main worktree)
@@ -117,13 +117,13 @@ FILE: {file_path}
 
 Output the resolved file content:"""
 
-            # Call LLM
+            # Call LLM (async)
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
             
-            response = model.invoke(messages)
+            response = await model.ainvoke(messages)
             resolved_content = response.content.strip()
             
             # Remove any markdown code blocks if LLM added them
@@ -433,9 +433,9 @@ class WorktreeManager:
             
         return ""
     
-    def merge_to_main(self, task_id: str) -> MergeResult:
+    async def merge_to_main(self, task_id: str) -> MergeResult:
         """
-        Merge a task's branch to main.
+        Merge a task's branch to main (async for LLM conflict resolution).
         
         Returns:
             MergeResult indicating success or conflict
@@ -611,7 +611,7 @@ class WorktreeManager:
                         )
                 
                 # Try LLM-assisted resolution for remaining files
-                if _llm_resolve_conflict(self.repo_path, conflicted_files):
+                if await _llm_resolve_conflict(self.repo_path, conflicted_files):
                     # LLM resolved the conflicts - complete the merge
                     commit_result = subprocess.run(
                         ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - LLM resolved conflicts"],

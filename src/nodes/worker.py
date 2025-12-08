@@ -201,7 +201,7 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                     # In a full flow, this might be gated by QA, but for linear dependencies we need it.
                     try:
                         print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
-                        merge_result = wt_manager.merge_to_main(task_id)
+                        merge_result = await wt_manager.merge_to_main(task_id)
                         if merge_result.success:
                             print(f"  Merged to main", flush=True)
                         else:
