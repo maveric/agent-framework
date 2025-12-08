@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class WorktreeStatus(str, Enum):
@@ -639,6 +639,145 @@ class WorktreeManager:
         
         info.status = WorktreeStatus.DELETED
         info.deleted_at = datetime.now()
+
+    def recover_dirty_worktree(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Recover a dirty worktree by committing uncommitted changes.
+        
+        Called when a task restarts and its worktree has uncommitted changes.
+        
+        Returns:
+            Dict with recovery info if changes were committed, None if clean:
+            {
+                "had_changes": bool,
+                "commit_hash": str (if committed),
+                "files_modified": List[str],
+                "files_added": List[str], 
+                "files_deleted": List[str],
+                "summary": str (human-readable summary for agent context)
+            }
+        """
+        info = self.worktrees.get(task_id)
+        if not info:
+            info = self._restore_worktree_info(task_id)
+        
+        if not info or not info.worktree_path.exists():
+            return None
+        
+        wt_path = info.worktree_path
+        
+        # Check for uncommitted changes
+        try:
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=wt_path,
+                capture_output=True,
+                check=True
+            )
+            status_output = status_result.stdout.decode().strip()
+            
+            if not status_output:
+                # No uncommitted changes
+                return {"had_changes": False, "summary": ""}
+            
+            # Parse the changes
+            lines = status_output.split('\n')
+            files_modified = []
+            files_added = []
+            files_deleted = []
+            
+            for line in lines:
+                if len(line) < 3:
+                    continue
+                status_code = line[:2]
+                filepath = line[3:].strip()
+                
+                if status_code.startswith('D') or status_code.endswith('D'):
+                    files_deleted.append(filepath)
+                elif status_code.startswith('A') or status_code == '??':
+                    files_added.append(filepath)
+                else:
+                    files_modified.append(filepath)
+            
+            # Stage all changes
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=wt_path,
+                check=True,
+                capture_output=True
+            )
+            
+            # Commit with WIP message
+            commit_message = f"WIP: Interrupted work on {task_id}"
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                cwd=wt_path,
+                capture_output=True
+            )
+            
+            # Get commit hash
+            hash_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=wt_path,
+                capture_output=True
+            )
+            commit_hash = hash_result.stdout.decode().strip()[:8]
+            
+            # Build summary for agent context
+            summary_lines = [
+                "⚠️ PREVIOUS ATTEMPT CONTEXT:",
+                "A previous agent made changes but didn't complete. Their work has been committed as WIP.",
+                ""
+            ]
+            
+            if files_modified:
+                summary_lines.append(f"Modified files ({len(files_modified)}):")
+                for f in files_modified[:10]:  # Limit to 10
+                    summary_lines.append(f"  - {f}")
+                if len(files_modified) > 10:
+                    summary_lines.append(f"  ... and {len(files_modified) - 10} more")
+            
+            if files_added:
+                summary_lines.append(f"\nAdded files ({len(files_added)}):")
+                for f in files_added[:10]:
+                    summary_lines.append(f"  + {f}")
+                if len(files_added) > 10:
+                    summary_lines.append(f"  ... and {len(files_added) - 10} more")
+                    
+            if files_deleted:
+                summary_lines.append(f"\nDeleted files ({len(files_deleted)}):")
+                for f in files_deleted[:5]:
+                    summary_lines.append(f"  - {f}")
+                if len(files_deleted) > 5:
+                    summary_lines.append(f"  ... and {len(files_deleted) - 5} more")
+            
+            summary_lines.extend([
+                "",
+                "You may:",
+                "1. Continue from where they left off (review their changes first)",
+                "2. Amend/fix their changes if there are issues",
+                "3. Reset and start fresh: git reset HEAD~1 --hard",
+                "",
+                f"Commit: {commit_hash}"
+            ])
+            
+            print(f"  [RECOVERY] Committed {len(files_modified) + len(files_added) + len(files_deleted)} uncommitted files as WIP", flush=True)
+            
+            return {
+                "had_changes": True,
+                "commit_hash": commit_hash,
+                "files_modified": files_modified,
+                "files_added": files_added,
+                "files_deleted": files_deleted,
+                "summary": "\n".join(summary_lines)
+            }
+            
+        except subprocess.CalledProcessError as e:
+            print(f"  [RECOVERY] Failed to check/commit worktree: {e}", flush=True)
+            return None
+        except Exception as e:
+            print(f"  [RECOVERY] Unexpected error: {e}", flush=True)
+            return None
 
 
 def initialize_git_repo(repo_path: Path) -> None:

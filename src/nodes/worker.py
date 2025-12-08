@@ -120,19 +120,29 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # Create/get worktree for this task
     wt_manager = state.get("_wt_manager")
     worktree_path = None
+    recovery_context = None  # Will contain info about recovered dirty worktree
+    
     if wt_manager and not state.get("mock_mode", False):
         try:
             wt_info = wt_manager.create_worktree(task_id)
             worktree_path = wt_info.worktree_path
             print(f"  Created worktree: {worktree_path}", flush=True)
+            
+            # IMPORTANT: Check for and recover any dirty worktree state
+            # This handles restarts/retries where previous agent left uncommitted changes
+            recovery_result = wt_manager.recover_dirty_worktree(task_id)
+            if recovery_result and recovery_result.get("had_changes"):
+                recovery_context = recovery_result.get("summary", "")
+                print(f"  [RECOVERY] Found prior uncommitted work, see context below", flush=True)
         except Exception as e:
             print(f"  Warning: Failed to create worktree: {e}", flush=True)
             worktree_path = state.get("_workspace_path")
     else:
         worktree_path = state.get("_workspace_path")
     
-    # Inject worktree path into state for handlers
+    # Inject worktree path and recovery context into state for handlers
     state["worktree_path"] = worktree_path
+    state["_recovery_context"] = recovery_context  # Handlers will inject this into prompts
     print(f"DEBUG: worker_node set state['worktree_path']={state.get('worktree_path')}", flush=True)
     
     # Execute handler
@@ -1221,6 +1231,10 @@ except Exception as e:
 If you skip verification and your code fails in QA, you'll waste tokens on retry cycles.
 """
 
+    # INJECT RECOVERY CONTEXT if a previous agent left uncommitted work
+    recovery_context = state.get("_recovery_context")
+    if recovery_context:
+        system_prompt = f"{system_prompt}\n\n{recovery_context}"
     
     return await _execute_react_loop(task, tools, system_prompt, state, config)
 
