@@ -856,6 +856,15 @@ async def cancel_run(run_id: str):
     
     # Cancel the task
     task.cancel()
+    
+    # Wait for cancellation to complete
+    try:
+        await task
+    except asyncio.CancelledError:
+        logger.info(f"   ✓ Dispatch loop cancelled successfully")
+    except Exception as e:
+        logger.warning(f"   Dispatch loop ended with: {e}")
+    
     logger.warning(f"🛑 Cancelled run {run_id}")
     
     # Update status
