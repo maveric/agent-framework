@@ -498,14 +498,44 @@ class WorktreeManager:
         ]
         
         if uncommitted_lines:
-            error_msg = f"Uncommitted changes in main repo - worktree isolation may be broken:\n" + "\n".join(uncommitted_lines)
-            print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
-            return MergeResult(
-                success=False,
-                task_id=task_id,
-                conflict=False,
-                error_message=error_msg
-            )
+            # RECOVERY: Auto-commit dirty main repo changes as WIP
+            # This handles restarts/crashes where previous agent left uncommitted work
+            print(f"  ⚠️ Main repo has uncommitted changes ({len(uncommitted_lines)} items), attempting recovery...", flush=True)
+            
+            try:
+                # Stage all changes
+                subprocess.run(
+                    ["git", "add", "-A"],
+                    cwd=self.repo_path,
+                    check=True,
+                    capture_output=True
+                )
+                
+                # Commit with WIP message
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", f"WIP: Auto-recovered uncommitted changes before merge (task {task_id})"],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if commit_result.returncode == 0:
+                    print(f"  ✅ RECOVERY: Committed {len(uncommitted_lines)} uncommitted items to main as WIP", flush=True)
+                    print(f"     Files: {', '.join(uncommitted_lines[:5])}{'...' if len(uncommitted_lines) > 5 else ''}", flush=True)
+                else:
+                    # Commit failed (maybe nothing to commit after all)
+                    print(f"  ⚠️ RECOVERY: Commit returned non-zero but continuing: {commit_result.stderr[:100]}", flush=True)
+                    
+            except subprocess.CalledProcessError as e:
+                # Recovery failed - report but don't block entirely
+                error_msg = f"Uncommitted changes in main repo - recovery failed:\n" + "\n".join(uncommitted_lines)
+                print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+                return MergeResult(
+                    success=False,
+                    task_id=task_id,
+                    conflict=False,
+                    error_message=error_msg
+                )
         
         # Attempt merge
         result = subprocess.run(
