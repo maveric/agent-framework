@@ -474,12 +474,30 @@ class WorktreeManager:
             )
         
         # Switch to main
+        # First abort any in-progress merge that might be blocking checkout
         subprocess.run(
-            ["git", "checkout", self.main_branch],
+            ["git", "merge", "--abort"],
             cwd=self.repo_path,
-            check=True,
-            capture_output=True
+            capture_output=True  # Ignore if no merge in progress
         )
+        
+        try:
+            subprocess.run(
+                ["git", "checkout", self.main_branch],
+                cwd=self.repo_path,
+                check=True,
+                capture_output=True
+            )
+        except subprocess.CalledProcessError as e:
+            # Checkout failed - repo likely has uncommitted changes
+            error_msg = f"Cannot checkout {self.main_branch}: {e.stderr.decode() if e.stderr else str(e)}"
+            print(f"  ❌ {error_msg}", flush=True)
+            return MergeResult(
+                success=False,
+                task_id=task_id,
+                conflict=False,
+                error_message=error_msg
+            )
         
         # Check for uncommitted changes in main repo (should never happen with worktrees)
         # NOTE: We only care about modified/staged files, NOT untracked files (??)
