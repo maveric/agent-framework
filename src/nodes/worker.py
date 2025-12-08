@@ -260,9 +260,13 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # The state key is "task_memories" which is a dict mapping task_id -> list of messages
     if hasattr(result, "messages") and result.messages:
         updates["task_memories"] = {task_id: result.messages}
+        print(f"  [DEBUG task_memories] Worker returning {len(result.messages)} messages for {task_id[:12]}", flush=True)
     elif hasattr(result, "aar") and result.aar and hasattr(result.aar, "messages"):
         # Fallback if messages are attached to AAR (unlikely but possible in some flows)
         updates["task_memories"] = {task_id: result.aar.messages}
+        print(f"  [DEBUG task_memories] Worker returning {len(result.aar.messages)} messages (from AAR) for {task_id[:12]}", flush=True)
+    else:
+        print(f"  [DEBUG task_memories] Worker has NO messages for {task_id[:12]} (result.messages={hasattr(result, 'messages')} / len={len(result.messages) if hasattr(result, 'messages') and result.messages else 0})", flush=True)
         
     return updates
 
