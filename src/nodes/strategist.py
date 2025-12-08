@@ -189,7 +189,19 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         if Path(file).is_absolute():
                             test_results_path = Path(file)
                         else:
-                            test_results_path = worktree_path / file
+                            # Try worktree first, then fall back to main workspace
+                            # (after merge, files are in main, not worktree)
+                            worktree_file = worktree_path / file
+                            main_file = Path(workspace_path) / file
+                            
+                            if worktree_file.exists():
+                                test_results_path = worktree_file
+                            elif main_file.exists():
+                                test_results_path = main_file
+                                print(f"  [QA] Found test results in main workspace (post-merge): {file}", flush=True)
+                            else:
+                                # Try both paths with the file as-is
+                                test_results_path = main_file  # Default to main
                         break
             
             # Check for PROACTIVE FIXES (suggested_tasks) from the worker
