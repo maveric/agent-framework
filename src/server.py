@@ -1380,17 +1380,24 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                         # Merge updates
                                         task.update(rt)
                                         break
-                            # Merge tool outputs/messages to task_memories (for chat log in UI)
+                                
+                                # Merge tool outputs/messages to task_memories (for chat log in UI)
+                                # CRITICAL: This must be OUTSIDE the for loop!
                                 if "task_memories" in c.result:
                                     worker_memories = c.result["task_memories"]
                                     if worker_memories:
                                         # Apply reducer to preserve existing memories
+                                        for tid, msgs in worker_memories.items():
+                                            existing_count = len(state.get("task_memories", {}).get(tid, []))
+                                            logger.info(f"  [DEBUG task_memories] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
                                         state["task_memories"] = task_memories_reducer(
                                             state.get("task_memories", {}), 
                                             worker_memories
                                         )
+                                        for tid, msgs in worker_memories.items():
+                                            merged_count = len(state.get("task_memories", {}).get(tid, []))
+                                            logger.info(f"  [DEBUG task_memories] After worker merge {tid[:12]}: total={merged_count}")
 
-                                
                                 logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
                                 
                                 # Log files modified if any
