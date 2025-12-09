@@ -6,7 +6,7 @@ Version 1.0 — November 2025
 All node implementations.
 """
 
-from .director import director_node
+from .director_main import director_node
 from .worker import worker_node
 from .strategist import strategist_node
 from .guardian import guardian_node

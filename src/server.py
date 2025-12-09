@@ -1334,7 +1334,7 @@ async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         Director → spawn(workers) → poll completions → Director → spawn more...
     """
     from task_queue import TaskCompletionQueue
-    from nodes.director import director_node
+    from nodes.director_main import director_node
     from nodes.worker import worker_node
     from nodes.strategist import strategist_node
     from orchestrator_types import task_to_dict
