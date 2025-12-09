@@ -4,9 +4,11 @@ API State Management
 Centralized state management for the orchestrator API server.
 """
 
+import logging
 from typing import Dict, Any
 from langgraph_definition import create_orchestrator
 
+logger = logging.getLogger(__name__)
 
 # In-memory storage for runs (in a real app, this would be a DB)
 # We use the LangGraph checkpointing for the actual state, but we need an index
@@ -20,6 +22,9 @@ run_states: Dict[str, Dict[str, Any]] = {}  # run_id -> full state dict
 
 # Global checkpointer (initialized at startup)
 global_checkpointer = None
+
+# Global connection manager (initialized by server)
+manager = None
 
 
 def get_orchestrator_graph():
