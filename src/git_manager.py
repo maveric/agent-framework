@@ -7,12 +7,15 @@ Manages git worktrees for isolated task execution.
 Based on Spec/git_filesystem_spec.py.
 """
 
+import logging
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class WorktreeStatus(str, Enum):
@@ -71,7 +74,7 @@ async def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) ->
     from config import OrchestratorConfig
     from langchain_core.messages import HumanMessage, SystemMessage
     
-    print(f"  🤖 LLM attempting to resolve {len(conflicted_files)} conflict(s)...", flush=True)
+    logger.info(f"  🤖 LLM attempting to resolve {len(conflicted_files)} conflict(s)...")
     
     try:
         # Get coder model config for merge resolution
@@ -83,7 +86,7 @@ async def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) ->
             full_path = repo_path / file_path
             
             if not full_path.exists():
-                print(f"  ⚠️ Conflicted file not found: {file_path}", flush=True)
+                logger.warning(f"  ⚠️ Conflicted file not found: {file_path}")
                 continue
             
             # Read the conflicted file (has <<<<<<, =======, >>>>>> markers)
@@ -92,10 +95,10 @@ async def _llm_resolve_conflict(repo_path: Path, conflicted_files: List[str]) ->
             
             # Check if it actually has conflict markers
             if "<<<<<<" not in conflicted_content:
-                print(f"  ⚠️ No conflict markers in {file_path}, skipping", flush=True)
+                logger.warning(f"  ⚠️ No conflict markers in {file_path}, skipping")
                 continue
-            
-            print(f"  🔧 Resolving: {file_path}", flush=True)
+
+            logger.info(f"  🔧 Resolving: {file_path}")
             
             # Create merge resolution prompt
             system_prompt = """You are a code merge expert. You will receive a file with git merge conflict markers.
@@ -138,7 +141,7 @@ Output the resolved file content:"""
             
             # Verify no conflict markers remain
             if "<<<<<<" in resolved_content or "=======" in resolved_content or ">>>>>>" in resolved_content:
-                print(f"  ❌ LLM resolution still has conflict markers, aborting", flush=True)
+                logger.error(f"  ❌ LLM resolution still has conflict markers, aborting")
                 return False
             
             # Write resolved content
@@ -152,13 +155,13 @@ Output the resolved file content:"""
                 check=True,
                 capture_output=True
             )
-            
-            print(f"  ✅ Resolved: {file_path}", flush=True)
-        
+
+            logger.info(f"  ✅ Resolved: {file_path}")
+
         return True
-        
+
     except Exception as e:
-        print(f"  ❌ LLM merge resolution failed: {e}", flush=True)
+        logger.error(f"  ❌ LLM merge resolution failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -207,7 +210,7 @@ class WorktreeManager:
                 status=WorktreeStatus.ACTIVE
             )
             self.worktrees[task_id] = info
-            print(f"  [RECOVERY] Restored worktree info for {task_id} from disk", flush=True)
+            logger.info(f"  [RECOVERY] Restored worktree info for {task_id} from disk")
             return info
             
         return None
@@ -248,7 +251,7 @@ class WorktreeManager:
                     capture_output=True
                 )
             except Exception as e:
-                print(f"  Warning: Failed to sync worktree with main: {e}")
+                logger.warning(f"  Warning: Failed to sync worktree with main: {e}")
 
             return WorktreeInfo(
                 task_id=task_id,
@@ -465,7 +468,7 @@ class WorktreeManager:
         
         if uncommitted_lines:
             error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n" + "\n".join(uncommitted_lines)
-            print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+            logger.error(f"  ❌ MERGE BLOCKED: {error_msg}")
             return MergeResult(
                 success=False,
                 task_id=task_id,
@@ -491,7 +494,7 @@ class WorktreeManager:
         except subprocess.CalledProcessError as e:
             # Checkout failed - repo likely has uncommitted changes
             error_msg = f"Cannot checkout {self.main_branch}: {e.stderr.decode() if e.stderr else str(e)}"
-            print(f"  ❌ {error_msg}", flush=True)
+            logger.error(f"  ❌ {error_msg}")
             return MergeResult(
                 success=False,
                 task_id=task_id,
@@ -518,7 +521,7 @@ class WorktreeManager:
         if uncommitted_lines:
             # RECOVERY: Auto-commit dirty main repo changes as WIP
             # This handles restarts/crashes where previous agent left uncommitted work
-            print(f"  ⚠️ Main repo has uncommitted changes ({len(uncommitted_lines)} items), attempting recovery...", flush=True)
+            logger.warning(f"  ⚠️ Main repo has uncommitted changes ({len(uncommitted_lines)} items), attempting recovery...")
             
             try:
                 # Stage all changes
@@ -536,18 +539,18 @@ class WorktreeManager:
                     capture_output=True,
                     text=True
                 )
-                
+
                 if commit_result.returncode == 0:
-                    print(f"  ✅ RECOVERY: Committed {len(uncommitted_lines)} uncommitted items to main as WIP", flush=True)
-                    print(f"     Files: {', '.join(uncommitted_lines[:5])}{'...' if len(uncommitted_lines) > 5 else ''}", flush=True)
+                    logger.info(f"  ✅ RECOVERY: Committed {len(uncommitted_lines)} uncommitted items to main as WIP")
+                    logger.info(f"     Files: {', '.join(uncommitted_lines[:5])}{'...' if len(uncommitted_lines) > 5 else ''}")
                 else:
                     # Commit failed (maybe nothing to commit after all)
-                    print(f"  ⚠️ RECOVERY: Commit returned non-zero but continuing: {commit_result.stderr[:100]}", flush=True)
+                    logger.warning(f"  ⚠️ RECOVERY: Commit returned non-zero but continuing: {commit_result.stderr[:100]}")
                     
             except subprocess.CalledProcessError as e:
                 # Recovery failed - report but don't block entirely
                 error_msg = f"Uncommitted changes in main repo - recovery failed:\n" + "\n".join(uncommitted_lines)
-                print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+                logger.error(f"  ❌ MERGE BLOCKED: {error_msg}")
                 return MergeResult(
                     success=False,
                     task_id=task_id,
@@ -570,7 +573,7 @@ class WorktreeManager:
             return MergeResult(success=True, task_id=task_id)
         else:
             # Merge conflict detected - try LLM resolution before aborting
-            print(f"  ⚠️ Merge conflict detected for {task_id}", flush=True)
+            logger.warning(f"  ⚠️ Merge conflict detected for {task_id}")
             
             # Get list of conflicted files
             status_result = subprocess.run(
@@ -580,9 +583,9 @@ class WorktreeManager:
                 text=True
             )
             conflicted_files = [f for f in status_result.stdout.strip().split('\n') if f]
-            
+
             if conflicted_files:
-                print(f"  📝 Conflicted files: {conflicted_files}", flush=True)
+                logger.info(f"  📝 Conflicted files: {conflicted_files}")
                 
                 # Fast-path: Auto-resolve test result and doc files (disposable)
                 auto_resolve_patterns = ['agents-work/test-results/', 'agents-work/plans/']
@@ -605,9 +608,9 @@ class WorktreeManager:
                             )
                             auto_resolved.append(cf)
                             conflicted_files.remove(cf)
-                            print(f"  ✅ Auto-resolved (accept incoming): {cf}", flush=True)
+                            logger.info(f"  ✅ Auto-resolved (accept incoming): {cf}")
                         except Exception as e:
-                            print(f"  ⚠️ Failed to auto-resolve {cf}: {e}", flush=True)
+                            logger.warning(f"  ⚠️ Failed to auto-resolve {cf}: {e}")
                 
                 # If all conflicts are auto-resolved, we can proceed without LLM
                 if not conflicted_files:
@@ -618,7 +621,7 @@ class WorktreeManager:
                         text=True
                     )
                     if commit_result.returncode == 0:
-                        print(f"  ✅ All conflicts auto-resolved for {task_id}", flush=True)
+                        logger.info(f"  ✅ All conflicts auto-resolved for {task_id}")
                         info.status = WorktreeStatus.MERGED
                         info.merged_at = datetime.now()
                         return MergeResult(
@@ -637,9 +640,9 @@ class WorktreeManager:
                         capture_output=True,
                         text=True
                     )
-                    
+
                     if commit_result.returncode == 0:
-                        print(f"  ✅ LLM successfully resolved merge conflict for {task_id}", flush=True)
+                        logger.info(f"  ✅ LLM successfully resolved merge conflict for {task_id}")
                         info.status = WorktreeStatus.MERGED
                         info.merged_at = datetime.now()
                         return MergeResult(
@@ -649,7 +652,7 @@ class WorktreeManager:
                             conflicting_files=conflicted_files
                         )
                     else:
-                        print(f"  ❌ Failed to commit LLM resolution: {commit_result.stderr}", flush=True)
+                        logger.error(f"  ❌ Failed to commit LLM resolution: {commit_result.stderr}")
             
             # LLM resolution failed or no conflicted files - abort merge
             subprocess.run(
@@ -808,8 +811,8 @@ class WorktreeManager:
                 "",
                 f"Commit: {commit_hash}"
             ])
-            
-            print(f"  [RECOVERY] Committed {len(files_modified) + len(files_added) + len(files_deleted)} uncommitted files as WIP", flush=True)
+
+            logger.info(f"  [RECOVERY] Committed {len(files_modified) + len(files_added) + len(files_deleted)} uncommitted files as WIP")
             
             return {
                 "had_changes": True,
@@ -819,12 +822,12 @@ class WorktreeManager:
                 "files_deleted": files_deleted,
                 "summary": "\n".join(summary_lines)
             }
-            
+
         except subprocess.CalledProcessError as e:
-            print(f"  [RECOVERY] Failed to check/commit worktree: {e}", flush=True)
+            logger.error(f"  [RECOVERY] Failed to check/commit worktree: {e}")
             return None
         except Exception as e:
-            print(f"  [RECOVERY] Unexpected error: {e}", flush=True)
+            logger.error(f"  [RECOVERY] Unexpected error: {e}")
             return None
 
 

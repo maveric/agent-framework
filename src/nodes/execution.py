@@ -2,6 +2,7 @@
 React loop execution for worker agents.
 """
 
+import logging
 from typing import Any, Dict, Callable, List
 from datetime import datetime
 
@@ -14,6 +15,8 @@ from config import OrchestratorConfig, ModelConfig
 from llm_logger import log_llm_request, validate_request_size, log_llm_response
 
 from .utils import _detect_modified_files_via_git, _mock_execution
+
+logger = logging.getLogger(__name__)
 
 
 async def _execute_react_loop(
@@ -80,17 +83,17 @@ async def _execute_react_loop(
     try:
         workspace_path = state.get("_workspace_path")
         stats = log_llm_request(task.id, inputs["messages"], tools, {}, workspace_path=workspace_path)
-        print(f"  [LOG] Request: {stats['message_count']} msgs, {stats['total_chars']} chars (~{stats['estimated_tokens']} tokens)", flush=True)
-        print(f"  [LOG] Tools: {stats['tool_count']}, Log: {stats['log_file']}", flush=True)
+        logger.info(f"  [LOG] Request: {stats['message_count']} msgs, {stats['total_chars']} chars (~{stats['estimated_tokens']} tokens)")
+        logger.info(f"  [LOG] Tools: {stats['tool_count']}, Log: {stats['log_file']}")
 
         # Validate size (max 100K chars to prevent issues)
         validate_request_size(stats, max_chars=100000)
     except Exception as e:
-        print(f"  [LOG ERROR]: {e}", flush=True)
+        logger.error(f"  [LOG ERROR]: {e}")
         if "too large" in str(e).lower():
             raise
 
-    print(f"  Starting ReAct agent...", flush=True)
+    logger.info(f"  Starting ReAct agent...")
 
     # NOTE: The recursion_limit=150 is the circuit breaker for infinite loops.
 
@@ -109,7 +112,7 @@ async def _execute_react_loop(
         is_rate_limit = "rate_limit" in error_msg.lower() or "429" in error_msg
         is_tool_error = "access denied" in error_msg.lower() or "outside workspace" in error_msg.lower()
 
-        print(f"  [AGENT ERROR] {error_type}: {error_msg[:200]}", flush=True)
+        logger.error(f"  [AGENT ERROR] {error_type}: {error_msg[:200]}")
 
         # Create appropriate AAR based on error type
         if is_rate_limit:
@@ -184,7 +187,7 @@ async def _execute_react_loop(
     # FALLBACK: If git detection failed or found nothing, parse tool calls
     # This also handles the case where worktree_path is not set
     if not files_modified:
-        print(f"  [FALLBACK] Using tool-call parsing for file detection", flush=True)
+        logger.info(f"  [FALLBACK] Using tool-call parsing for file detection")
 
         # Build a map of tool_call_id -> ToolMessage for success checking
         tool_results = {}
@@ -192,7 +195,7 @@ async def _execute_react_loop(
             if isinstance(msg, ToolMessage):
                 tool_results[msg.tool_call_id] = msg
 
-        print(f"  [DEBUG] Found {len(tool_results)} tool results", flush=True)
+        logger.info(f"  [DEBUG] Found {len(tool_results)} tool results")
 
         for msg in messages:
             if isinstance(msg, AIMessage) and msg.tool_calls:
@@ -204,7 +207,7 @@ async def _execute_react_loop(
 
                     if tc["name"] in ["write_file", "append_file"]:
                         path = tc["args"].get("path")
-                        print(f"  [DEBUG] {tc['name']} call: id={tool_call_id}, path={path}, has_result={tool_result is not None}", flush=True)
+                        logger.info(f"  [DEBUG] {tc['name']} call: id={tool_call_id}, path={path}, has_result={tool_result is not None}")
                         if path:
                             # Only count as modified if the tool succeeded (no error in result)
                             if tool_result:
@@ -212,12 +215,12 @@ async def _execute_react_loop(
                                 result_content = str(tool_result.content).lower()
                                 if "error" not in result_content and "field required" not in result_content:
                                     files_modified.append(path)
-                                    print(f"  [TRACKED] {tc['name']}: {path}", flush=True)
+                                    logger.info(f"  [TRACKED] {tc['name']}: {path}")
                                 else:
-                                    print(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}", flush=True)
+                                    logger.info(f"  [SKIP] Tool call failed for {path}: {tool_result.content[:100]}")
                             else:
                                 # No result found - might be a partial execution, don't count it
-                                print(f"  [SKIP] No result found for {tc['name']} call to {path}", flush=True)
+                                logger.info(f"  [SKIP] No result found for {tc['name']} call to {path}")
 
     # Parse tool calls for task creation and completion markers (not file operations)
     # Build a map of tool_call_id -> ToolMessage for success checking
@@ -237,12 +240,12 @@ async def _execute_react_loop(
                 if tc["name"] == "report_existing_implementation":
                     explicitly_completed = True
                     completion_details = tc["args"]
-                    print(f"  [LOG] Task marked as already implemented: {tc['args'].get('file_path')}", flush=True)
+                    logger.info(f"  [LOG] Task marked as already implemented: {tc['args'].get('file_path')}")
 
                 elif tc["name"] == "create_subtasks":
-                    print(f"  [DEBUG] Tool call: {tc.get('name')} args keys: {list(tc.get('args', {}).keys())}", flush=True)
+                    logger.info(f"  [DEBUG] Tool call: {tc.get('name')} args keys: {list(tc.get('args', {}).keys())}")
                     subtasks = tc["args"].get("subtasks", [])
-                    print(f"  [LOG] Captured {len(subtasks)} suggested subtasks", flush=True)
+                    logger.info(f"  [LOG] Captured {len(subtasks)} suggested subtasks")
 
                     # Convert dicts to SuggestedTask objects
                     import uuid
@@ -251,8 +254,8 @@ async def _execute_react_loop(
                         try:
                             # STRICT VALIDATION: Only accept proper dict format
                             if not isinstance(st, dict):
-                                print(f"  [ERROR] Invalid subtask format: expected dict, got {type(st).__name__}. Subtask will be skipped.", flush=True)
-                                print(f"  [ERROR] LLM must call create_subtasks with a LIST of DICTS, not strings or other types.", flush=True)
+                                logger.error(f"  [ERROR] Invalid subtask format: expected dict, got {type(st).__name__}. Subtask will be skipped.")
+                                logger.error(f"  [ERROR] LLM must call create_subtasks with a LIST of DICTS, not strings or other types.")
                                 continue
 
                             title = st.get("title", "Untitled")
@@ -277,7 +280,7 @@ async def _execute_react_loop(
                                 priority=st.get("priority", 5)
                             ))
                         except Exception as e:
-                            print(f"  [ERROR] Failed to parse suggested task: {e}", flush=True)
+                            logger.error(f"  [ERROR] Failed to parse suggested task: {e}")
 
 
     # Remove duplicates
@@ -302,21 +305,21 @@ async def _execute_react_loop(
                         with open(target_path, "w", encoding="utf-8") as f:
                             f.write(content)
                         files_modified.append(fallback_file)
-                        print(f"  [Fallback] Saved response to {fallback_file}", flush=True)
+                        logger.info(f"  [Fallback] Saved response to {fallback_file}")
                     except Exception as e:
-                        print(f"  [Fallback Error] Failed to write response file: {e}", flush=True)
+                        logger.error(f"  [Fallback Error] Failed to write response file: {e}")
 
     # Log the response
     workspace_path = state.get("_workspace_path")
     result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
-    print(f"  [LOG] Files modified: {files_modified}", flush=True)
+    logger.info(f"  [LOG] Files modified: {files_modified}")
 
     # CRITICAL: Strict Success Check for BUILD tasks
     # Ensures BUILD tasks actually create/modify code files
     if task.phase == TaskPhase.BUILD:
         meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
         if not meaningful_files and not explicitly_completed:
-            print(f"  [FAILURE] Build task {task.id} failed: No code files modified.", flush=True)
+            logger.error(f"  [FAILURE] Build task {task.id} failed: No code files modified.")
 
             # Detailed feedback for LLM retry via Phoenix recovery
             failure_message = (

@@ -6,12 +6,15 @@ Version 2.0 — November 2025
 QA evaluation node with LLM-based test result evaluation.
 """
 
+import logging
 from typing import Any, Dict
 from datetime import datetime
 from pathlib import Path
 from state import OrchestratorState
 from llm_client import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
+
+logger = logging.getLogger(__name__)
 
 
 async def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, objective: str, config: Any) -> Dict[str, Any]:
@@ -126,24 +129,25 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
             else:
                 # Parsing failed - retry
                 if attempt < MAX_RETRIES - 1:
-                    print(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...", flush=True)
+                    logger.info(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...")
                     continue
                 else:
                     # Final attempt failed, include raw output
-                    print(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts", flush=True)
+                    logger.error(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts")
                     feedback = f"Unable to parse LLM response after {MAX_RETRIES} attempts. Raw output:\n{content[:500]}..."
                     return {
                         "passed": False,
                         "feedback": feedback,
                         "suggestions": []
                     }
-                    
+
+
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
-                print(f"  [QA RETRY] LLM evaluation exception (attempt {attempt + 1}/{MAX_RETRIES}): {e}", flush=True)
+                logger.info(f"  [QA RETRY] LLM evaluation exception (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
                 continue
             else:
-                print(f"  [QA ERROR]: LLM evaluation failed after {MAX_RETRIES} attempts: {e}", flush=True)
+                logger.error(f"  [QA ERROR]: LLM evaluation failed after {MAX_RETRIES} attempts: {e}")
                 return {
 
             "passed": False,
@@ -164,11 +168,12 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
     workspace_path = state.get("_workspace_path")
     
     task_memories = {}
-    
+
+
     for task in tasks:
         if task.get("status") == "awaiting_qa":
             task_id = task["id"]
-            print(f"QA: Evaluating task {task_id}", flush=True)
+            logger.info(f"QA: Evaluating task {task_id}")
             
             # Find test results file
             test_results_path = None
@@ -198,7 +203,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 test_results_path = worktree_file
                             elif main_file.exists():
                                 test_results_path = main_file
-                                print(f"  [QA] Found test results in main workspace (post-merge): {file}", flush=True)
+                                logger.info(f"  [QA] Found test results in main workspace (post-merge): {file}")
                             else:
                                 # Try both paths with the file as-is
                                 test_results_path = main_file  # Default to main
@@ -213,20 +218,21 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 worktree_path = Path(workspace_path) / ".worktrees" / task_id
                 worktree_expected = worktree_path / expected_file
                 main_expected = Path(workspace_path) / expected_file
-                
+
+
                 if worktree_expected.exists():
                     test_results_path = worktree_expected
-                    print(f"  [QA] Found test results at expected worktree path: {expected_file}", flush=True)
+                    logger.info(f"  [QA] Found test results at expected worktree path: {expected_file}")
                 elif main_expected.exists():
                     test_results_path = main_expected
-                    print(f"  [QA] Found test results at expected main path: {expected_file}", flush=True)
+                    logger.info(f"  [QA] Found test results at expected main path: {expected_file}")
             
             # Check for PROACTIVE FIXES (suggested_tasks) from the worker
             # If the worker suggested fixes, we skip strict QA and reset to PLANNED
             # so the Director can integrate the new tasks into the tree.
             # EXCEPTION: Planners naturally produce suggested_tasks as their output, so we don't reset them.
             if task.get("suggested_tasks") and task.get("assigned_worker_profile") != "planner_worker":
-                print(f"  [QA SKIP] Task {task_id} has suggested tasks. Resetting to PLANNED for Director integration.", flush=True)
+                logger.info(f"  [QA SKIP] Task {task_id} has suggested tasks. Resetting to PLANNED for Director integration.")
                 task["status"] = "planned"
                 task["updated_at"] = datetime.now().isoformat()
                 updates.append(task)
@@ -265,7 +271,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 "suggested_focus": ""
                             }
                     except Exception as e:
-                        print(f"  [ERROR]: Failed to read test results: {e}", flush=True)
+                        logger.error(f"  [ERROR]: Failed to read test results: {e}")
                         qa_verdict = {
                             "passed": False,
                             "overall_feedback": f"Failed to read test results: {e}",
@@ -282,7 +288,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         ),
                         "suggested_focus": "Write test results to agents-work/test-results/"
                     }
-                    print(f"  [QA FAIL]: Missing test results file at {expected_path}", flush=True)
+                    logger.error(f"  [QA FAIL]: Missing test results file at {expected_path}")
             else:
                 # SMART VALIDATION for BUILD/PLAN tasks
                 # Check if task actually DID something
@@ -293,9 +299,9 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 is_explicitly_completed = False
                 if aar.get("summary", "").startswith("ALREADY IMPLEMENTED:"):
                      is_explicitly_completed = True
-                
+
                 if files_modified or is_explicitly_completed:
-                    print(f"  [QA PASS] Validated work for {task_phase} task {task_id}", flush=True)
+                    logger.info(f"  [QA PASS] Validated work for {task_phase} task {task_id}")
                     qa_verdict = {
                         "passed": True,
                         "overall_feedback": f"Validated work (files modified: {len(files_modified)})",
@@ -303,7 +309,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                     }
                 else:
                     # FAIL: No work done
-                    print(f"  [QA FAIL] No files modified for {task_phase} task {task_id}", flush=True)
+                    logger.error(f"  [QA FAIL] No files modified for {task_phase} task {task_id}")
                     qa_verdict = {
                         "passed": False,
                         "overall_feedback": (
@@ -314,10 +320,11 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         ),
                         "suggested_focus": "Use write_file or report_existing_implementation"
                     }
-            
+
+
             # Update task status based on QA verdict
             if qa_verdict and qa_verdict["passed"]:
-                print(f"  [QA PASS]", flush=True)
+                logger.info(f"  [QA PASS]")
                 task["status"] = "complete"
                 task["qa_verdict"] = qa_verdict
                 
@@ -327,19 +334,19 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                     try:
                         result = await wt_manager.merge_to_main(task_id)
                         if result.success:
-                            print(f"  [MERGED] Task {task_id} merged successfully", flush=True)
+                            logger.info(f"  [MERGED] Task {task_id} merged successfully")
                         else:
-                            print(f"  [MERGE CONFLICT]: {result.error_message}", flush=True)
+                            logger.error(f"  [MERGE CONFLICT]: {result.error_message}")
                             task["status"] = "failed"
                             task["qa_verdict"]["passed"] = False
                             task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {result.error_message}"
                     except Exception as e:
-                        print(f"  [MERGE ERROR]: {e}", flush=True)
+                        logger.error(f"  [MERGE ERROR]: {e}")
                         task["status"] = "failed"
                         task["qa_verdict"]["passed"] = False
                         task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
             else:
-                print(f"  [QA FAIL]: {qa_verdict['overall_feedback'] if qa_verdict else 'Unknown error'}", flush=True)
+                logger.error(f"  [QA FAIL]: {qa_verdict['overall_feedback'] if qa_verdict else 'Unknown error'}")
                 task["status"] = "failed"
                 task["qa_verdict"] = qa_verdict
             
@@ -369,8 +376,8 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
         # Count active tasks, excluding the ones we just updated
         updated_ids = {u["id"] for u in updates}
         remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
-        
+
         completed_id = updates[0]["id"][:8]
-        print(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.", flush=True)  
+        logger.info(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.")
 
     return {"tasks": updates, "task_memories": task_memories} if updates else {}

@@ -6,6 +6,7 @@ Version 1.0 — November 2025
 Worker execution node with specialized handlers.
 """
 
+import logging
 from typing import Any, Dict, Callable
 from datetime import datetime
 
@@ -26,13 +27,15 @@ from .handlers import (
     _write_handler
 )
 
+logger = logging.getLogger(__name__)
+
 
 async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> Dict[str, Any]:
     """
     Worker: Execute task based on profile (async version).
     """
-    print(f"DEBUG: worker_node state keys: {list(state.keys())}", flush=True)
-    print(f"DEBUG: worker_node _workspace_path: {state.get('_workspace_path')}", flush=True)
+    logger.info(f"DEBUG: worker_node state keys: {list(state.keys())}")
+    logger.info(f"DEBUG: worker_node _workspace_path: {state.get('_workspace_path')}")
     task_id = state.get("task_id")
     if not task_id:
         return {}
@@ -56,16 +59,16 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
         try:
             wt_info = wt_manager.create_worktree(task_id)
             worktree_path = wt_info.worktree_path
-            print(f"  Created worktree: {worktree_path}", flush=True)
+            logger.info(f"  Created worktree: {worktree_path}")
 
             # IMPORTANT: Check for and recover any dirty worktree state
             # This handles restarts/retries where previous agent left uncommitted changes
             recovery_result = wt_manager.recover_dirty_worktree(task_id)
             if recovery_result and recovery_result.get("had_changes"):
                 recovery_context = recovery_result.get("summary", "")
-                print(f"  [RECOVERY] Found prior uncommitted work, see context below", flush=True)
+                logger.info(f"  [RECOVERY] Found prior uncommitted work, see context below")
         except Exception as e:
-            print(f"  Warning: Failed to create worktree: {e}", flush=True)
+            logger.warning(f"  Warning: Failed to create worktree: {e}")
             worktree_path = state.get("_workspace_path")
     else:
         worktree_path = state.get("_workspace_path")
@@ -73,10 +76,10 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # Inject worktree path and recovery context into state for handlers
     state["worktree_path"] = worktree_path
     state["_recovery_context"] = recovery_context  # Handlers will inject this into prompts
-    print(f"DEBUG: worker_node set state['worktree_path']={state.get('worktree_path')}", flush=True)
+    logger.info(f"DEBUG: worker_node set state['worktree_path']={state.get('worktree_path')}")
 
     # Execute handler
-    print(f"Worker ({profile.value}): Starting task {task_id}", flush=True)
+    logger.info(f"Worker ({profile.value}): Starting task {task_id}")
 
     # PERF: Calculate task execution time
     # Use started_at from task if available (when it became ACTIVE), otherwise measure from now
@@ -94,15 +97,15 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
 
         # PERF: Log execution time from ACTIVE status
         task_duration = time.time() - task_start_time
-        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) completed in {task_duration:.1f}s (active time)", flush=True)
+        logger.info(f"  ⏱️  Task {task_id[:8]} ({profile.value}) completed in {task_duration:.1f}s (active time)")
 
     except Exception as e:
         task_duration = time.time() - task_start_time
-        print(f"  ⏱️  Task {task_id[:8]} ({profile.value}) FAILED after {task_duration:.1f}s (active time)", flush=True)
+        logger.error(f"  ⏱️  Task {task_id[:8]} ({profile.value}) FAILED after {task_duration:.1f}s (active time)")
         import traceback
         error_details = traceback.format_exc()
-        print(f"Worker Error Details:", flush=True)
-        print(error_details, flush=True)
+        logger.error(f"Worker Error Details:")
+        logger.error(error_details)
         # Return failed result
         result = WorkerResult(
             status="failed",
@@ -124,18 +127,18 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                     None  # Commit all changes, not just detected files
                 )
                 if commit_hash:
-                    print(f"  Committed: {commit_hash[:8]}", flush=True)
+                    logger.info(f"  Committed: {commit_hash[:8]}")
 
                     # Merge to main immediately for now to allow subsequent tasks to see changes
                     # In a full flow, this might be gated by QA, but for linear dependencies we need it.
                     try:
-                        print(f"  [DEBUG] Calling merge_to_main for {task_id}...", flush=True)
+                        logger.info(f"  [DEBUG] Calling merge_to_main for {task_id}...")
                         merge_result = await wt_manager.merge_to_main(task_id)
                         if merge_result.success:
-                            print(f"  Merged to main", flush=True)
+                            logger.info(f"  Merged to main")
                         else:
                             # Merge failed - this should trigger Phoenix retry
-                            print(f"  ❌ Merge failed: {merge_result.error_message}", flush=True)
+                            logger.error(f"  ❌ Merge failed: {merge_result.error_message}")
                             # Override the result to failed status
                             result = WorkerResult(
                                 status="failed",
@@ -150,7 +153,7 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                                 messages=result.messages if hasattr(result, 'messages') else []
                             )
                     except Exception as e:
-                        print(f"  ❌ Merge exception: {e}", flush=True)
+                        logger.error(f"  ❌ Merge exception: {e}")
                         import traceback
                         traceback.print_exc()
                         # Override to failed
@@ -167,7 +170,7 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                         )
 
             except Exception as e:
-                print(f"  Warning: Failed to commit: {e}", flush=True)
+                logger.warning(f"  Warning: Failed to commit: {e}")
 
     # Update task with result
     task_dict["status"] = "awaiting_qa" if result.status == "complete" else "failed"
@@ -189,13 +192,13 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # The state key is "task_memories" which is a dict mapping task_id -> list of messages
     if hasattr(result, "messages") and result.messages:
         updates["task_memories"] = {task_id: result.messages}
-        print(f"  [DEBUG task_memories] Worker returning {len(result.messages)} messages for {task_id[:12]}", flush=True)
+        logger.info(f"  [DEBUG task_memories] Worker returning {len(result.messages)} messages for {task_id[:12]}")
     elif hasattr(result, "aar") and result.aar and hasattr(result.aar, "messages"):
         # Fallback if messages are attached to AAR (unlikely but possible in some flows)
         updates["task_memories"] = {task_id: result.aar.messages}
-        print(f"  [DEBUG task_memories] Worker returning {len(result.aar.messages)} messages (from AAR) for {task_id[:12]}", flush=True)
+        logger.info(f"  [DEBUG task_memories] Worker returning {len(result.aar.messages)} messages (from AAR) for {task_id[:12]}")
     else:
-        print(f"  [DEBUG task_memories] Worker has NO messages for {task_id[:12]} (result.messages={hasattr(result, 'messages')} / len={len(result.messages) if hasattr(result, 'messages') and result.messages else 0})", flush=True)
+        logger.info(f"  [DEBUG task_memories] Worker has NO messages for {task_id[:12]} (result.messages={hasattr(result, 'messages')} / len={len(result.messages) if hasattr(result, 'messages') and result.messages else 0})")
 
     return updates
 
