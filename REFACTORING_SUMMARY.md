@@ -1,8 +1,8 @@
 # Code Review & Refactoring Summary
 
-**Date:** December 9, 2025
-**Branch:** `claude/code-review-feedback-01STdGGdZ5Wwf1pfTGaQaBs3`
-**Status:** Director refactoring ✅ COMPLETE | Worker refactoring ✅ COMPLETE
+**Date:** December 9, 2025  
+**Branch:** `claude/code-review-feedback-018KknwiqyX7GfNuFho2Ctbh`  
+**Status:** Director refactoring ✅ COMPLETE | Worker refactoring ✅ COMPLETE | Bug Fixes ✅ COMPLETE
 
 ---
 
@@ -116,7 +116,111 @@ src/nodes/
 
 ---
 
-#### 2. **Add Basic Test Suite** ⏳ PENDING
+### ✅ **3. CRITICAL FIX: Director Import Collision**
+**Date:** December 9, 2025  
+**Files:** `src/nodes/director.py` → `src/nodes/director_main.py`, `src/nodes/__init__.py`, `src/server.py`
+
+**Issue:** The refactor created a naming collision:
+- `src/nodes/director.py` (main file with `director_node`)
+- `src/nodes/director/` (new package directory)
+- Python's import system prioritizes directories over `.py` files
+- `from .director import director_node` tried to import from the directory's `__init__.py` instead of the file
+
+**Fix:**
+- Renamed `director.py` → `director_main.py`
+- Updated imports in:
+  - `src/nodes/__init__.py`: `from .director_main import director_node`
+  - `src/server.py`: `from nodes.director_main import director_node`
+
+**Impact:** Resolved import error that prevented server startup after refactoring
+
+**Commit:** `820535b` - Fix import collision: rename director.py to director_main.py
+
+---
+
+### ✅ **4. CRITICAL FIX: Task Memories Lost Between Worker and QA**
+**Date:** December 9, 2025  
+**File:** `src/server.py` (lines 1384-1391)
+
+**Issue:** Agent conversation logs (task_memories) were being lost - QA logs would overwrite worker logs instead of appending.
+
+**Root Cause:**  
+The task_memories merge code was **unreachable** due to an indentation bug:
+```python
+for rt in result_tasks:
+    if rt.get("id") == c.task_id:
+        task.update(rt)
+        break  # ← exits loop
+    # THIS BLOCK WAS HERE - AFTER THE BREAK!
+    if "task_memories" in c.result:  # ← NEVER EXECUTED!
+        state["task_memories"] = task_memories_reducer(...)
+```
+
+The merge code was inside the `for` loop but placed **after** the `break` statement, making it unreachable.
+
+**Fix:**
+- Moved task_memories merge **outside** the `for` loop (but still inside `if c.result` block)
+- Added debug logging to trace merge flow:
+  ```python
+  logger.info(f"[DEBUG task_memories] Worker returning {tid}: existing={X}, adding={Y}")
+  logger.info(f"[DEBUG task_memories] After merge {tid}: total={Z}")
+  ```
+
+**Impact:**
+- Worker conversation logs now properly preserved
+- QA logs correctly appended (not overwriting)
+- Full agent conversation history visible in UI
+
+**Before:** QA merge showed `existing=0` (worker logs missing)  
+**After:** QA merge shows `existing=N` (worker logs present)
+
+**Commit:** `1a81ac2` - CRITICAL FIX: task_memories merge was unreachable due to indentation bug
+
+---
+
+### ✅ **5. NEW: Task Memories Integration Test Suite**
+**Date:** December 9, 2025  
+**File:** `tests/test_task_memories.py` (407 lines)
+
+**Purpose:** Prevent regression of the task_memories bug without expensive LLM calls
+
+**Test Coverage:**
+1. **Unit Tests** (`TestTaskMemoriesReducer`):
+   - Appending to existing task
+   - Adding new tasks
+   - Empty state handling
+   - Clear operation
+
+2. **Integration Tests** (`TestTaskMemoriesFlow`):
+   - Full worker → QA flow simulation
+   - Verifies both worker and QA messages accumulate
+
+3. **Server Merge Simulation** (`TestServerMergeSimulation`):
+   - Replicates exact server.py merge pattern
+   - No LLM calls
+
+4. **Dispatch Loop Integration** (`TestDispatchLoopSimulation`):
+   - Simulates **exact** server dispatch loop code path
+   - Copies the buggy code pattern to catch regressions
+   - Mock worker/strategist returns
+   - Verifies message accumulation through both phases
+
+**Key Assertions:**
+- Worker messages: 5 messages → state has 5
+- QA runs: existing=5 → adds 3 → total=8
+- Message order preserved: worker first, then QA
+
+**Run:** `.venv\Scripts\python.exe tests\test_task_memories.py`
+
+**Commit:** `3993b26` - Add dispatch loop integration test for task_memories regression prevention
+
+---
+
+## 📋 **Remaining Work**
+
+### **HIGH PRIORITY**
+
+#### 1. **Worker.py Refactoring** ✅ COMPLETE
 **Priority:** HIGH - Prevents regression bugs
 
 **What to Test:**
