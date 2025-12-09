@@ -38,6 +38,12 @@ from state import OrchestratorState, tasks_reducer, task_memories_reducer, insig
 from git_manager import WorktreeManager, initialize_git_repo
 from orchestrator_types import worker_result_to_dict, task_to_dict, TaskStatus, serialize_messages
 
+# Import API modules
+from api.websocket import ConnectionManager
+from api.types import CreateRunRequest, RunSummary, HumanResolution
+from api.dispatch import run_orchestrator, continuous_dispatch_loop, broadcast_state_update
+import api.state as api_state
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("server")
@@ -47,125 +53,10 @@ logger = logging.getLogger("server")
 # but don't affect functionality - purely cosmetic
 logging.getLogger("langchain_core.callbacks.manager").setLevel(logging.ERROR)
 
-# =============================================================================
-# TYPES
-# =============================================================================
-
-class CreateRunRequest(BaseModel):
-    objective: str
-    spec: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = None
-    workspace: Optional[str] = None
-
-class RunSummary(BaseModel):
-    run_id: str
-    objective: str
-    status: str
-    created_at: str
-    updated_at: str
-    task_counts: Dict[str, int]
-    tags: List[str]
-    workspace_path: Optional[str] = None
-
-class HumanResolution(BaseModel):
-    task_id: str
-    action: str  # 'retry', 'abandon', or 'spawn_new_task'
-    
-    # For 'retry' action
-    modified_description: Optional[str] = None
-    modified_criteria: Optional[List[str]] = None
-    
-    # For 'spawn_new_task' action
-    new_description: Optional[str] = None
-    new_component: Optional[str] = None
-    new_phase: Optional[str] = None
-    new_worker_profile: Optional[str] = None
-    new_criteria: Optional[List[str]] = None
-    new_dependencies: Optional[List[str]] = None
-
-# =============================================================================
-# WEBSOCKET MANAGER
-# =============================================================================
-
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-        self.subscriptions: Dict[str, List[WebSocket]] = {}  # run_id -> [websockets]
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"WebSocket connected. Total active: {len(self.active_connections)}")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        
-        # Remove from subscriptions
-        for run_id in list(self.subscriptions.keys()):
-            if websocket in self.subscriptions[run_id]:
-                self.subscriptions[run_id].remove(websocket)
-                if not self.subscriptions[run_id]:
-                    del self.subscriptions[run_id]
-        logger.info(f"WebSocket disconnected. Total active: {len(self.active_connections)}")
-
-    async def subscribe(self, websocket: WebSocket, run_id: str):
-        if run_id not in self.subscriptions:
-            self.subscriptions[run_id] = []
-        if websocket not in self.subscriptions[run_id]:
-            self.subscriptions[run_id].append(websocket)
-            logger.info(f"Subscribed to {run_id}. Total subscribers: {len(self.subscriptions[run_id])}")
-            
-            # IMMEDIATELY send current state so client doesn't have to wait for next task update
-            if run_id in runs_index:
-                run_data = runs_index[run_id]
-                try:
-                    await websocket.send_json({
-                        "type": "state_update",
-                        "run_id": run_id,
-                        "timestamp": datetime.now().isoformat(),
-                        "payload": {
-                            "status": run_data.get("status", "running"),
-                            "task_counts": run_data.get("task_counts", {}),
-                            "objective": run_data.get("objective", ""),
-                        }
-                    })
-                except Exception as e:
-                    logger.error(f"Error sending initial state: {e}")
-
-    async def unsubscribe(self, websocket: WebSocket, run_id: str):
-        if run_id in self.subscriptions and websocket in self.subscriptions[run_id]:
-            self.subscriptions[run_id].remove(websocket)
-            if not self.subscriptions[run_id]:
-                del self.subscriptions[run_id]
-            logger.info(f"Unsubscribed from {run_id}")
-
-    async def broadcast(self, message: dict):
-        # Inject timestamp if missing
-        if "timestamp" not in message:
-            message["timestamp"] = datetime.now().isoformat()
-            
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"Error broadcasting message: {e}")
-
-    async def broadcast_to_run(self, run_id: str, message: dict):
-        # Inject run_id and timestamp if missing
-        if "run_id" not in message:
-            message["run_id"] = run_id
-        if "timestamp" not in message:
-            message["timestamp"] = datetime.now().isoformat()
-            
-        if run_id in self.subscriptions:
-            for connection in self.subscriptions[run_id]:
-                try:
-                    await connection.send_json(message)
-                except Exception as e:
-                    logger.error(f"Error broadcasting to run {run_id}: {e}")
-
+# Initialize connection manager
 manager = ConnectionManager()
+# Set the global manager in api.state so dispatch module can use it
+api_state.manager = manager
 
 # =============================================================================
 # APP SETUP
@@ -174,19 +65,17 @@ manager = ConnectionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup - Initialize checkpointer
-    global global_checkpointer
-    
     try:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         import aiosqlite
-        
+
         db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
         logger.info(f"Initializing checkpointer with database: {db_path}")
-        
+
         # Create async connection and checkpointer
         conn = await aiosqlite.connect(db_path)
-        global_checkpointer = AsyncSqliteSaver(conn)
-        
+        api_state.global_checkpointer = AsyncSqliteSaver(conn)
+
         logger.info("✅ AsyncSqliteSaver initialized successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize checkpointer: {e}")
@@ -250,28 +139,14 @@ app.add_middleware(
 )
 
 # =============================================================================
-# STATE MANAGEMENT
+# STATE MANAGEMENT (Using api.state module)
 # =============================================================================
 
-# In-memory storage for runs (in a real app, this would be a DB)
-# We use the LangGraph checkpointing for the actual state, but we need an index
-runs_index: Dict[str, Dict[str, Any]] = {}
-
-# Track running background tasks for cancellation
-running_tasks: Dict[str, Any] = {}  # run_id -> asyncio.Task
-
-# Store full run states for restart capability
-run_states: Dict[str, Dict[str, Any]] = {}  # run_id -> full state dict
-
-# Global checkpointer (initialized at startup)
-global_checkpointer = None
-
-def get_orchestrator_graph():
-    """Get the orchestrator graph. Checkpointer is initialized at startup."""
-    if global_checkpointer is None:
-        raise RuntimeError("Checkpointer not initialized - server startup may have failed")
-    
-    return create_orchestrator(checkpointer=global_checkpointer)
+# Use state from api.state module
+runs_index = api_state.runs_index
+running_tasks = api_state.running_tasks
+run_states = api_state.run_states
+get_orchestrator_graph = api_state.get_orchestrator_graph
 
 def _serialize_orch_config(config):
     """Serialize OrchestratorConfig to dict for API response."""
@@ -659,7 +534,7 @@ async def replan_run(run_id: str):
         runs_index[run_id]["status"] = "running"
         runs_index[run_id]["updated_at"] = datetime.now().isoformat()
         
-        task = asyncio.create_task(_continuous_dispatch_loop(run_id, state, run_config))
+        task = asyncio.create_task(continuous_dispatch_loop(run_id, state, run_config))
         running_tasks[run_id] = task
         
         def cleanup(t):
@@ -956,7 +831,7 @@ async def restart_run(run_id: str):
     logger.info(f"🔄 Restarting run {run_id}")
     
     # Create new background task for the dispatch loop
-    task = asyncio.create_task(_continuous_dispatch_loop(run_id, state, run_config))
+    task = asyncio.create_task(continuous_dispatch_loop(run_id, state, run_config))
     running_tasks[run_id] = task
     
     # Cleanup when done
@@ -1087,7 +962,7 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 logger.info(f"   Continuing dispatch loop with {len(state.get('tasks', []))} tasks")
                 
                 # Resume the continuous dispatch loop (not super-step mode!)
-                await _continuous_dispatch_loop(run_id, state, config)
+                await continuous_dispatch_loop(run_id, state, config)
                 
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
 
@@ -1317,530 +1192,6 @@ async def _stream_and_broadcast(orchestrator, input_data, run_config, run_id):
                 
         except Exception as e:
             logger.error(f"Error checking final state: {e}")
-
-# =============================================================================
-# CONTINUOUS DISPATCH EXECUTION (Non-blocking worker dispatch)
-# =============================================================================
-
-async def _continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
-    """
-    Run the orchestrator with continuous task dispatch.
-    
-    Unlike LangGraph's superstep model which blocks until ALL workers complete,
-    this loop dispatches workers as background tasks and immediately continues
-    to check for newly-ready tasks.
-    
-    Flow:
-        Director → spawn(workers) → poll completions → Director → spawn more...
-    """
-    from task_queue import TaskCompletionQueue
-    from nodes.director_main import director_node
-    from nodes.worker import worker_node
-    from nodes.strategist import strategist_node
-    from orchestrator_types import task_to_dict
-    
-    
-    # Get max concurrent workers from config
-    orch_config = state.get("orch_config")
-    max_concurrent = getattr(orch_config, "max_concurrent_workers", 5) if orch_config else 5
-    task_queue = TaskCompletionQueue(max_concurrent=max_concurrent)
-    iteration = 0
-    max_iterations = 500  # Safety limit
-    
-    logger.info(f"🚀 Starting continuous dispatch loop for run {run_id}")
-    
-    try:
-        while iteration < max_iterations:
-            # IMMEDIATE CHECK: If cancelled externally, stop immediately
-            if runs_index.get(run_id, {}).get("status") == "cancelled":
-                logger.info(f"🛑 Loop detected cancellation for run {run_id}, exiting.")
-                break
-
-            # Reset activity flag for this cycle
-            activity_occurred = False
-            
-            # ========== PHASE 1: Process completed workers ==========
-            completed = task_queue.collect_completed()
-            for c in completed:
-                logger.info(f"  📥 Processing completed task: {c.task_id[:12]}")
-                
-                for task in state.get("tasks", []):
-                    if task.get("id") == c.task_id:
-                        if c.error:
-                            task["status"] = "failed"
-                            task["error"] = str(c.error)
-                            logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
-                        else:
-                            # Worker returns state updates with modified task
-                            if c.result and isinstance(c.result, dict):
-                                # Find the updated task in the result
-                                result_tasks = c.result.get("tasks", [])
-                                for rt in result_tasks:
-                                    if rt.get("id") == c.task_id:
-                                        # Merge updates
-                                        task.update(rt)
-                                        break
-                                
-                                # Merge tool outputs/messages to task_memories (for chat log in UI)
-                                # CRITICAL: This must be OUTSIDE the for loop!
-                                if "task_memories" in c.result:
-                                    worker_memories = c.result["task_memories"]
-                                    if worker_memories:
-                                        # Apply reducer to preserve existing memories
-                                        for tid, msgs in worker_memories.items():
-                                            existing_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
-                                        state["task_memories"] = task_memories_reducer(
-                                            state.get("task_memories", {}), 
-                                            worker_memories
-                                        )
-                                        for tid, msgs in worker_memories.items():
-                                            merged_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] After worker merge {tid[:12]}: total={merged_count}")
-
-                                logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
-                                
-                                # Log files modified if any
-                                if task.get("aar") and task["aar"].get("files_modified"):
-                                    files = task["aar"]["files_modified"]
-                                    logger.info(f"     📂 Modified {len(files)} file(s): {', '.join(files)}")
-                                
-                                # Activity occurred
-                                activity_occurred = True
-                        break
-                
-                # Save checkpoint to database after worker updates
-                if completed and runs_index.get(run_id, {}).get("status") != "cancelled":
-                    from run_persistence import save_run_state
-                    try:
-                        # Update in-memory state
-                        run_states[run_id] = state
-                        # Save to database
-                        await save_run_state(run_id, state, status=runs_index[run_id]["status"])
-                    except Exception as e:
-                        logger.error(f"Failed to save checkpoint: {e}")
-                
-                # Broadcast state update
-                await _broadcast_state_update(run_id, state)
-            
-            # ========== PHASE 2: Run Director (evaluates readiness, creates tasks) ==========
-            # Director modifies state directly
-            director_result = await director_node(state, run_config)
-            if director_result:
-                # Only count as activity if meaningful state changed (ignore internal counters)
-                meaningful_keys = ["tasks", "insights", "design_log", "replan_requested"]
-                if any(key in director_result for key in meaningful_keys):
-                    activity_occurred = True
-                
-                # Merge director updates into state (applying reducers)
-                for key, value in director_result.items():
-                    if key == "tasks":
-                        state["tasks"] = tasks_reducer(state.get("tasks", []), value)
-                    elif key == "task_memories":
-                        state["task_memories"] = task_memories_reducer(state.get("task_memories", {}), value)
-                    elif key == "insights":
-                        state["insights"] = insights_reducer(state.get("insights", []), value)
-                    elif key == "design_log":
-                        state["design_log"] = design_log_reducer(state.get("design_log", []), value)
-                    elif key != "_wt_manager":  # Don't overwrite internal objects
-                        state[key] = value
-                
-                # Save checkpoint to database after director updates
-                if runs_index.get(run_id, {}).get("status") != "cancelled":
-                    from run_persistence import save_run_state
-                    try:
-                        # Update in-memory state
-                        run_states[run_id] = state
-                        # Save to database
-                        await save_run_state(run_id, state, status=runs_index[run_id]["status"])
-                    except Exception as e:
-                        logger.error(f"Failed to save checkpoint: {e}")
-            
-            # ========== PHASE 3: Find and dispatch ready tasks ==========
-            ready_tasks = [t for t in state.get("tasks", []) if t.get("status") == "ready"]
-            
-            # Dispatch ready tasks (up to available slots)
-            dispatched = 0
-            for task in ready_tasks[:task_queue.available_slots]:
-                task_id = task.get("id")
-                if task_queue.is_running(task_id):
-                    continue  # Already running
-                
-                # Mark as active
-                task["status"] = "active"
-                task["started_at"] = datetime.now().isoformat()
-                
-                # Create worktree if needed
-                wt_manager = state.get("_wt_manager")
-                if wt_manager and not state.get("mock_mode", False):
-                    try:
-                        wt_manager.create_worktree(task_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to create worktree: {e}")
-                
-                # Spawn worker as background task
-                worker_state = {**state, "task_id": task_id}
-                task_queue.spawn(task_id, worker_node(worker_state, run_config))
-                dispatched += 1
-                activity_occurred = True
-                
-                logger.info(f"  🚀 Dispatched: {task_id[:12]} ({task.get('assigned_worker_profile', 'unknown')})")
-            
-            if dispatched > 0:
-                await _broadcast_state_update(run_id, state)
-            
-            # ========== PHASE 4: Run Strategist for QA (Test tasks or Awaiting QA) ==========
-            # We need to run Strategist if:
-            # 1. Task is explicitly AWAITING_QA (any phase)
-            # 2. Task is TEST phase and COMPLETE but missing verdict (legacy check)
-            tasks_requiring_qa = [t for t in state.get("tasks", []) 
-                               if t.get("status") == "awaiting_qa" 
-                               or (t.get("status") == "complete" and t.get("phase") == "test" and not t.get("qa_verdict"))]
-            
-            for task in tasks_requiring_qa:
-                # CHECK AGAIN: Cancellation might happen during long operations
-                if runs_index.get(run_id, {}).get("status") == "cancelled":
-                    break
-
-                logger.info(f"  🔍 QA evaluating: {task.get('id', '')[:12]}")
-                strategist_result = await strategist_node({**state, "task_id": task.get("id")}, run_config)
-                if strategist_result:
-                    activity_occurred = True
-                    for key, value in strategist_result.items():
-                        if key == "tasks":
-                            # Update the specific task
-                            for rt in value:
-                                for t in state["tasks"]:
-                                    if t.get("id") == rt.get("id"):
-                                        t.update(rt)
-                        elif key == "task_memories":
-                            # DEBUG: Log before and after to track memory loss
-                            for tid, msgs in value.items():
-                                existing_count = len(state.get("task_memories", {}).get(tid, []))
-                                new_count = len(msgs)
-                                logger.info(f"  [DEBUG task_memories] Strategist merging {tid[:12]}: existing={existing_count}, adding={new_count}")
-                            state["task_memories"] = task_memories_reducer(state.get("task_memories", {}), value)
-                            for tid, msgs in value.items():
-                                merged_count = len(state.get("task_memories", {}).get(tid, []))
-                                logger.info(f"  [DEBUG task_memories] After merge {tid[:12]}: total={merged_count}")
-                        elif key != "_wt_manager":
-                            state[key] = value
-                await _broadcast_state_update(run_id, state)
-            
-            # ========== PHASE 5: Check completion ==========
-            all_tasks = state.get("tasks", [])
-            
-            # Exit conditions
-            terminal_statuses = {"complete", "abandoned", "waiting_human"}
-            all_terminal = all(t.get("status") in terminal_statuses for t in all_tasks) if all_tasks else False
-            
-            if all_terminal and not task_queue.has_work:
-                logger.info(f"✅ All tasks complete! Ending run {run_id}")
-                runs_index[run_id]["status"] = "completed"
-                
-                # Save completed state to database
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="completed")
-                
-                await _broadcast_state_update(run_id, state)
-                break
-            
-            # Check for HITL interrupts
-            waiting_human = [t for t in all_tasks if t.get("status") == "waiting_human"]
-            if waiting_human and not task_queue.has_work:
-                logger.info(f"⏸️  Run paused for human intervention")
-                runs_index[run_id]["status"] = "interrupted"
-                
-                # Save interrupted state to database
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="interrupted")
-                break
-            
-            # No work and no ready tasks? Check if we're stuck
-            if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa:
-                # Check for planned tasks that might become ready
-                planned = [t for t in all_tasks if t.get("status") == "planned"]
-                
-                # Also check for completed planners with suggestions that need integration
-                # These are awaiting_qa but have suggested_tasks that Director needs to process
-                awaiting_planners = [t for t in all_tasks 
-                                    if t.get("status") == "awaiting_qa" 
-                                    and t.get("assigned_worker_profile") == "planner_worker"
-                                    and t.get("suggested_tasks")]
-                
-                if not planned and not awaiting_planners:
-                    logger.warning(f"⚠️  No more work to do, but not all tasks complete")
-                    break
-                elif awaiting_planners:
-                    logger.info(f"  📋 {len(awaiting_planners)} planners have suggestions pending integration")
-                # Otherwise director will evaluate readiness on next cycle
-            
-            # ========== PHASE 6: Wait for completions ==========
-            if task_queue.has_work:
-                # Wait a bit for workers to complete
-                await task_queue.wait_for_any(timeout=1.0)
-            else:
-                # Small delay to prevent tight loop
-                await asyncio.sleep(0.1)
-
-            # CRITICAL CHECK after wait: did we get cancelled while waiting?
-            if runs_index.get(run_id, {}).get("status") == "cancelled":
-                logger.info(f"🛑 Run {run_id} was cancelled during wait, exiting loop")
-                break
-            
-            # Only increment iteration if something actually happened
-            # This prevents 500 max_iterations from being reached just by idling
-            if activity_occurred:
-                iteration += 1
-            
-            # Update run status IF NOT CANCELLED
-            if runs_index.get(run_id, {}).get("status") != "cancelled":
-                runs_index[run_id].update({
-                    "status": "running",
-                    "updated_at": datetime.now().isoformat(),
-                    "task_counts": {
-                        "planned": len([t for t in all_tasks if t.get("status") == "planned"]),
-                        "active": len([t for t in all_tasks if t.get("status") == "active"]),
-                        "completed": len([t for t in all_tasks if t.get("status") == "complete"]),
-                        "failed": len([t for t in all_tasks if t.get("status") == "failed"]),
-                    }
-                })
-                
-                # Save full state for restart capability (both in-memory and database)
-                run_states[run_id] = state.copy()
-                
-                # Persist to database
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="running")
-        
-        if iteration >= max_iterations:
-            logger.error(f"❌ Max iterations ({max_iterations}) reached for run {run_id}")
-            runs_index[run_id]["status"] = "failed"
-            
-            # Save failed state to database
-            from run_persistence import save_run_state
-            await save_run_state(run_id, state, status="failed")
-
-    except asyncio.CancelledError:
-        logger.warning(f"🛑 Orchestrator run {run_id} execution cancelled.")
-        runs_index[run_id]["status"] = "cancelled"
-        
-        # Save cancelled state
-        try:
-            from run_persistence import save_run_state
-            await save_run_state(run_id, state, status="cancelled")
-        except Exception:
-            pass
-        
-        # Don't re-raise, graceful exit
-        return
-    
-    except Exception as e:
-        logger.error(f"❌ Continuous dispatch error: {e}")
-        import traceback
-        traceback.print_exc()
-        if runs_index.get(run_id, {}).get("status") != "cancelled":
-            runs_index[run_id]["status"] = "failed"
-            
-            # Save error state to database
-            try:
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="failed")
-            except Exception as e2:
-                logger.error(f"Failed to save error checkpoint: {e2}")
-            
-            await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
-    
-    finally:
-        # Cancel any remaining workers
-        await task_queue.cancel_all()
-        
-        # Final broadcast
-        await manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
-        logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
-
-
-async def _broadcast_state_update(run_id: str, state: dict):
-    """Broadcast state update to connected clients."""
-    try:
-        serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
-        
-        # Serialize task_memories (LLM conversations)
-        task_memories = {}
-        raw_memories = state.get("task_memories", {})
-        for task_id, messages in raw_memories.items():
-            task_memories[task_id] = serialize_messages(messages)
-
-        await manager.broadcast_to_run(run_id, {
-            "type": "state_update",
-            "payload": {
-                "tasks": serialized_tasks,
-                "status": runs_index[run_id].get("status", "running"),
-                "task_counts": runs_index[run_id].get("task_counts", {}),
-                "task_memories": task_memories
-            }
-        })
-    except Exception as e:
-        logger.error(f"Failed to broadcast state: {e}")
-
-
-async def _execute_run_logic(run_id: str, thread_id: str, objective: str, spec: dict, workspace_path: Any):
-    """Core execution logic for the run."""
-    from pathlib import Path
-    from git_manager import WorktreeManager, initialize_git_repo
-    import subprocess
-    import platform
-    
-    try:
-        # Initialize git
-        initialize_git_repo(workspace_path)
-        
-        # Create SHARED venv at workspace root (all worktrees will use this)
-        venv_path = workspace_path / ".venv"
-        if not venv_path.exists():
-            logger.info(f"Creating shared venv at {venv_path}...")
-            try:
-                subprocess.run(
-                    ["python", "-m", "venv", str(venv_path)],
-                    cwd=str(workspace_path),
-                    check=True,
-                    capture_output=True,
-                    timeout=120  # 2 minute timeout
-                )
-                logger.info(f"✅ Shared venv created at {venv_path}")
-                
-                # Install basic packages (requests for test harness pattern)
-                pip_exe = venv_path / "Scripts" / "pip.exe" if platform.system() == "Windows" else venv_path / "bin" / "pip"
-                if pip_exe.exists():
-                    subprocess.run(
-                        [str(pip_exe), "install", "requests"],
-                        cwd=str(workspace_path),
-                        capture_output=True,
-                        timeout=120
-                    )
-                    
-                    logger.info(f"✅ Installed 'requests' in shared venv")
-                    
-                    # Install nodeenv and set up Node.js in the venv
-                    logger.info(f"Installing nodeenv for npm support...")
-                    subprocess.run(
-                        [str(pip_exe), "install", "nodeenv"],
-                        cwd=str(workspace_path),
-                        capture_output=True,
-                        timeout=120
-                    )
-                    
-                    # Add Node.js to the venv using nodeenv -p (prebuilt binaries)
-                    python_exe = venv_path / "Scripts" / "python.exe" if platform.system() == "Windows" else venv_path / "bin" / "python"
-                    try:
-                        subprocess.run(
-                            [str(python_exe), "-m", "nodeenv", "-p", "--prebuilt"],
-                            cwd=str(workspace_path),
-                            capture_output=True,
-                            timeout=300  # 5 minute timeout for node download
-                        )
-                        logger.info(f"✅ Installed Node.js/npm in shared venv via nodeenv")
-                    except subprocess.TimeoutExpired:
-                        logger.warning(f"nodeenv installation timed out - agents may need npm globally")
-                    except Exception as e:
-                        logger.warning(f"nodeenv installation failed: {e} - agents may need npm globally")
-            except subprocess.TimeoutExpired:
-                logger.warning(f"Venv creation timed out - agents may need to create manually")
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Venv creation failed: {e} - agents may need to create manually")
-        else:
-            logger.info(f"Shared venv already exists at {venv_path}")
-    
-        # Create config
-        config = OrchestratorConfig(mock_mode=False)
-        
-        # Create worktree manager (Always enabled to match main.py behavior)
-        worktree_base = workspace_path / ".worktrees"
-        worktree_base.mkdir(exist_ok=True)
-        
-        wt_manager = WorktreeManager(
-            repo_path=workspace_path,
-            worktree_base=worktree_base
-        )
-        
-        # Create graph
-        orchestrator = get_orchestrator_graph()
-        
-        # Initial state
-        initial_state = {
-            "run_id": run_id,
-            "objective": objective,
-            "spec": spec or {},
-            "tasks": [],
-            "insights": [],
-            "design_log": [],
-            "task_memories": {},
-            "filesystem_index": {},
-            "guardian": {},
-            "strategy_status": "progressing",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
-            "mock_mode": False,
-            "_wt_manager": wt_manager,
-            "_workspace_path": str(workspace_path),
-            "orch_config": config,
-        }
-        
-        run_config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "mock_mode": False
-            }
-        }
-        
-        # Use continuous dispatch (non-blocking worker execution)
-        # instead of LangGraph's blocking superstep model
-        await _continuous_dispatch_loop(run_id, initial_state, run_config)
-
-    except Exception as e:
-        logger.error(f"Critical error in run execution logic: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: dict = None, workspace: str = None):
-    """
-    Execute the orchestrator graph.
-    """
-    logger.info(f"Starting run {run_id}")
-    
-    import uuid
-    from pathlib import Path
-    from git_manager import WorktreeManager, initialize_git_repo
-    
-    # Setup workspace
-    if not workspace:
-        workspace = "projects/workspace"
-    
-    workspace_path = Path(workspace).resolve()
-    workspace_path.mkdir(parents=True, exist_ok=True)
-    
-    # Setup file logging for this run
-    # This mimics main.py's logging behavior
-    log_dir = workspace_path / "logs"
-    log_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"run_{timestamp}.log"
-    
-    # Add file handler to root logger
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    root_logger = logging.getLogger()
-    root_logger.addHandler(file_handler)
-    logger.info(f"📝 Logging run to: {log_file}")
-    
-    try:
-        await _execute_run_logic(run_id, thread_id, objective, spec, workspace_path)
-    finally:
-        # Clean up file handler
-        root_logger.removeHandler(file_handler)
-        file_handler.close()
-        logger.info(f"📝 Closed log file: {log_file}")
 
 # Mount static files for production deployment (Option A)
 # Only mount if the dist directory exists
