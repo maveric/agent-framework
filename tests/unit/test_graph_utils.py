@@ -10,7 +10,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from orchestrator_types import Task, TaskStatus, TaskPhase
-from nodes.director.graph_utils import detect_and_break_cycles
+
+# Import directly from module file to avoid nodes/__init__.py conflict
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "nodes" / "director"))
+from graph_utils import detect_and_break_cycles
 
 
 class TestDetectAndBreakCycles:
@@ -136,24 +140,27 @@ class TestDetectAndBreakCycles:
         assert cycles_broken > 0
         # At least one dependency should be broken to eliminate cycle
         # Verify no cycle remains by checking we can't traverse back to start
-        visited = set()
-        def has_path(from_id, to_id, task_map):
-            if from_id == to_id:
-                return True
-            if from_id in visited:
+        def has_cycle_from(task_id, task_map):
+            """Check if task can reach itself through dependencies (cycle exists)."""
+            visited = set()
+            def dfs(current_id):
+                if current_id in visited:
+                    return False  # Already checked this path
+                visited.add(current_id)
+                task = task_map.get(current_id)
+                if not task:
+                    return False
+                for dep in task.depends_on:
+                    if dep == task_id:  # Found a path back to start
+                        return True
+                    if dfs(dep):
+                        return True
                 return False
-            visited.add(from_id)
-            task = task_map.get(from_id)
-            if not task:
-                return False
-            for dep in task.depends_on:
-                if has_path(dep, to_id, task_map):
-                    return True
-            return False
+            return dfs(task_id)
 
         task_map = {t.id: t for t in tasks}
-        # Should not be able to find path from task1 back to itself
-        assert not has_path("task1", "task1", task_map)
+        # Should not be able to find a cycle from task1 back to itself
+        assert not has_cycle_from("task1", task_map)
 
     def test_cycle_in_larger_graph(self):
         """Test cycle detection in graph with cycle and non-cycle parts."""

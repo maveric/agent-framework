@@ -10,7 +10,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from orchestrator_types import Task, TaskStatus, TaskPhase
-from nodes.director.readiness import evaluate_readiness
+
+# Import directly from module file to avoid nodes/__init__.py conflict
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "nodes" / "director"))
+from readiness import evaluate_readiness
 
 
 class TestEvaluateReadiness:
