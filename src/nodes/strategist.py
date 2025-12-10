@@ -100,23 +100,45 @@ Evaluate whether the test results satisfy ALL acceptance criteria AND match the 
             response = await llm.ainvoke(messages)
             content = str(response.content)
             
-            # Parse response
-            lines = content.strip().split('\n')
+            # Parse response using SECTION-BASED parsing
+            # CRITICAL: LLM often puts multi-line feedback, must capture all of it
             verdict = "FAIL"
             feedback = "Unable to parse LLM response"
             suggestions = []
             
-            for line in lines:
-                # Robust parsing: handle bolding (**VERDICT:**) and case sensitivity
-                clean_line = line.replace("*", "").strip()
-                if "VERDICT:" in clean_line.upper():
-                    verdict = "PASS" if "PASS" in clean_line.upper() else "FAIL"
-                elif "FEEDBACK:" in clean_line.upper():
-                    feedback = clean_line.split("FEEDBACK:", 1)[1].strip()
-                elif "SUGGESTIONS:" in clean_line.upper():
-                    sugg_text = clean_line.split("SUGGESTIONS:", 1)[1].strip()
-                    if sugg_text and sugg_text.lower() != "none":
-                        suggestions = [s.strip() for s in sugg_text.split(",")]
+            # Normalize: remove markdown bold markers
+            normalized_content = content.replace("*", "")
+            
+            # Extract VERDICT (usually single line)
+            if "VERDICT:" in normalized_content.upper():
+                verdict_line = normalized_content.upper().split("VERDICT:", 1)[1].split("\n")[0]
+                verdict = "PASS" if "PASS" in verdict_line else "FAIL"
+            
+            # Extract FEEDBACK section (multi-line until SUGGESTIONS or end)
+            if "FEEDBACK:" in normalized_content.upper():
+                content_upper = normalized_content.upper()
+                feedback_start = content_upper.find("FEEDBACK:")
+                
+                # Handle case insensitivity by finding position in original
+                # Find the actual position in the normalized string
+                after_feedback = normalized_content[feedback_start + len("FEEDBACK:"):]
+                
+                # Find where SUGGESTIONS starts (if any)
+                suggestions_pos = after_feedback.upper().find("SUGGESTIONS:")
+                if suggestions_pos != -1:
+                    feedback = after_feedback[:suggestions_pos].strip()
+                else:
+                    feedback = after_feedback.strip()
+            
+            # Extract SUGGESTIONS (everything after SUGGESTIONS:)
+            if "SUGGESTIONS:" in normalized_content.upper():
+                content_upper = normalized_content.upper()
+                suggestions_start = content_upper.find("SUGGESTIONS:")
+                sugg_text = normalized_content[suggestions_start + len("SUGGESTIONS:"):].strip()
+                # Take first line or comma-separated values
+                first_line = sugg_text.split("\n")[0].strip()
+                if first_line and first_line.lower() != "none":
+                    suggestions = [s.strip() for s in first_line.split(",")]
             
             # Check if parsing succeeded
             if feedback != "Unable to parse LLM response":
@@ -169,9 +191,14 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
     
     task_memories = {}
 
+    # CRITICAL: Import copy for creating task copies
+    # Strategist should NOT modify state directly - dispatch is the sole place for that
+    import copy
 
-    for task in tasks:
-        if task.get("status") == "awaiting_qa":
+    for task_original in tasks:
+        if task_original.get("status") == "awaiting_qa":
+            # Create a COPY to modify - don't mutate state directly
+            task = copy.deepcopy(task_original)
             task_id = task["id"]
             logger.info(f"QA: Evaluating task {task_id}")
             
@@ -325,7 +352,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
             # Update task status based on QA verdict
             if qa_verdict and qa_verdict["passed"]:
                 logger.info(f"  [QA PASS]")
-                task["status"] = "complete"
+                task["status"] = "pending_complete"  # Director will confirm
                 task["qa_verdict"] = qa_verdict
                 
                 # Merge to main
@@ -337,17 +364,17 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                             logger.info(f"  [MERGED] Task {task_id} merged successfully")
                         else:
                             logger.error(f"  [MERGE CONFLICT]: {result.error_message}")
-                            task["status"] = "failed"
+                            task["status"] = "pending_failed"  # Director will confirm
                             task["qa_verdict"]["passed"] = False
                             task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {result.error_message}"
                     except Exception as e:
                         logger.error(f"  [MERGE ERROR]: {e}")
-                        task["status"] = "failed"
+                        task["status"] = "pending_failed"  # Director will confirm
                         task["qa_verdict"]["passed"] = False
                         task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
             else:
                 logger.error(f"  [QA FAIL]: {qa_verdict['overall_feedback'] if qa_verdict else 'Unknown error'}")
-                task["status"] = "failed"
+                task["status"] = "pending_failed"  # Director will confirm
                 task["qa_verdict"] = qa_verdict
             
             task["updated_at"] = datetime.now().isoformat()

@@ -11,7 +11,7 @@ export default defineConfig({
         },
     },
     server: {
-        port: 3000,
+        port: 2999,  // Avoid 3000 - agents may use that for testing
         // Proxy only in development mode
         // Uses environment variables with localhost as fallback
         proxy: {

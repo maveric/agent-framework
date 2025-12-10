@@ -44,6 +44,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     orch_config = state.get("orch_config")
     max_concurrent = getattr(orch_config, "max_concurrent_workers", 5) if orch_config else 5
     task_queue = TaskCompletionQueue(max_concurrent=max_concurrent)
+    logger.info(f"🔧 Max concurrent workers set to: {max_concurrent}")
     iteration = 0
     max_iterations = 500  # Safety limit
 
@@ -185,7 +186,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 # Reset status from 'replanning' back to 'running' after director completes
                 if runs_index.get(run_id, {}).get("status") == "replanning":
                     runs_index[run_id]["status"] = "running"
-                    await broadcast_state_update(run_id, state)
+                
+                # Always broadcast after Director - ensures promoted states are visible in UI
+                await broadcast_state_update(run_id, state)
 
 
             # ========== PHASE 3: Find and dispatch ready tasks ==========
@@ -222,7 +225,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 await broadcast_state_update(run_id, state)
 
             # ========== PHASE 4: Run Strategist for QA (Test tasks or Awaiting QA) ==========
-            # All worker completions have been collected in PHASE 1, so QA has complete state
+            # Workers now return copies (don't mutate state directly), so all worker results
+            # are collected in Phase 1 and task_memories are merged atomically with task updates.
+            # Director promotes pending states, then QA sees tasks with their memories.
             tasks_requiring_qa = [t for t in state.get("tasks", [])
                                if t.get("status") == "awaiting_qa"
                                or (t.get("status") == "complete" and t.get("phase") == "test" and not t.get("qa_verdict"))]
@@ -260,12 +265,21 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             # ========== PHASE 5: Check completion ==========
             all_tasks = state.get("tasks", [])
 
+            # Check for pending states that need Director promotion
+            # If ANY task is pending_*, we MUST continue the loop for Director to promote it
+            pending_states = {"pending_awaiting_qa", "pending_complete", "pending_failed"}
+            has_pending = any(t.get("status") in pending_states for t in all_tasks)
+            
+            if has_pending:
+                # Force another iteration - Director will promote these pending states
+                activity_occurred = True
+
             # Exit conditions - ONLY truly terminal statuses
             # waiting_human and awaiting_qa are NOT terminal - they need action!
             terminal_statuses = {"complete", "abandoned"}
             all_terminal = all(t.get("status") in terminal_statuses for t in all_tasks) if all_tasks else False
 
-            if all_terminal and not task_queue.has_work:
+            if all_terminal and not task_queue.has_work and not has_pending:
                 logger.info(f"✅ All tasks complete! Ending run {run_id}")
                 runs_index[run_id]["status"] = "completed"
 
@@ -288,7 +302,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 break
 
             # No work and no ready tasks? Check if we're stuck
-            if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa:
+            if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa and not has_pending:
                 # Check for planned tasks that might become ready
                 planned = [t for t in all_tasks if t.get("status") == "planned"]
 

@@ -30,6 +30,11 @@ class TaskStatus(str, Enum):
     COMPLETE = "complete"         # Strategist approved, task done
     WAITING_HUMAN = "waiting_human"  # Needs human input (max retries or ambiguity)
     ABANDONED = "abandoned"       # Removed due to re-planning
+    
+    # Pending states (awaiting Director confirmation - eliminates race conditions)
+    PENDING_AWAITING_QA = "pending_awaiting_qa"  # Worker done, awaiting director sync
+    PENDING_COMPLETE = "pending_complete"         # QA passed, awaiting director sync
+    PENDING_FAILED = "pending_failed"             # Task failed, awaiting director sync
 
 
 class TaskPhase(str, Enum):

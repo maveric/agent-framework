@@ -94,6 +94,26 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     all_tasks = [_dict_to_task(t) for t in tasks]
     updates = []
 
+    # ==========================================================================
+    # PHASE 0: STATE PROMOTION (Director is the sole authority for transitions)
+    # ==========================================================================
+    # Workers and Strategist set PENDING states. Director confirms them here.
+    # This eliminates race conditions by making all transitions synchronous.
+    pending_promotions = {
+        "pending_awaiting_qa": TaskStatus.AWAITING_QA,
+        "pending_complete": TaskStatus.COMPLETE,
+        "pending_failed": TaskStatus.FAILED,
+    }
+    
+    for task in all_tasks:
+        current_status = task.status.value if hasattr(task.status, 'value') else str(task.status)
+        if current_status in pending_promotions:
+            new_status = pending_promotions[current_status]
+            logger.info(f"  📤 Promoting {task.id[:12]}: {current_status} → {new_status.value}")
+            task.status = new_status
+            task.updated_at = datetime.now()
+            updates.append(task_to_dict(task))
+
     # PERF: Print batch summary ONLY when counts change
     completed_count = len([t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"])
     failed_count = len([t for t in tasks if t.get("status") == "failed"])

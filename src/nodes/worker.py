@@ -172,21 +172,27 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
             except Exception as e:
                 logger.warning(f"  Warning: Failed to commit: {e}")
 
-    # Update task with result
-    task_dict["status"] = "awaiting_qa" if result.status == "complete" else "failed"
-    task_dict["result_path"] = result.result_path
-    task_dict["aar"] = _aar_to_dict(result.aar) if result.aar else None
+    # CRITICAL: Create a COPY of the task dict for returning updates
+    # DO NOT modify state["tasks"] directly - dispatch is the sole place that applies changes
+    # This ensures task_memories and task updates are applied atomically
+    import copy
+    updated_task = copy.deepcopy(task_dict)
+    
+    # Apply result to the COPY, not the original
+    updated_task["status"] = "pending_awaiting_qa" if result.status == "complete" else "pending_failed"
+    updated_task["result_path"] = result.result_path
+    updated_task["aar"] = _aar_to_dict(result.aar) if result.aar else None
 
     # Pass suggested tasks to state (for Director to process)
     if result.suggested_tasks:
         from orchestrator_types import _suggested_task_to_dict
-        task_dict["suggested_tasks"] = [_suggested_task_to_dict(st) for st in result.suggested_tasks]
+        updated_task["suggested_tasks"] = [_suggested_task_to_dict(st) for st in result.suggested_tasks]
 
-    task_dict["updated_at"] = datetime.now().isoformat()
+    updated_task["updated_at"] = datetime.now().isoformat()
 
-    # Return tasks AND task_memories (logs)
-    # We need to extract the messages from the result if available
-    updates = {"tasks": [task_dict]}
+    # Return the updated task copy AND task_memories (logs)
+    # Dispatch Phase 1 will merge BOTH atomically
+    updates = {"tasks": [updated_task]}
 
     # If the result has messages (from the agent execution), pass them back
     # The state key is "task_memories" which is a dict mapping task_id -> list of messages

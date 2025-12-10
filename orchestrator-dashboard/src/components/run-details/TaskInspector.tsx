@@ -23,13 +23,15 @@ export function TaskInspector({
                 <div className="flex items-start justify-between">
                     <div>
                         <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${
-                                task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
-                                task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
-                                task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
-                                'bg-slate-700 text-slate-400'
-                            }`}>
-                                {task.status}
+                            <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
+                                    task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
+                                        task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
+                                            task.status?.startsWith('pending_') ? 'bg-yellow-400/10 text-yellow-400 animate-pulse' :
+                                                'bg-slate-700 text-slate-400'
+                                }`}>
+                                {task.status?.startsWith('pending_')
+                                    ? task.status.replace('pending_', '') + ' (syncing)'
+                                    : task.status}
                             </span>
                             <span className="font-mono text-xs text-slate-500">{task.id}</span>
                         </div>

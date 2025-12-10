@@ -336,6 +336,11 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
 
                 logger.info(f"   Continuing dispatch loop with {len(state.get('tasks', []))} tasks")
 
+                # CRITICAL FIX: Reset run status to 'running' before starting dispatch loop
+                # Otherwise the loop immediately exits because it checks runs_index status
+                runs_index[run_id]["status"] = "running"
+                logger.info(f"   Reset run status to 'running'")
+
                 # Resume the continuous dispatch loop (not super-step mode!)
                 # CRITICAL: Register in running_tasks so cancel can find it
                 dispatch_task = asyncio.create_task(continuous_dispatch_loop(run_id, state, config))

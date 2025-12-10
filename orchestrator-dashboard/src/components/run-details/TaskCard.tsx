@@ -24,11 +24,10 @@ export function TaskCard({
 
     return (
         <div
-            className={`bg-slate-800 p-4 rounded-lg border transition-all ${
-                isWaiting
+            className={`bg-slate-800 p-4 rounded-lg border transition-all ${isWaiting
                     ? 'border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow'
                     : 'border-slate-700 hover:border-slate-600'
-            }`}
+                }`}
         >
             <div
                 className="flex items-start justify-between mb-2 cursor-pointer"
@@ -42,13 +41,15 @@ export function TaskCard({
                     )}
                     <span className="font-mono text-xs text-slate-500">{task.id}</span>
                 </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${
-                    task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
-                    task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
-                    task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
-                    'bg-slate-700 text-slate-400'
-                }`}>
-                    {task.status}
+                <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
+                        task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
+                            task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
+                                task.status?.startsWith('pending_') ? 'bg-yellow-400/10 text-yellow-400 animate-pulse' :
+                                    'bg-slate-700 text-slate-400'
+                    }`}>
+                    {task.status?.startsWith('pending_')
+                        ? task.status.replace('pending_', '') + ' (syncing)'
+                        : task.status}
                 </span>
             </div>
 
@@ -60,9 +61,8 @@ export function TaskCard({
                 <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.component}</span>
                 <span className="bg-slate-700/50 px-1.5 py-0.5 rounded">{task.phase}</span>
                 {task.assigned_worker_profile && (
-                    <span className={`px-1.5 py-0.5 rounded border ${
-                        workerColors[task.assigned_worker_profile] || 'bg-slate-800 text-slate-400 border-slate-700'
-                    }`}>
+                    <span className={`px-1.5 py-0.5 rounded border ${workerColors[task.assigned_worker_profile] || 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
                         {task.assigned_worker_profile}
                     </span>
                 )}
@@ -82,11 +82,10 @@ export function TaskCard({
                         return (
                             <span
                                 key={dep}
-                                className={`px-1 rounded mr-1 font-mono ${
-                                    isComplete
+                                className={`px-1 rounded mr-1 font-mono ${isComplete
                                         ? 'bg-green-900/30 border border-green-700/50 text-green-400'
                                         : 'bg-slate-800 border border-slate-700 text-slate-400'
-                                }`}
+                                    }`}
                             >
                                 {dep}
                             </span>
