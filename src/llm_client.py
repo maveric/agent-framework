@@ -64,7 +64,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             max_tokens=model_config.max_tokens or 4096,
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             max_retries=5,  # Retry up to 5 times on failures
-            timeout=60.0,  # 60 second timeout
+            timeout=180.0,  # 3 minute timeout (director integration needs more time)
         )
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
@@ -74,7 +74,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             max_tokens=model_config.max_tokens,
             api_key=os.getenv("OPENAI_API_KEY"),
             max_retries=5,  # Retry up to 5 times on failures
-            timeout=60.0,  # 60 second timeout
+            timeout=180.0,  # 3 minute timeout
         )
     elif provider == "google":
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -84,7 +84,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             max_tokens=model_config.max_tokens,
             google_api_key=os.getenv("GOOGLE_API_KEY"),
             max_retries=5,  # Retry up to 5 times
-            timeout=60.0,
+            timeout=180.0,  # 3 minute timeout
         )
     elif provider == "glm":
         # GLM (Zhipu AI) uses OpenAI-compatible API
@@ -97,7 +97,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             # base_url="https://open.bigmodel.cn/api/paas/v4/",  # GLM API endpoint
             base_url="https://api.z.ai/api/coding/paas/v4",
             max_retries=5,
-            timeout=60.0,
+            timeout=180.0,  # 3 minute timeout
         )
     elif provider == "openrouter":
         # OpenRouter uses OpenAI-compatible API
@@ -109,7 +109,7 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",  # OpenRouter API endpoint
             max_retries=5,
-            timeout=60.0,
+            timeout=180.0,  # 3 minute timeout
             default_headers={
                 "HTTP-Referer": "https://github.com/yourusername/agent-framework",  # Optional but recommended
                 "X-Title": "Agent Framework"  # Optional but recommended

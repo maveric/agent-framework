@@ -295,7 +295,27 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
                 logger.error(f"Retry failed: {retry_error}. Proceeding with original response")
 
     except Exception as e:
-        logger.error(f"Integration LLM Error: {e}")
+        import traceback
+        error_type = type(e).__name__
+        error_msg = str(e)
+
+        # Detect specific error types
+        is_timeout = "timeout" in error_msg.lower() or "timed out" in error_msg.lower()
+        is_rate_limit = "rate limit" in error_msg.lower() or "429" in error_msg
+        is_overloaded = "overloaded" in error_msg.lower() or "503" in error_msg
+
+        logger.error(f"Integration LLM Error ({error_type}): {error_msg}")
+        if is_timeout:
+            logger.error("  ⏱️  TIMEOUT: LLM did not respond within timeout period")
+            logger.error("  Possible causes: Complex prompt, slow model response, network issues")
+        elif is_rate_limit:
+            logger.error("  🚫 RATE LIMIT: Too many requests to LLM provider")
+            logger.error("  Retries with exponential backoff are automatic")
+        elif is_overloaded:
+            logger.error("  ⚠️  OVERLOADED: LLM provider is experiencing high load")
+
+        logger.error(f"  Full traceback:\n{traceback.format_exc()}")
+
         # Fallback: Return tasks as-is (converted to Task objects)
         logger.warning("Fallback: Converting suggestions directly without integration")
         fallback_tasks = []
