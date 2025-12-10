@@ -105,10 +105,13 @@ CRITICAL INSTRUCTIONS:
    - Integration tests: Separate task that depends on the feature tasks
    - E2E tests: Final task after feature is complete
 
-   DEPENDENCIES:
-   - Link tasks in logical build order
-   - Database/models → API endpoints → UI → Integration tests
-   - Tasks within same feature can run parallel if independent
+   DEPENDENCIES (CRITICAL - READ CAREFULLY):
+   - The "depends_on" field MUST contain EXACT TASK TITLES, not IDs!
+   - ❌ WRONG: "depends_on": ["infra-1", "task-1", "setup"]
+   - ✅ CORRECT: "depends_on": ["Create tasks table in SQLite database"]
+   - Link tasks in logical build order (database → API → UI → tests)
+   - Use the FULL TITLE you defined earlier in the same create_subtasks call
+   - Tasks within same feature can run parallel if independent (empty depends_on)
 5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
 6. **CRITICAL**: Include at least ONE TEST task to validate your component
 7. DO NOT output the plan in the chat - use tools only

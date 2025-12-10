@@ -14,12 +14,16 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
 
     Args:
         subtasks: List of dicts, each containing:
-            - title: str (concise, commit-message-style)
-            - description: str (what changes, why, acceptance criteria)
+            - title: str (REQUIRED - concise, commit-message-style, UNIQUE across all tasks)
+            - description: str (REQUIRED - what changes, why, acceptance criteria)
             - phase: "build" | "test" (NOT separate - build includes inline tests)
             - component: str (optional, use feature name instead of "backend"/"frontend")
-            - depends_on: List[str] (titles of tasks this depends on)
+            - depends_on: List[str] (REQUIRED - List of EXACT task TITLES this depends on, NOT IDs!)
             - worker_profile: "code_worker" | "test_worker" (default based on phase)
+
+    CRITICAL - depends_on MUST use EXACT TITLES:
+    ❌ WRONG: "depends_on": ["task-1", "infra-1", "setup"]
+    ✅ CORRECT: "depends_on": ["Create tasks table in SQLite database", "Setup FastAPI backend"]
 
     EXAMPLES OF GOOD TASKS:
     {
@@ -59,22 +63,23 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     # This gives the LLM immediate feedback to fix issues in the same conversation
     VALID_PHASES = ["plan", "build", "test"]
     errors = []
-    
+    warnings = []
+
     for idx, subtask in enumerate(subtasks):
         st_num = idx + 1
-        
+
         # Check if dict
         if not isinstance(subtask, dict):
             errors.append(f"Subtask #{st_num}: Must be a dictionary, got {type(subtask).__name__}")
             continue
-        
+
         # Check required fields
         if "title" not in subtask or not subtask["title"]:
             errors.append(f"Subtask #{st_num}: Missing required field 'title'")
-        
+
         if "description" not in subtask or not subtask["description"]:
             errors.append(f"Subtask #{st_num}: Missing required field 'description'")
-        
+
         # Validate phase
         phase = subtask.get("phase", "build")
         if phase not in VALID_PHASES:
@@ -83,6 +88,27 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
                 f"Valid phases are: {VALID_PHASES}. "
                 f"Use 'build' for frontend/backend/setup work, 'plan' for breaking down complex features, 'test' for E2E testing."
             )
+
+        # CRITICAL: Validate depends_on contains titles, not IDs
+        depends_on = subtask.get("depends_on", [])
+        if depends_on and isinstance(depends_on, list):
+            for dep in depends_on:
+                # Check if dependency looks like an ID (short, contains numbers, etc.)
+                if isinstance(dep, str):
+                    # Common ID patterns: "infra-1", "task-1", "setup", "task_abc123"
+                    if len(dep) < 15 and ("-" in dep or "_" in dep) and any(c.isdigit() for c in dep):
+                        warnings.append(
+                            f"Subtask #{st_num} '{subtask.get('title', 'Untitled')}': "
+                            f"depends_on value '{dep}' looks like an ID, not a title. "
+                            f"Use the FULL TITLE of the dependency task (e.g., 'Create tasks table in SQLite database')."
+                        )
+                    # Check for very short dependencies that don't look like real titles
+                    elif len(dep) < 10 and not any(word in dep.lower() for word in ["create", "implement", "add", "setup", "build", "test"]):
+                        warnings.append(
+                            f"Subtask #{st_num} '{subtask.get('title', 'Untitled')}': "
+                            f"depends_on value '{dep}' is very short and may not be a full title. "
+                            f"Ensure it matches the exact title of the dependency task."
+                        )
     
     # If validation errors, return them immediately for LLM to fix
     if errors:
@@ -90,7 +116,13 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
         error_msg += "\n\nPlease fix these errors and call create_subtasks again with valid task definitions."
         return error_msg
 
-    return f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
+    # If warnings (non-blocking but important), include them in success message
+    success_msg = f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
+    if warnings:
+        success_msg += f"\n\n⚠️ WARNINGS ({len(warnings)} issues to review):\n" + "\n".join(f"  - {warn}" for warn in warnings)
+        success_msg += "\n\nThe tasks were accepted, but please review these warnings. If needed, call create_subtasks again with corrected values."
+
+    return success_msg
 
 
 def report_existing_implementation(file_path: str, implementation_summary: str, verification_details: str) -> str:

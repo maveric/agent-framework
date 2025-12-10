@@ -66,6 +66,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             completed = task_queue.collect_completed()
             for c in completed:
                 logger.info(f"  📥 Processing completed task: {c.task_id[:12]}")
+                logger.info(f"  [DEBUG] Completion result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
 
                 for task in state.get("tasks", []):
                     if task.get("id") == c.task_id:
@@ -76,16 +77,8 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                         else:
                             # Worker returns state updates with modified task
                             if c.result and isinstance(c.result, dict):
-                                # Find the updated task in the result
-                                result_tasks = c.result.get("tasks", [])
-                                for rt in result_tasks:
-                                    if rt.get("id") == c.task_id:
-                                        # Merge updates
-                                        task.update(rt)
-                                        break
-
-                                # Merge tool outputs/messages to task_memories (for chat log in UI)
-                                # CRITICAL: This must be OUTSIDE the for loop!
+                                # CRITICAL: Merge task_memories FIRST, before updating task status
+                                # This ensures memories are in state before QA might run
                                 if "task_memories" in c.result:
                                     worker_memories = c.result["task_memories"]
                                     if worker_memories:
@@ -100,6 +93,16 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                         for tid, msgs in worker_memories.items():
                                             merged_count = len(state.get("task_memories", {}).get(tid, []))
                                             logger.info(f"  [DEBUG task_memories] After worker merge {tid[:12]}: total={merged_count}")
+                                else:
+                                    logger.warning(f"  [WARNING] Worker completion for {c.task_id[:12]} has no task_memories!")
+
+                                # Find the updated task in the result
+                                result_tasks = c.result.get("tasks", [])
+                                for rt in result_tasks:
+                                    if rt.get("id") == c.task_id:
+                                        # Merge updates
+                                        task.update(rt)
+                                        break
 
                                 logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
 
@@ -221,6 +224,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             just_completed = task_queue.collect_completed()
             for c in just_completed:
                 logger.info(f"  📥 [PRE-QA] Processing just-completed task: {c.task_id[:12]}")
+                logger.info(f"  [DEBUG] [PRE-QA] Result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
                 for task in state.get("tasks", []):
                     if task.get("id") == c.task_id:
                         if c.error:
@@ -228,14 +232,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                             task["error"] = str(c.error)
                             logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
                         else:
-                            # Merge worker results
-                            result_tasks = c.result.get("tasks", [])
-                            for rt in result_tasks:
-                                if rt.get("id") == c.task_id:
-                                    task.update(rt)
-                                    break
-                            
-                            # CRITICAL: Merge task_memories before QA runs
+                            # CRITICAL: Merge task_memories FIRST before updating task
                             if "task_memories" in c.result:
                                 worker_memories = c.result["task_memories"]
                                 if worker_memories:
@@ -249,7 +246,16 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                     for tid, msgs in worker_memories.items():
                                         merged_count = len(state.get("task_memories", {}).get(tid, []))
                                         logger.info(f"  [DEBUG task_memories] [PRE-QA] After merge {tid[:12]}: total={merged_count}")
-                            
+                            else:
+                                logger.warning(f"  [WARNING] [PRE-QA] Worker completion for {c.task_id[:12]} has no task_memories!")
+
+                            # Merge worker task updates
+                            result_tasks = c.result.get("tasks", [])
+                            for rt in result_tasks:
+                                if rt.get("id") == c.task_id:
+                                    task.update(rt)
+                                    break
+
                             logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
                         activity_occurred = True
                         break
