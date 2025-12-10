@@ -25,7 +25,7 @@ from git_manager import WorktreeManager
 logger = logging.getLogger(__name__)
 
 # Create router with prefix and tags
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
 
 
 # =============================================================================

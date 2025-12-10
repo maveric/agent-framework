@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, FolderOpen, AlertCircle } from 'lucide-react';
+import { apiClient } from '../api/client';
 
 interface CreateRunRequest {
     objective: string;
@@ -34,20 +35,11 @@ export function NewRun() {
                 payload.workspace = workspacePath.trim();
             }
 
-            const response = await fetch('/api/runs', {
+            const data = await apiClient<{ run_id: string }>('/api/runs', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify(payload),
             });
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
             const runId = data.run_id;
 
             // Navigate to the run details page

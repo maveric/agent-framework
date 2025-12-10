@@ -218,48 +218,98 @@ The merge code was inside the `for` loop but placed **after** the `break` statem
 
 ## 📋 **Remaining Work**
 
-### **HIGH PRIORITY**
+### **COMPLETED IN RECENT UPDATES** ✅
 
-#### 1. **Worker.py Refactoring** ✅ COMPLETE
-**Priority:** HIGH - Prevents regression bugs
+#### 1. **Basic Test Suite** ✅ COMPLETE
+**Files Created:**
+- `tests/unit/test_state_reducers.py` - All 4 reducers tested
+- `tests/unit/test_task_serialization.py` - to_dict/from_dict tested
+- `tests/unit/test_task_readiness.py` - evaluate_readiness() tested
+- `tests/unit/test_graph_utils.py` - Cycle detection tested
+- `tests/test_task_memories.py` - Integration test for task_memories bug prevention
 
-**What to Test:**
-```python
-tests/
-├── unit/
-│   ├── test_state_reducers.py      # Test all 4 reducers
-│   ├── test_task_serialization.py  # Test to_dict/from_dict
-│   ├── test_task_readiness.py      # Test evaluate_readiness()
-│   └── test_graph_utils.py         # Test cycle detection
-├── integration/
-│   ├── test_phoenix_recovery.py    # Test retry protocol
-│   ├── test_hitl_resolution.py     # Test human resolution
-│   └── test_plan_integration.py    # Test plan merging
-└── api/
-    ├── test_run_endpoints.py       # Test FastAPI routes
-    └── test_websocket.py           # Test WebSocket updates
-```
-
-**Start With:** State reducers + serialization (easiest, highest value)
-
-**Estimate:** 4-6 hours for basic coverage
+**Commits:**
+- `b1d2165` - Add comprehensive unit tests for core functionality
+- `d051478` - Add test infrastructure and state reducer tests
+- `3993b26` - Add dispatch loop integration test for task_memories regression prevention
 
 ---
 
-#### 3. **Convert Remaining print() Statements** ⏳ PENDING
-**Files Affected:**
-- `src/nodes/worker.py` (~200 print statements)
-- `src/server.py` (~50 print statements)
-- `src/git_manager.py` (~30 print statements)
+#### 2. **Convert print() Statements** ✅ COMPLETE
+**Files Converted:**
+- `src/nodes/worker.py` (0 print statements remaining)
+- `src/server.py` (0 print statements remaining)
+- `src/git_manager.py` (0 print statements remaining)
 
-**Pattern:**
-```python
-# Before
-print(f"Task {task_id} started", flush=True)
+**Commit:**
+- `b3f993f` - Refactor: Convert print statements to logging and extract API modules
 
-# After
-logger.info(f"Task {task_id} started")
+---
+
+#### 3. **Server.py Refactoring** ✅ COMPLETE
+**Result:** Reduced from 1850 → 472 lines (74% reduction)
+
+**Final Structure:**
 ```
+src/api/
+├── __init__.py
+├── dispatch.py       # Continuous dispatch loop (532 lines extracted)
+├── state.py          # Shared state management
+├── types.py          # API request/response types
+├── websocket.py      # ConnectionManager
+└── routes/
+    ├── __init__.py
+    ├── runs.py       # Run CRUD operations
+    ├── tasks.py      # Task operations
+    ├── interrupts.py # HITL endpoints
+    └── ws.py         # WebSocket endpoint
+```
+
+**Commits:**
+- `a3e3a30` - Extract routes to modular structure (reduced server.py by 757 lines)
+- `fd5e97f` - Refactor server.py to use api modules (reduced 671 lines)
+- `b80d863` - Extract dispatch loop to api/dispatch module (532 lines)
+
+---
+
+#### 4. **Frontend SPA Structure** ✅ COMPLETE
+**Result:** Already properly organized with components/pages/api separation
+
+**Structure:**
+```
+orchestrator-dashboard/src/
+├── App.tsx (37 lines)
+├── main.tsx
+├── components/
+│   ├── InterruptModal.tsx
+│   ├── TaskGraph.tsx
+│   ├── LogPanel.tsx
+│   └── layout/Layout.tsx
+├── pages/
+│   ├── Dashboard.tsx
+│   ├── RunDetails.tsx
+│   ├── NewRun.tsx
+│   └── HumanQueue.tsx
+└── api/
+    ├── client.ts
+    └── websocket.ts
+```
+
+---
+
+### **HIGH PRIORITY** ⏳
+
+#### 5. **API Versioning** ⏳ IN PROGRESS
+**Current State:** All endpoints use `/api/` prefix
+**Target:** Version all endpoints as `/api/v1/`
+
+**Backend Changes Needed:**
+- Update route prefixes in `src/api/routes/*.py`
+- Update any hardcoded paths in `src/server.py`
+
+**Frontend Changes Needed:**
+- Update all API calls in `orchestrator-dashboard/src/`
+- Update WebSocket connection path
 
 **Estimate:** 1-2 hours
 
@@ -267,17 +317,16 @@ logger.info(f"Task {task_id} started")
 
 ### **MEDIUM PRIORITY**
 
-#### 4. **API Improvements**
-- Add API versioning (`/api/v1/...`)
-- Standardize error responses (use `HTTPException` everywhere)
-- Add pagination to `GET /api/runs`
-- Add rate limiting (use `slowapi`)
+#### 6. **Additional API Improvements**
+- ✅ Standardize error responses (mostly done with HTTPException)
+- ⏳ Add pagination to `GET /api/runs`
+- ⏳ Add rate limiting (use `slowapi`)
 
-**Estimate:** 3-4 hours
+**Estimate:** 2-3 hours
 
 ---
 
-#### 5. **Git Merge Validation**
+#### 7. **Git Merge Validation**
 **Issue:** LLM-assisted merge might create broken code
 
 **Fix:** Add post-merge validation in `git_manager.py`:
@@ -297,22 +346,6 @@ async def merge_to_main(self, task_id: str):
 ---
 
 ### **LOWER PRIORITY**
-
-#### 6. **Server.py Refactoring**
-Extract server.py (1850 lines) into:
-```
-src/api/
-├── app.py            # FastAPI app setup
-├── websocket.py      # ConnectionManager
-├── routes/
-│   ├── runs.py       # Run CRUD
-│   ├── tasks.py      # Task operations
-│   └── interrupts.py # HITL endpoints
-├── dispatch.py       # Continuous dispatch loop
-└── broadcast.py      # State broadcasting
-```
-
-**Estimate:** 3-4 hours
 
 ---
 

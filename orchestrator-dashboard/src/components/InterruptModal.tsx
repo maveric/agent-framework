@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import { apiClient } from '../api/client';
 
 interface InterruptData {
     task_id: string;
@@ -64,15 +65,10 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
         }
 
         try {
-            const response = await fetch(`/api/runs/${runId}/resolve`, {
+            await apiClient(`/api/runs/${runId}/resolve`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(resolution)
             });
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
 
             onResolve();
         } catch (error) {

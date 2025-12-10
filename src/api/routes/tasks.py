@@ -15,7 +15,7 @@ from api.state import runs_index, get_orchestrator_graph
 logger = logging.getLogger(__name__)
 
 # Create router with prefix and tags
-router = APIRouter(prefix="/api/runs/{run_id}/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/v1/runs/{run_id}/tasks", tags=["tasks"])
 
 
 # =============================================================================
