@@ -776,6 +776,7 @@ def worker_result_to_dict(w: WorkerResult) -> Dict[str, Any]:
 def _suggested_task_to_dict(s: SuggestedTask) -> Dict[str, Any]:
     return {
         "suggested_id": s.suggested_id,
+        "title": s.title,
         "component": s.component,
         "phase": s.phase.value,
         "description": s.description,
@@ -835,6 +836,7 @@ def serialize_messages(messages: List[Any]) -> List[Dict[str, Any]]:
 def _dict_to_suggested_task(data: Dict[str, Any]) -> SuggestedTask:
     return SuggestedTask(
         suggested_id=data["suggested_id"],
+        title=data.get("title", "Untitled"),
         component=data["component"],
         phase=TaskPhase(data["phase"]),
         description=data["description"],
