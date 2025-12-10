@@ -62,61 +62,67 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             # Reset activity flag for this cycle
             activity_occurred = False
 
-            # ========== PHASE 1: Process completed workers ==========
+            # ========== PHASE 1: Collect ALL completed workers (SINGLE COLLECTION POINT) ==========
+            # This is the ONLY place we collect completions in the entire loop.
+            # All workers that completed since last iteration are processed here.
             completed = task_queue.collect_completed()
-            for c in completed:
-                logger.info(f"  📥 Processing completed task: {c.task_id[:12]}")
-                logger.info(f"  [DEBUG] Completion result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
 
-                for task in state.get("tasks", []):
-                    if task.get("id") == c.task_id:
-                        if c.error:
-                            task["status"] = "failed"
-                            task["error"] = str(c.error)
-                            logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
-                        else:
-                            # Worker returns state updates with modified task
-                            if c.result and isinstance(c.result, dict):
-                                # CRITICAL: Merge task_memories FIRST, before updating task status
-                                # This ensures memories are in state before QA might run
-                                if "task_memories" in c.result:
-                                    worker_memories = c.result["task_memories"]
-                                    if worker_memories:
-                                        # Apply reducer to preserve existing memories
-                                        for tid, msgs in worker_memories.items():
-                                            existing_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
-                                        state["task_memories"] = task_memories_reducer(
-                                            state.get("task_memories", {}),
-                                            worker_memories
-                                        )
-                                        for tid, msgs in worker_memories.items():
-                                            merged_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] After worker merge {tid[:12]}: total={merged_count}")
-                                else:
-                                    logger.warning(f"  [WARNING] Worker completion for {c.task_id[:12]} has no task_memories!")
+            if completed:
+                logger.info(f"  📥 Processing {len(completed)} completed task(s)")
 
-                                # Find the updated task in the result
-                                result_tasks = c.result.get("tasks", [])
-                                for rt in result_tasks:
-                                    if rt.get("id") == c.task_id:
-                                        # Merge updates
-                                        task.update(rt)
-                                        break
+                for c in completed:
+                    logger.info(f"    → {c.task_id[:12]}: merging results")
+                    logger.info(f"       [DEBUG] Result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
 
-                                logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
+                    for task in state.get("tasks", []):
+                        if task.get("id") == c.task_id:
+                            if c.error:
+                                task["status"] = "failed"
+                                task["error"] = str(c.error)
+                                logger.error(f"       ❌ Failed: {c.error}")
+                            else:
+                                # Worker returns state updates with modified task
+                                if c.result and isinstance(c.result, dict):
+                                    # CRITICAL: Merge task_memories FIRST, before updating task status
+                                    # This ensures memories are in state before Director/QA see the task
+                                    if "task_memories" in c.result:
+                                        worker_memories = c.result["task_memories"]
+                                        if worker_memories:
+                                            # Apply reducer to preserve existing memories
+                                            for tid, msgs in worker_memories.items():
+                                                existing_count = len(state.get("task_memories", {}).get(tid, []))
+                                                logger.info(f"       [task_memories] Merging {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
+                                            state["task_memories"] = task_memories_reducer(
+                                                state.get("task_memories", {}),
+                                                worker_memories
+                                            )
+                                            for tid, msgs in worker_memories.items():
+                                                merged_count = len(state.get("task_memories", {}).get(tid, []))
+                                                logger.info(f"       [task_memories] After merge {tid[:12]}: total={merged_count}")
+                                    else:
+                                        logger.warning(f"       ⚠️  Worker completion has no task_memories!")
 
-                                # Log files modified if any
-                                if task.get("aar") and task["aar"].get("files_modified"):
-                                    files = task["aar"]["files_modified"]
-                                    logger.info(f"     📂 Modified {len(files)} file(s): {', '.join(files)}")
+                                    # Find the updated task in the result
+                                    result_tasks = c.result.get("tasks", [])
+                                    for rt in result_tasks:
+                                        if rt.get("id") == c.task_id:
+                                            # Merge updates
+                                            task.update(rt)
+                                            break
 
-                                # Activity occurred
-                                activity_occurred = True
-                        break
+                                    logger.info(f"       ✅ Status: {task.get('status')}")
 
-                # Save checkpoint to database after worker updates
-                if completed and runs_index.get(run_id, {}).get("status") != "cancelled":
+                                    # Log files modified if any
+                                    if task.get("aar") and task["aar"].get("files_modified"):
+                                        files = task["aar"]["files_modified"]
+                                        logger.info(f"       📂 Modified {len(files)} file(s): {', '.join(files)}")
+
+                                    # Activity occurred
+                                    activity_occurred = True
+                            break
+
+                # Save checkpoint to database after ALL worker updates
+                if runs_index.get(run_id, {}).get("status") != "cancelled":
                     from run_persistence import save_run_state
                     try:
                         # Update in-memory state
@@ -216,101 +222,13 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 await broadcast_state_update(run_id, state)
 
             # ========== PHASE 4: Run Strategist for QA (Test tasks or Awaiting QA) ==========
-            # CRITICAL: Collect any newly completed workers BEFORE running QA
-            # This prevents a race condition where:
-            # 1. Worker completes and sets status to awaiting_qa
-            # 2. QA runs on it before next loop iteration collects the worker result
-            # 3. QA doesn't see the worker's task_memories
-            just_completed = task_queue.collect_completed()
-            for c in just_completed:
-                logger.info(f"  📥 [PRE-QA] Processing just-completed task: {c.task_id[:12]}")
-                logger.info(f"  [DEBUG] [PRE-QA] Result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
-                for task in state.get("tasks", []):
-                    if task.get("id") == c.task_id:
-                        if c.error:
-                            task["status"] = "failed"
-                            task["error"] = str(c.error)
-                            logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
-                        else:
-                            # CRITICAL: Merge task_memories FIRST before updating task
-                            if "task_memories" in c.result:
-                                worker_memories = c.result["task_memories"]
-                                if worker_memories:
-                                    for tid, msgs in worker_memories.items():
-                                        existing_count = len(state.get("task_memories", {}).get(tid, []))
-                                        logger.info(f"  [DEBUG task_memories] [PRE-QA] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
-                                    state["task_memories"] = task_memories_reducer(
-                                        state.get("task_memories", {}),
-                                        worker_memories
-                                    )
-                                    for tid, msgs in worker_memories.items():
-                                        merged_count = len(state.get("task_memories", {}).get(tid, []))
-                                        logger.info(f"  [DEBUG task_memories] [PRE-QA] After merge {tid[:12]}: total={merged_count}")
-                            else:
-                                logger.warning(f"  [WARNING] [PRE-QA] Worker completion for {c.task_id[:12]} has no task_memories!")
-
-                            # Merge worker task updates
-                            result_tasks = c.result.get("tasks", [])
-                            for rt in result_tasks:
-                                if rt.get("id") == c.task_id:
-                                    task.update(rt)
-                                    break
-
-                            logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
-                        activity_occurred = True
-                        break
-            
-            # Now run QA with complete task_memories
-            # We need to run Strategist if:
-            # 1. Task is explicitly AWAITING_QA (any phase)
-            # 2. Task is TEST phase and COMPLETE but missing verdict (legacy check)
+            # All worker completions have been collected in PHASE 1, so QA has complete state
             tasks_requiring_qa = [t for t in state.get("tasks", [])
                                if t.get("status") == "awaiting_qa"
                                or (t.get("status") == "complete" and t.get("phase") == "test" and not t.get("qa_verdict"))]
 
             for task in tasks_requiring_qa:
-                # CRITICAL: Check for new completions BEFORE evaluating this specific task
-                # Workers can complete DURING the QA loop, creating a race condition
-                just_completed_during_qa = task_queue.collect_completed()
-                for c in just_completed_during_qa:
-                    logger.info(f"  📥 [DURING-QA] Processing just-completed task: {c.task_id[:12]}")
-                    logger.info(f"  [DEBUG] [DURING-QA] Result type: {type(c.result)}, has task_memories: {'task_memories' in c.result if isinstance(c.result, dict) else 'N/A'}")
-                    for t in state.get("tasks", []):
-                        if t.get("id") == c.task_id:
-                            if c.error:
-                                t["status"] = "failed"
-                                t["error"] = str(c.error)
-                                logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
-                            else:
-                                # CRITICAL: Merge task_memories FIRST
-                                if "task_memories" in c.result:
-                                    worker_memories = c.result["task_memories"]
-                                    if worker_memories:
-                                        for tid, msgs in worker_memories.items():
-                                            existing_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] [DURING-QA] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
-                                        state["task_memories"] = task_memories_reducer(
-                                            state.get("task_memories", {}),
-                                            worker_memories
-                                        )
-                                        for tid, msgs in worker_memories.items():
-                                            merged_count = len(state.get("task_memories", {}).get(tid, []))
-                                            logger.info(f"  [DEBUG task_memories] [DURING-QA] After merge {tid[:12]}: total={merged_count}")
-                                else:
-                                    logger.warning(f"  [WARNING] [DURING-QA] Worker completion for {c.task_id[:12]} has no task_memories!")
-
-                                # Merge worker task updates
-                                result_tasks = c.result.get("tasks", [])
-                                for rt in result_tasks:
-                                    if rt.get("id") == c.task_id:
-                                        t.update(rt)
-                                        break
-
-                                logger.info(f"  ✅ Task {c.task_id[:12]} → {t.get('status')}")
-                            activity_occurred = True
-                            break
-
-                # CHECK AGAIN: Cancellation might happen during long operations
+                # CHECK: Cancellation might happen during long operations
                 if runs_index.get(run_id, {}).get("status") == "cancelled":
                     break
 
