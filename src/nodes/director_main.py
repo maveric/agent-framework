@@ -311,21 +311,97 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
             logger.info(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans")
     elif replan_requested:
         # MANUAL REPLAN TRIGGER
-        logger.info("Director: Manual replan requested. Re-integrating pending tasks")
+        # User says dependency tree is wrong - ask LLM to rebuild depends_on relationships
+        logger.info("Director: Manual replan requested. Rebuilding dependency tree")
 
-        # Gather all pending tasks (PLANNED)
-        pending_tasks = [t for t in all_tasks if t.status == TaskStatus.PLANNED]
+        # Gather all incomplete tasks (PLANNED, READY, ACTIVE)
+        incomplete_statuses = {TaskStatus.PLANNED, TaskStatus.READY, TaskStatus.ACTIVE}
+        incomplete_tasks = [t for t in all_tasks if t.status in incomplete_statuses]
 
-        if pending_tasks:
-            # Convert to dicts for the integrator
-            suggestions = [task_to_dict(t) for t in pending_tasks]
+        if incomplete_tasks:
+            logger.info(f"  Rebuilding dependencies for {len(incomplete_tasks)} incomplete tasks")
+            
+            # Build a simple prompt for dependency rebuilding
+            from llm_client import get_llm
+            from config import OrchestratorConfig
+            
+            # Get config - try state first, fall back to default
+            orch_config = state.get("orch_config")
+            if not orch_config:
+                orch_config = OrchestratorConfig()
+            
+            llm = get_llm(orch_config.director_model)
+            
+            task_summaries = []
+            for t in incomplete_tasks:
+                task_summaries.append(f"- {t.id}: {t.description[:100]}")
+            
+            prompt = f"""Given these incomplete tasks, determine their dependencies.
+Each task should depend on tasks that must complete BEFORE it can start.
 
+CRITICAL: Maximize parallelism while respecting necessary ordering.
+- Tasks that CAN run in parallel SHOULD (e.g., frontend + backend simultaneously)
+- Only add dependencies where there's a real blocker (e.g., API depends on database models)
+- Create proper layering: foundation tasks → mid-level tasks → integration tasks
+- Avoid unnecessary dependencies that would force serial execution
+
+Tasks:
+{chr(10).join(task_summaries)}
+
+Return ONLY a JSON object mapping task_id -> list of dependency task_ids:
+{{"task_xxx": ["task_yyy", "task_zzz"], ...}}
+
+Keep dependencies minimal - only include direct blockers, not transitive dependencies.
+Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
+"""
+            
             try:
-                # Re-run integration
-                new_tasks = await integrate_plans(suggestions, state)
-                updates.extend([task_to_dict(t) for t in new_tasks])
+                response = await llm.ainvoke(prompt)
+                import json
+                # Parse JSON from response
+                content = str(response.content)
+                # Try to extract JSON from markdown code blocks
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                dependency_map = json.loads(content)
+                
+                # Update tasks with new dependencies
+                updated_task_ids = set()
+                for task in incomplete_tasks:
+                    if task.id in dependency_map:
+                        new_deps = dependency_map[task.id]
+                        if new_deps != task.depends_on:
+                            task.depends_on = new_deps
+                            task.updated_at = datetime.now()
+                            updated_task_ids.add(task.id)
+                            logger.info(f"  Task {task.id[:12]} dependencies updated: {len(new_deps)} deps")
+                
+                # CRITICAL: Re-evaluate readiness for ALL incomplete tasks
+                # Tasks that were READY/ACTIVE might now be BLOCKED due to new dependencies
+                logger.info(f"  Re-evaluating readiness after dependency changes...")
+                for task in incomplete_tasks:
+                    old_status = task.status
+                    new_status = evaluate_readiness(task, all_tasks)
+                    
+                    if new_status != old_status:
+                        task.status = new_status
+                        task.updated_at = datetime.now()
+                        updated_task_ids.add(task.id)
+                        logger.info(f"  Task {task.id[:12]} status: {old_status.value} → {new_status.value}")
+                
+                # Add all updated tasks to updates
+                for task in incomplete_tasks:
+                    if task.id in updated_task_ids:
+                        updates.append(task_to_dict(task))
+                
+                logger.info(f"  ✅ Dependency tree rebuilt: {len(updated_task_ids)} tasks updated")
             except Exception as e:
-                logger.error(f"Director Error: Replan failed: {e}")
+                logger.error(f"Director Error: Dependency rebuild failed: {e}")
+                import traceback
+                traceback.print_exc()
     else:
         # 2. Collect suggestions from ALL completed/failed tasks
         all_suggestions = []

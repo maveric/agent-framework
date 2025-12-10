@@ -98,25 +98,25 @@ async def ensure_run_in_index(run_id: str) -> bool:
 @router.post("/tasks/{task_id}/interrupt")
 async def interrupt_task(run_id: str, task_id: str):
     """
-    Force interrupt a specific task:
-    1. Cancel the running orchestrator task
+    Force interrupt a specific task (task-specific, run continues):
+    1. Cancel only the specific task's worker (if running)
     2. Update the specific task status to WAITING_HUMAN
-    3. Update run status to 'interrupted'
+    3. Run continues executing other tasks
     """
+    from api.state import active_task_queues
+    
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # 1. Cancel the running task if it exists
-    if run_id in running_tasks:
-        logger.info(f"Force interrupting run {run_id} for task {task_id}")
-        task = running_tasks[run_id]
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            logger.info(f"Run {run_id} cancelled successfully")
-        except Exception as e:
-            logger.error(f"Error cancelling run {run_id}: {e}")
+    # 1. Cancel only the specific task's worker (not the entire run)
+    task_queue = active_task_queues.get(run_id)
+    if task_queue and task_queue.is_running(task_id):
+        logger.info(f"Interrupting specific task {task_id[:12]} in run {run_id}")
+        await task_queue.cancel_task(task_id)
+        logger.info(f"Task {task_id[:12]} cancelled, run {run_id} continues")
+    else:
+        logger.info(f"Task {task_id[:12]} not currently running, marking as waiting_human")
+
 
     # 2. Update state to mark task as waiting_human
     try:
@@ -179,38 +179,42 @@ async def interrupt_task(run_id: str, task_id: str):
             "depends_on": task_dict.get("depends_on", [])
         }
 
-        # Update run status and persist interrupt data
-        runs_index[run_id]["status"] = "interrupted"
-        runs_index[run_id]["interrupt_data"] = interrupt_data
+        # Run stays 'running' - only this task is paused
+        # (Don't change runs_index[run_id]["status"] to "interrupted")
+        runs_index[run_id]["interrupt_data"] = interrupt_data  # Track for UI
 
-        # Update state object
+        # Update state object (for this task's interrupt data)
         state["_interrupt_data"] = interrupt_data
 
-        # Save to DB and Memory
-        await save_run_state(run_id, state, status="interrupted")
+        # Save to DB and Memory (run stays 'running')
+        current_status = runs_index[run_id].get("status", "running")
+        await save_run_state(run_id, state, status=current_status)
         run_states[run_id] = state
 
-        # Broadcast update - send BOTH state_update (for general UI) and interrupted (for modal)
+        # Broadcast update - send state_update with task change and task_interrupted for modal
         tasks_payload = [task_to_dict(t) if hasattr(t, "status") else t for t in updated_tasks]
 
         await manager.broadcast_to_run(run_id, {
             "type": "state_update",
             "payload": {
-                "status": "interrupted",
+                "status": current_status,  # Run keeps running
                 "tasks": tasks_payload,
                 "interrupt_data": interrupt_data
             }
         })
 
+        # Send task-specific interrupt event (not run-level "interrupted")
         await manager.broadcast_to_run(run_id, {
-            "type": "interrupted",
+            "type": "task_interrupted",
             "payload": {
-                "status": "interrupted",
+                "task_id": task_id,
+                "status": "waiting_human",
                 "data": interrupt_data
             }
         })
 
-        return {"status": "interrupted", "task_id": task_id}
+        return {"status": "task_interrupted", "task_id": task_id, "run_status": current_status}
+
 
     except HTTPException:
         raise
@@ -333,7 +337,18 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 logger.info(f"   Continuing dispatch loop with {len(state.get('tasks', []))} tasks")
 
                 # Resume the continuous dispatch loop (not super-step mode!)
-                await continuous_dispatch_loop(run_id, state, config)
+                # CRITICAL: Register in running_tasks so cancel can find it
+                dispatch_task = asyncio.create_task(continuous_dispatch_loop(run_id, state, config))
+                running_tasks[run_id] = dispatch_task
+                
+                def cleanup_task(t):
+                    running_tasks.pop(run_id, None)
+                    logger.info(f"Cleaned up resumed task for run {run_id}")
+                
+                dispatch_task.add_done_callback(cleanup_task)
+                
+                # Await the task
+                await dispatch_task
 
                 logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
 
@@ -343,6 +358,7 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 traceback.print_exc()
 
         background_tasks.add_task(resume_execution)
+
 
         return {"status": "resuming", "action": resolution.action}
 

@@ -18,7 +18,8 @@ from git_manager import WorktreeManager, initialize_git_repo
 
 # Import global state
 import api.state as api_state
-from api.state import runs_index, run_states, get_orchestrator_graph, manager
+from api.state import runs_index, run_states, get_orchestrator_graph
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     task_queue = TaskCompletionQueue(max_concurrent=max_concurrent)
     iteration = 0
     max_iterations = 500  # Safety limit
+
+    # Register task queue for external access (task-specific interrupts)
+    api_state.active_task_queues[run_id] = task_queue
 
     logger.info(f"🚀 Starting continuous dispatch loop for run {run_id}")
 
@@ -123,8 +127,22 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 await broadcast_state_update(run_id, state)
 
             # ========== PHASE 2: Run Director (evaluates readiness, creates tasks) ==========
+            
+            # Broadcast 'replanning' status to UI when replan is triggered
+            if state.get("replan_requested"):
+                logger.info(f"📋 Replanning triggered for run {run_id}")
+                runs_index[run_id]["status"] = "replanning"
+                await api_state.manager.broadcast_to_run(run_id, {
+                    "type": "state_update",
+                    "payload": {
+                        "status": "replanning",
+                        "message": "Reorganizing task plan..."
+                    }
+                })
+            
             # Director modifies state directly
             director_result = await director_node(state, run_config)
+
             if director_result:
                 # Only count as activity if meaningful state changed (ignore internal counters)
                 meaningful_keys = ["tasks", "insights", "design_log", "replan_requested"]
@@ -154,6 +172,12 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                         await save_run_state(run_id, state, status=runs_index[run_id]["status"])
                     except Exception as e:
                         logger.error(f"Failed to save checkpoint: {e}")
+
+                # Reset status from 'replanning' back to 'running' after director completes
+                if runs_index.get(run_id, {}).get("status") == "replanning":
+                    runs_index[run_id]["status"] = "running"
+                    await broadcast_state_update(run_id, state)
+
 
             # ========== PHASE 3: Find and dispatch ready tasks ==========
             ready_tasks = [t for t in state.get("tasks", []) if t.get("status") == "ready"]
@@ -189,6 +213,48 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 await broadcast_state_update(run_id, state)
 
             # ========== PHASE 4: Run Strategist for QA (Test tasks or Awaiting QA) ==========
+            # CRITICAL: Collect any newly completed workers BEFORE running QA
+            # This prevents a race condition where:
+            # 1. Worker completes and sets status to awaiting_qa
+            # 2. QA runs on it before next loop iteration collects the worker result
+            # 3. QA doesn't see the worker's task_memories
+            just_completed = task_queue.collect_completed()
+            for c in just_completed:
+                logger.info(f"  📥 [PRE-QA] Processing just-completed task: {c.task_id[:12]}")
+                for task in state.get("tasks", []):
+                    if task.get("id") == c.task_id:
+                        if c.error:
+                            task["status"] = "failed"
+                            task["error"] = str(c.error)
+                            logger.error(f"  ❌ Task {c.task_id[:12]} failed: {c.error}")
+                        else:
+                            # Merge worker results
+                            result_tasks = c.result.get("tasks", [])
+                            for rt in result_tasks:
+                                if rt.get("id") == c.task_id:
+                                    task.update(rt)
+                                    break
+                            
+                            # CRITICAL: Merge task_memories before QA runs
+                            if "task_memories" in c.result:
+                                worker_memories = c.result["task_memories"]
+                                if worker_memories:
+                                    for tid, msgs in worker_memories.items():
+                                        existing_count = len(state.get("task_memories", {}).get(tid, []))
+                                        logger.info(f"  [DEBUG task_memories] [PRE-QA] Worker returning {tid[:12]}: existing={existing_count}, adding={len(msgs)}")
+                                    state["task_memories"] = task_memories_reducer(
+                                        state.get("task_memories", {}),
+                                        worker_memories
+                                    )
+                                    for tid, msgs in worker_memories.items():
+                                        merged_count = len(state.get("task_memories", {}).get(tid, []))
+                                        logger.info(f"  [DEBUG task_memories] [PRE-QA] After merge {tid[:12]}: total={merged_count}")
+                            
+                            logger.info(f"  ✅ Task {c.task_id[:12]} → {task.get('status')}")
+                        activity_occurred = True
+                        break
+            
+            # Now run QA with complete task_memories
             # We need to run Strategist if:
             # 1. Task is explicitly AWAITING_QA (any phase)
             # 2. Task is TEST phase and COMPLETE but missing verdict (legacy check)
@@ -355,8 +421,11 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         # Cancel any remaining workers
         await task_queue.cancel_all()
 
+        # Unregister task queue
+        api_state.active_task_queues.pop(run_id, None)
+
         # Final broadcast
-        await manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
+        await api_state.manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
         logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
 
 

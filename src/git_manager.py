@@ -868,16 +868,42 @@ logs/
 # Git
 .git/
 
+# Node / JavaScript
+node_modules/
+dist/
+build/
+out/
+.next/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
 # Python
 __pycache__/
 *.py[cod]
 *.pyc
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
 
 # OS
 .DS_Store
 Thumbs.db
+
+# IDEs (optional - remove if you want to commit IDE settings)
+.vscode/
+.idea/
+*.swp
+*.swo
 """
         gitignore_path.write_text(gitignore_content, encoding="utf-8")
         

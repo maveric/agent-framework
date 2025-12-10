@@ -15,7 +15,9 @@ export type WSMessageType =
     | 'ping'
     | 'pong'
     | 'run_list_update'
-    | 'interrupted';
+    | 'interrupted'
+    | 'task_interrupted';
+
 
 export interface WSMessage {
     type: WSMessageType;

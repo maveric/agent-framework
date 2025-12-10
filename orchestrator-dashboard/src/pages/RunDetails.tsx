@@ -104,12 +104,27 @@ export function RunDetails() {
             }
         });
 
+        // Handle task-specific interrupts (run continues, only task paused)
+        const removeTaskInterruptHandler = addMessageHandler('task_interrupted', (message) => {
+            if (message.run_id === runId) {
+                console.log('Task interrupted event received:', message.payload);
+                // Show modal for the specific task
+                if (message.payload.data) {
+                    setInterruptData(message.payload.data);
+                    setShowInterruptModal(true);
+                }
+                // Don't change run status - it stays running
+            }
+        });
+
         return () => {
             removeStateUpdateHandler();
             removeInterruptHandler();
+            removeTaskInterruptHandler();
             unsubscribe(runId);
         };
     }, [runId, addMessageHandler, subscribe, unsubscribe]);
+
 
     const sortedTasks = useMemo(() => {
         if (!run?.tasks) return [];

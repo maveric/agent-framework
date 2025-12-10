@@ -26,6 +26,11 @@ global_checkpointer = None
 # Global connection manager (initialized by server)
 manager = None
 
+# Track active task queues per run for task-specific cancellation
+# Maps run_id -> TaskCompletionQueue
+active_task_queues: Dict[str, Any] = {}
+
+
 
 def get_orchestrator_graph():
     """Get the orchestrator graph. Checkpointer is initialized at startup."""

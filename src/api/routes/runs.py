@@ -359,7 +359,8 @@ async def get_run(request: Request, run_id: str):
             "interrupt_data": interrupt_data
         }
 
-    # No state found - return minimal data
+    # No state found - return minimal data with default config
+    from config import OrchestratorConfig
     logger.warning(f"⚠️ No state found for run {run_id}")
     return {
         **run_data,
@@ -369,7 +370,8 @@ async def get_run(request: Request, run_id: str):
         "insights": [],
         "design_log": [],
         "guardian": {},
-        "task_memories": {}
+        "task_memories": {},
+        "model_config": _serialize_orch_config(OrchestratorConfig())  # Use default config
     }
 
 
@@ -483,33 +485,43 @@ async def cancel_run(run_id: str):
     """Cancel a running task."""
     from run_persistence import save_run_state
 
+    logger.info(f"🛑 Cancel requested for run {run_id}")
+    logger.info(f"   runs_index keys: {list(runs_index.keys())}")
+    logger.info(f"   running_tasks keys: {list(running_tasks.keys())}")
+
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
 
     if run_id not in running_tasks:
         # Already completed or not running
+        logger.warning(f"   Run {run_id} has no active dispatch loop - returning early")
         return {"status": runs_index[run_id].get("status", "unknown"), "message": "Run not active"}
 
     task = running_tasks[run_id]
+    logger.info(f"   Dispatch loop found: done={task.done()}, cancelled={task.cancelled()}")
+
     if task.done():
         return {"status": "already_completed"}
 
+    # Mark as cancelled FIRST so dispatch loop sees it immediately
+    runs_index[run_id]["status"] = "cancelled"
+    runs_index[run_id]["updated_at"] = datetime.now().isoformat()
+
     # Cancel the task
     task.cancel()
+    logger.info(f"   Cancel signal sent to task")
 
-    # Wait for cancellation to complete
+    # Wait briefly for cancellation - don't block forever if LLM calls are stuck
     try:
-        await task
+        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+    except asyncio.TimeoutError:
+        logger.warning(f"   Task didn't stop within 2s - will terminate in background")
     except asyncio.CancelledError:
         logger.info(f"   ✓ Dispatch loop cancelled successfully")
     except Exception as e:
         logger.warning(f"   Dispatch loop ended with: {e}")
 
     logger.warning(f"🛑 Cancelled run {run_id}")
-
-    # Update status
-    runs_index[run_id]["status"] = "cancelled"
-    runs_index[run_id]["updated_at"] = datetime.now().isoformat()
 
     # Save cancelled state to database
     if run_id in run_states:
@@ -528,6 +540,7 @@ async def cancel_run(run_id: str):
     })
 
     return {"status": "cancelled", "run_id": run_id}
+
 
 
 @router.post("/{run_id}/restart")

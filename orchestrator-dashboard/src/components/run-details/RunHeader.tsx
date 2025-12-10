@@ -25,13 +25,14 @@ export function RunHeader({
             <div>
                 <div className="flex items-center gap-3 mb-2">
                     <h1 className="text-3xl font-bold text-white tracking-tight">Run Details</h1>
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${
-                        run.status === 'running' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
-                        run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-                        run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                        run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
-                        'bg-slate-700 text-slate-400'
-                    }`}>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${run.status === 'running' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                            run.status === 'replanning' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30 animate-pulse' :
+                                run.status === 'completed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                                    run.status === 'failed' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                                        run.status === 'interrupted' || run.status === 'paused' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                                            'bg-slate-700 text-slate-400'
+                        }`}>
+
                         {run.status}
                     </span>
                     {/* Connection Status */}

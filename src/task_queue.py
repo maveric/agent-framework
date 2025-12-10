@@ -128,6 +128,34 @@ class TaskCompletionQueue:
         
         return self.collect_completed()
     
+    async def cancel_task(self, task_id: str) -> bool:
+        """
+        Cancel a specific running task by ID.
+        
+        Args:
+            task_id: The task to cancel
+            
+        Returns:
+            True if task was running and cancelled, False if not found
+        """
+        if task_id not in self._running:
+            return False
+        
+        task = self._running[task_id]
+        print(f"  ⚠️ Cancelling specific task {task_id[:12]}", flush=True)
+        task.cancel()
+        
+        # Wait for cancellation to complete
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        
+        self._running.pop(task_id, None)
+        return True
+
     async def cancel_all(self):
         """Cancel all running tasks (for shutdown)."""
         for task_id, task in list(self._running.items()):
@@ -139,3 +167,4 @@ class TaskCompletionQueue:
             await asyncio.gather(*self._running.values(), return_exceptions=True)
         
         self._running.clear()
+
