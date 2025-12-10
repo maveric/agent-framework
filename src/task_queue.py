@@ -99,6 +99,11 @@ class TaskCompletionQueue:
         """True if any workers are still running."""
         return bool(self._running)
     
+    @property
+    def has_completed(self) -> bool:
+        """True if there are completed tasks waiting to be collected."""
+        return bool(self._completed)
+    
     def is_running(self, task_id: str) -> bool:
         """Check if a specific task is currently running."""
         return task_id in self._running

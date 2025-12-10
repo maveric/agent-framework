@@ -302,7 +302,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 break
 
             # No work and no ready tasks? Check if we're stuck
-            if not task_queue.has_work and not ready_tasks and not tasks_requiring_qa and not has_pending:
+            # CRITICAL: Also check if there are completed workers waiting to be collected!
+            # Workers may complete between Phase 1 and here, so we must not exit if there are completions pending
+            if not task_queue.has_work and not task_queue.has_completed and not ready_tasks and not tasks_requiring_qa and not has_pending:
                 # Check for planned tasks that might become ready
                 planned = [t for t in all_tasks if t.get("status") == "planned"]
 
