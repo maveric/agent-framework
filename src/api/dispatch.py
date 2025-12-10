@@ -17,8 +17,8 @@ from config import OrchestratorConfig
 from git_manager import WorktreeManager, initialize_git_repo
 
 # Import global state
-import api.state
-from api.state import runs_index, run_states, get_orchestrator_graph
+import api.state as api_state
+from api.state import runs_index, run_states, get_orchestrator_graph, manager
 
 logger = logging.getLogger(__name__)
 
