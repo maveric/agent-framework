@@ -13,6 +13,14 @@ interface RunSummary {
     workspace_path?: string;
 }
 
+interface PaginatedResponse<T> {
+    items: T[];
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
+}
+
 export function Dashboard() {
     const [runs, setRuns] = useState<RunSummary[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -20,8 +28,8 @@ export function Dashboard() {
 
     useEffect(() => {
         // Initial fetch
-        apiClient<RunSummary[]>('/api/runs')
-            .then(setRuns)
+        apiClient<PaginatedResponse<RunSummary>>('/api/runs')
+            .then(response => setRuns(response.items))
             .finally(() => setIsLoading(false));
 
         // Subscribe to real-time updates via WebSocket

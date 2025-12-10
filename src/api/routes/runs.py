@@ -10,11 +10,13 @@ import uuid
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Request
 from pathlib import Path
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 # Import API modules
-from api.types import CreateRunRequest, RunSummary, HumanResolution
+from api.types import CreateRunRequest, RunSummary, HumanResolution, PaginatedResponse
 from api.state import runs_index, running_tasks, run_states, get_orchestrator_graph, manager, global_checkpointer
 from api.dispatch import run_orchestrator, continuous_dispatch_loop
 
@@ -26,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 # Create router with prefix and tags
 router = APIRouter(prefix="/api/v1/runs", tags=["runs"])
+
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 
 # =============================================================================
@@ -123,12 +128,23 @@ def _serialize_orch_config(config):
 # ROUTES
 # =============================================================================
 
-@router.get("", response_model=List[RunSummary])
-async def list_runs():
-    """List all runs from database and merge with in-memory active runs."""
+@router.get("", response_model=PaginatedResponse[RunSummary])
+@limiter.limit("60/minute")
+async def list_runs(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100, description="Maximum number of runs to return"),
+    offset: int = Query(default=0, ge=0, description="Number of runs to skip")
+):
+    """
+    List all runs from database and merge with in-memory active runs.
+
+    Supports pagination via limit and offset query parameters.
+    Results are sorted by created_at descending (most recent first).
+    Rate limited to 60 requests per minute per IP.
+    """
     from run_persistence import list_all_runs
 
-    logger.info("📊 /api/runs called - querying database...")
+    logger.info(f"📊 /api/v1/runs called - querying database (limit={limit}, offset={offset})...")
 
     # Get runs from our custom table
     db_runs = await list_all_runs()
@@ -174,11 +190,23 @@ async def list_runs():
     # Sort by created_at descending (most recent first)
     summaries.sort(key=lambda x: x.created_at, reverse=True)
 
-    return summaries
+    # Apply pagination
+    total = len(summaries)
+    paginated_items = summaries[offset:offset + limit]
+    has_more = offset + limit < total
+
+    return PaginatedResponse(
+        items=paginated_items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_more=has_more
+    )
 
 
 @router.post("")
-async def create_run(request: CreateRunRequest, background_tasks: BackgroundTasks):
+@limiter.limit("10/minute")
+async def create_run(request: Request, run_request: CreateRunRequest, background_tasks: BackgroundTasks):
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     thread_id = str(uuid.uuid4())
 
@@ -186,12 +214,12 @@ async def create_run(request: CreateRunRequest, background_tasks: BackgroundTask
     runs_index[run_id] = {
         "run_id": run_id,
         "thread_id": thread_id,
-        "objective": request.objective,
+        "objective": run_request.objective,
         "status": "running",
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat(),
         "task_counts": {"planned": 0, "completed": 0},
-        "tags": request.tags or []
+        "tags": run_request.tags or []
     }
 
     # Broadcast new run to all clients
@@ -201,7 +229,7 @@ async def create_run(request: CreateRunRequest, background_tasks: BackgroundTask
     })
 
     # Start the run in background and track the task
-    task = asyncio.create_task(run_orchestrator(run_id, thread_id, request.objective, request.spec, request.workspace))
+    task = asyncio.create_task(run_orchestrator(run_id, thread_id, run_request.objective, run_request.spec, run_request.workspace))
     running_tasks[run_id] = task
 
     # Cleanup task when done
@@ -215,12 +243,19 @@ async def create_run(request: CreateRunRequest, background_tasks: BackgroundTask
 
 
 @router.get("/{run_id}")
-async def get_run(run_id: str):
+@limiter.limit("100/minute")
+async def get_run(request: Request, run_id: str):
     from run_persistence import load_run_state
 
     # Try to refresh from DB if not in memory
     if run_id not in runs_index:
-        await list_runs()
+        # Refresh runs_index from database
+        from run_persistence import list_all_runs
+        db_runs = await list_all_runs()
+        for run_data in db_runs:
+            rid = run_data.get("run_id")
+            if rid not in runs_index:
+                runs_index[rid] = run_data
 
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")

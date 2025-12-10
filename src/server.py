@@ -25,9 +25,12 @@ load_dotenv()
 # For now, we force it off to avoid "not authorized" errors.
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -129,6 +132,11 @@ async def lifespan(app: FastAPI):
         logger.info("Database connection closed")
 
 app = FastAPI(title="Agent Orchestrator API", lifespan=lifespan)
+
+# Rate limiting setup
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

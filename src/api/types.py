@@ -4,8 +4,10 @@ API Request/Response Types
 Pydantic models for API request and response validation.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Generic, TypeVar
 from pydantic import BaseModel
+
+T = TypeVar('T')
 
 
 class CreateRunRequest(BaseModel):
@@ -44,3 +46,12 @@ class HumanResolution(BaseModel):
     new_worker_profile: Optional[str] = None
     new_criteria: Optional[List[str]] = None
     new_dependencies: Optional[List[str]] = None
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Paginated response wrapper."""
+    items: List[T]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

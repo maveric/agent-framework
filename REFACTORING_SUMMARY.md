@@ -297,36 +297,70 @@ orchestrator-dashboard/src/
 
 ---
 
-### **HIGH PRIORITY** ⏳
+#### 5. **API Versioning** ✅ COMPLETE
+**Result:** All endpoints now use `/api/v1/` prefix
 
-#### 5. **API Versioning** ⏳ IN PROGRESS
-**Current State:** All endpoints use `/api/` prefix
-**Target:** Version all endpoints as `/api/v1/`
+**Backend Changes:**
+- Updated route prefixes in `src/api/routes/*.py`
+- Added API_VERSION constant for easy future updates
+- WebSocket endpoint remains at `/ws` (unversioned)
 
-**Backend Changes Needed:**
-- Update route prefixes in `src/api/routes/*.py`
-- Update any hardcoded paths in `src/server.py`
+**Frontend Changes:**
+- Created `apiUrl()` helper in `api/client.ts`
+- Automatically converts `/api/` paths to `/api/v1/`
+- Updated all components to use `apiClient()`
 
-**Frontend Changes Needed:**
-- Update all API calls in `orchestrator-dashboard/src/`
-- Update WebSocket connection path
+**Commits:**
+- `91adfc3` - Add API versioning: migrate all endpoints to /api/v1/
+- `83b8f45` - Update frontend build artifacts after API versioning
 
-**Estimate:** 1-2 hours
+---
+
+#### 6. **Additional API Improvements** ✅ COMPLETE
+
+**Pagination:**
+- ✅ Added `PaginatedResponse<T>` generic type
+- ✅ `GET /api/v1/runs` now returns paginated results
+- ✅ Supports `limit` (default 50, max 100) and `offset` query parameters
+- ✅ Includes `total`, `has_more` fields for client-side pagination
+- ✅ Frontend updated to handle paginated responses
+
+**Rate Limiting:**
+- ✅ Added `slowapi` to dependencies
+- ✅ `GET /api/v1/runs`: 60 requests/minute per IP
+- ✅ `POST /api/v1/runs`: 10 requests/minute per IP (create run)
+- ✅ `GET /api/v1/runs/{run_id}`: 100 requests/minute per IP
+- ✅ Returns HTTP 429 (Too Many Requests) when limit exceeded
+
+**Error Responses:**
+- ✅ Standardized with HTTPException throughout
+
+**Completed in:** 2-3 hours
+
+---
+
+#### 7. **Frontend Refactoring** ✅ COMPLETE
+**Result:** RunDetails.tsx reduced from 646 → 344 lines (47% reduction)
+
+**Components Extracted:**
+- `RunHeader`: Header with run info, status, and action buttons
+- `ModelConfig`: Model configuration display panel
+- `TaskCard`: Individual task card for list view
+- `TaskInspector`: Inspector panel for graph mode
+- `InsightsPanel`: Insights sidebar panel
+- `DesignLogPanel`: Design decisions sidebar
+- `DirectorLogsModal`: Modal for viewing director logs
+- `types/run.ts`: Shared types and constants
+
+**Commits:**
+- `5447467` - Refactor frontend: Break down RunDetails.tsx into focused components
+- `8673558` - Remove build artifact dist/index.html from git tracking
 
 ---
 
 ### **MEDIUM PRIORITY**
 
-#### 6. **Additional API Improvements**
-- ✅ Standardize error responses (mostly done with HTTPException)
-- ⏳ Add pagination to `GET /api/runs`
-- ⏳ Add rate limiting (use `slowapi`)
-
-**Estimate:** 2-3 hours
-
----
-
-#### 7. **Git Merge Validation**
+#### 8. **Git Merge Validation**
 **Issue:** LLM-assisted merge might create broken code
 
 **Fix:** Add post-merge validation in `git_manager.py`:

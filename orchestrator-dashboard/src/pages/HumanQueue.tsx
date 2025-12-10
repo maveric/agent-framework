@@ -31,6 +31,14 @@ interface WaitingTask {
     task: Task;
 }
 
+interface PaginatedResponse<T> {
+    items: T[];
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
+}
+
 export function HumanQueue() {
     const [waitingTasks, setWaitingTasks] = useState<WaitingTask[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -38,7 +46,8 @@ export function HumanQueue() {
 
     const fetchWaitingTasks = async () => {
         try {
-            const runs = await apiClient<RunSummary[]>('/api/runs');
+            const response = await apiClient<PaginatedResponse<RunSummary>>('/api/runs');
+            const runs = response.items;
             const allWaiting: WaitingTask[] = [];
 
             // Filter for runs that might have waiting_human tasks
