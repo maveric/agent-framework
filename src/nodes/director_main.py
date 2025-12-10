@@ -389,9 +389,10 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                 result["task_memories"] = {"director": director_messages}
             return result
 
-    # Check if all tasks are in terminal states (complete/abandoned/waiting_human)
+    # Check if all tasks are truly terminal (complete/abandoned only)
+    # waiting_human and awaiting_qa require action - NOT terminal!
     all_terminal = all(
-        t.status in [TaskStatus.COMPLETE, TaskStatus.ABANDONED, TaskStatus.WAITING_HUMAN]
+        t.status in [TaskStatus.COMPLETE, TaskStatus.ABANDONED]
         for t in all_tasks
     )
 

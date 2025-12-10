@@ -229,8 +229,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             # ========== PHASE 5: Check completion ==========
             all_tasks = state.get("tasks", [])
 
-            # Exit conditions
-            terminal_statuses = {"complete", "abandoned", "waiting_human"}
+            # Exit conditions - ONLY truly terminal statuses
+            # waiting_human and awaiting_qa are NOT terminal - they need action!
+            terminal_statuses = {"complete", "abandoned"}
             all_terminal = all(t.get("status") in terminal_statuses for t in all_tasks) if all_tasks else False
 
             if all_terminal and not task_queue.has_work:
