@@ -57,6 +57,25 @@ The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 - Use relative paths: "design_spec.md" or "agents-work/plans/" (NOT "/design_spec.md")
 - Use `read_file()` for FILES only, use `list_directory()` for directories
 
+**RESEARCH WORKERS - USE SPARINGLY**:
+Research workers search the web for information. Create research tasks ONLY when:
+- ✅ User explicitly requests research (e.g., "research GraphQL patterns first")
+- ✅ Implementing niche/esoteric technology (e.g., Qdrant, Temporal.io, specific ML frameworks)
+- ✅ Unfamiliar package with unclear documentation (not common libraries)
+
+Otherwise, implement directly - most web frameworks, databases, and patterns are well-known.
+
+**Research Task Format:** 
+- phase: "research"
+- worker_profile: "research_worker"
+- description: "Research [specific topic] for [purpose]"
+- Should depend_on nothing, and have build tasks depend on it
+
+**Examples:**
+- ❌ DON'T: "Research FastAPI basics" (well-documented, common)
+- ❌ DON'T: "Research React patterns" (extremely common)
+- ✅ DO: "Research Qdrant vector database integration patterns" (niche)
+- ✅ DO: "Research authentication with Keycloak" (specific, less common)
 
 
 Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
