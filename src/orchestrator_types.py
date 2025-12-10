@@ -147,6 +147,7 @@ class SuggestedTask:
     Requires Director approval before entering task graph.
     """
     suggested_id: str             # Proposed ID (Director may change)
+    title: str                    # Task title (concise, commit-message style)
     component: str
     phase: TaskPhase
     description: str              # What this task should accomplish

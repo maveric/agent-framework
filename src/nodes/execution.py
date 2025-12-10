@@ -259,41 +259,53 @@ async def _execute_react_loop(
                                 parse_errors.append(error_msg)
                                 logger.error(f"  [ERROR] {error_msg}")
                                 continue
-
-                            title = st.get("title", "Untitled")
-                            desc = st.get("description", "No description")
-
-                            # Prepend title to description so it's preserved for dependency resolution
-                            # UPDATE: Appending instead of prepending to avoid confusing the LLM
-                            full_desc = f"{desc}\n\nTitle: {title}"
-
-                            # Generate a temporary ID if not provided
-                            suggested_id = f"suggested_{uuid.uuid4().hex[:8]}"
-                            
-                            # Validate phase before creating task
-                            phase_value = st.get("phase", "build")
-                            try:
-                                phase = TaskPhase(phase_value)
-                            except ValueError:
-                                valid_phases = [p.value for p in TaskPhase]
-                                error_msg = f"Subtask '{title}' (#{idx+1}): invalid phase '{phase_value}'. Valid phases: {valid_phases}"
+                            if not isinstance(subtask, dict):
+                                error_msg = f"Subtask #{st_num}: expected dict, got {type(subtask).__name__}"
                                 parse_errors.append(error_msg)
                                 logger.error(f"  [ERROR] {error_msg}")
                                 continue
 
+                            # Check required fields
+                            if "title" not in subtask or not subtask["title"]:
+                                parse_errors.append(f"Subtask #{st_num}: Missing required field 'title'")
+                                continue # Skip this subtask if title is missing
+
+                            if "description" not in subtask or not subtask["description"]:
+                                parse_errors.append(f"Subtask #{st_num}: Missing required field 'description'")
+                                continue # Skip this subtask if description is missing
+                            
+                            # Validate phase
+                            phase_value = subtask.get("phase", "build")
+                            try:
+                                phase = TaskPhase(phase_value)
+                            except ValueError:
+                                valid_phases = [p.value for p in TaskPhase]
+                                error_msg = f"Subtask '{subtask.get('title', 'Untitled')}' (#{st_num}): invalid phase '{phase_value}'. Valid phases: {valid_phases}"
+                                parse_errors.append(error_msg)
+                                logger.error(f"  [ERROR] {error_msg}")
+                                continue
+
+                            # Generate a temporary ID if not provided
+                            suggested_id = f"suggested_{uuid.uuid4().hex[:8]}"
+                            
+                            # Keep title and description separate (don't embed title in description)
+                            title = subtask.get("title", "Untitled")
+                            desc = subtask.get("description", "No description")
+
                             suggested_tasks.append(SuggestedTask(
                                 suggested_id=suggested_id,
-                                component=st.get("component", task.component),
+                                title=title,
+                                component=subtask.get("component", task.component),
                                 phase=phase,
-                                description=full_desc,
+                                description=desc,
                                 rationale=f"Suggested by planner task {task.id}",
-                                depends_on=st.get("depends_on", []),
-                                acceptance_criteria=st.get("acceptance_criteria", []),
+                                depends_on=subtask.get("depends_on", []),
+                                acceptance_criteria=subtask.get("acceptance_criteria", []),
                                 suggested_by_task=task.id,
-                                priority=st.get("priority", 5)
+                                priority=subtask.get("priority", 5)
                             ))
                         except Exception as e:
-                            error_msg = f"Subtask '{st.get('title', 'Unknown')}' (#{idx+1}): {e}"
+                            error_msg = f"Subtask '{subtask.get('title', 'Unknown')}' (#{idx+1}): {e}"
                             parse_errors.append(error_msg)
                             logger.error(f"  [ERROR] {error_msg}")
                     
