@@ -54,6 +54,41 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
 
     if len(subtasks) == 0:
         return "ERROR: No subtasks provided. You must create at least one subtask."
+    
+    # VALIDATE EACH SUBTASK BEFORE ACCEPTING
+    # This gives the LLM immediate feedback to fix issues in the same conversation
+    VALID_PHASES = ["plan", "build", "test"]
+    errors = []
+    
+    for idx, subtask in enumerate(subtasks):
+        st_num = idx + 1
+        
+        # Check if dict
+        if not isinstance(subtask, dict):
+            errors.append(f"Subtask #{st_num}: Must be a dictionary, got {type(subtask).__name__}")
+            continue
+        
+        # Check required fields
+        if "title" not in subtask or not subtask["title"]:
+            errors.append(f"Subtask #{st_num}: Missing required field 'title'")
+        
+        if "description" not in subtask or not subtask["description"]:
+            errors.append(f"Subtask #{st_num}: Missing required field 'description'")
+        
+        # Validate phase
+        phase = subtask.get("phase", "build")
+        if phase not in VALID_PHASES:
+            errors.append(
+                f"Subtask #{st_num} '{subtask.get('title', 'Untitled')}': Invalid phase '{phase}'. "
+                f"Valid phases are: {VALID_PHASES}. "
+                f"Use 'build' for frontend/backend/setup work, 'plan' for breaking down complex features, 'test' for E2E testing."
+            )
+    
+    # If validation errors, return them immediately for LLM to fix
+    if errors:
+        error_msg = f"VALIDATION ERRORS ({len(errors)} issues found):\n" + "\n".join(f"  - {err}" for err in errors)
+        error_msg += "\n\nPlease fix these errors and call create_subtasks again with valid task definitions."
+        return error_msg
 
     return f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
 
