@@ -367,9 +367,20 @@ Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
                     content = content.split("```")[1].split("```")[0].strip()
                 
                 dependency_map = json.loads(content)
-                
-                # Update tasks with new dependencies
+
+                # CRITICAL: Reset ALL incomplete tasks to PLANNED first
+                # This ensures evaluate_readiness actually checks their dependencies
+                logger.info(f"  Resetting {len(incomplete_tasks)} tasks to PLANNED status")
                 updated_task_ids = set()
+                for task in incomplete_tasks:
+                    if task.status in {TaskStatus.READY, TaskStatus.ACTIVE}:
+                        old_status = task.status
+                        task.status = TaskStatus.PLANNED
+                        task.updated_at = datetime.now()
+                        updated_task_ids.add(task.id)  # Mark as updated
+                        logger.info(f"  Task {task.id[:12]} reset: {old_status.value} → PLANNED")
+
+                # Update tasks with new dependencies
                 for task in incomplete_tasks:
                     if task.id in dependency_map:
                         new_deps = dependency_map[task.id]
@@ -378,25 +389,25 @@ Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
                             task.updated_at = datetime.now()
                             updated_task_ids.add(task.id)
                             logger.info(f"  Task {task.id[:12]} dependencies updated: {len(new_deps)} deps")
-                
-                # CRITICAL: Re-evaluate readiness for ALL incomplete tasks
-                # Tasks that were READY/ACTIVE might now be BLOCKED due to new dependencies
+
+                # Now re-evaluate readiness for ALL incomplete tasks
+                # (they're all PLANNED now, so evaluate_readiness will actually check dependencies)
                 logger.info(f"  Re-evaluating readiness after dependency changes...")
                 for task in incomplete_tasks:
                     old_status = task.status
                     new_status = evaluate_readiness(task, all_tasks)
-                    
+
                     if new_status != old_status:
                         task.status = new_status
                         task.updated_at = datetime.now()
                         updated_task_ids.add(task.id)
                         logger.info(f"  Task {task.id[:12]} status: {old_status.value} → {new_status.value}")
-                
+
                 # Add all updated tasks to updates
                 for task in incomplete_tasks:
                     if task.id in updated_task_ids:
                         updates.append(task_to_dict(task))
-                
+
                 logger.info(f"  ✅ Dependency tree rebuilt: {len(updated_task_ids)} tasks updated")
             except Exception as e:
                 logger.error(f"Director Error: Dependency rebuild failed: {e}")
