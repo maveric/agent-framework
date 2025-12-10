@@ -147,10 +147,17 @@ cd ..
 
 Create `.env` file:
 ```env
+# LLM Providers (choose one or more)
 OPENROUTER_API_KEY=your_key_here
-# Or use other providers:
 # ANTHROPIC_API_KEY=...
 # OPENAI_API_KEY=...
+
+# Search APIs (for research worker)
+TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxxxxxxx
+SERPAPI_KEY=your_serpapi_key_here
+
+# Optional: Ollama for local models
+# OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
 ### Running

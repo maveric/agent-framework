@@ -24,7 +24,7 @@ Example:
     llm = get_llm(config)
     
     # Set custom Ollama URL via environment variable:
-    # OLLAMA_BASE_URL=http://192.168.1.100:11434/v1
+    # OLLAMA_BASE_URL=http://192.168.1.100:11434  (no /v1 suffix needed)
 """
 
 from typing import Optional
@@ -116,17 +116,16 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             }
         )
     elif provider == "local":
-        # Local Ollama server (OpenAI-compatible API)
-        from langchain_openai import ChatOpenAI
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        llm = ChatOpenAI(
+        # Local Ollama server (native LangChain integration)
+        from langchain_ollama import ChatOllama
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        llm = ChatOllama(
             model=model_config.model_name,
             temperature=model_config.temperature,
-            max_tokens=model_config.max_tokens,
-            api_key="ollama",  # Ollama doesn't require an API key, but langchain needs something
             base_url=base_url,
-            max_retries=3,  # Fewer retries for local
+            num_ctx=model_config.max_tokens or 8192,  # Context window
             timeout=120.0,  # Longer timeout for local inference
+            # Optional: format="json" for structured output
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")

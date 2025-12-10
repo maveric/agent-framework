@@ -64,13 +64,21 @@ class OrchestratorConfig:
         model_name="x-ai/grok-4.1-fast",
         temperature=0.5
     ))
+
+    researcher_model: ModelConfig = field(default_factory=lambda: ModelConfig(
+        # provider="anthropic",
+        # model_name="claude-3-5-sonnet-20241022",
+        provider="local",
+        model_name="qwen3-coder:30b",
+        temperature=0.5
+    ))
     
     # Per-worker-profile model configurations (optional - falls back to worker_model)
     # These allow different models for different worker types
     # planner_model: Optional[ModelConfig] = None  # For planning tasks - can use smarter model
     coder_model: Optional[ModelConfig] = None    # For build tasks - can use faster model
     tester_model: Optional[ModelConfig] = None   # For test tasks - can use faster model
-    researcher_model: Optional[ModelConfig] = None  # For research tasks
+    # researcher_model: Optional[ModelConfig] = None  # For research tasks
     writer_model: Optional[ModelConfig] = None   # For documentation/writing tasks
     
     strategist_model: ModelConfig = field(default_factory=lambda: ModelConfig(
