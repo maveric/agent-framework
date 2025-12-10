@@ -4,17 +4,19 @@ Search Tools for Research Worker
 
 LangChain-integrated web search tools using Tavily.
 Tavily is optimized for AI agents and provides clean, structured results.
+
+Uses dedicated langchain-tavily package (not langchain-community).
 """
 
 import os
 import logging
 from typing import List, Dict, Any
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 
 logger = logging.getLogger(__name__)
 
 
-def get_tavily_search_tool(max_results: int = 5) -> TavilySearchResults:
+def get_tavily_search_tool(max_results: int = 5) -> TavilySearch:
     """
     Get configured Tavily search tool.
     
@@ -22,7 +24,7 @@ def get_tavily_search_tool(max_results: int = 5) -> TavilySearchResults:
         max_results: Maximum number of search results to return
         
     Returns:
-        Configured TavilySearchResults tool
+        Configured TavilySearch tool
         
     Raises:
         ValueError: If TAVILY_API_KEY is not set
@@ -34,10 +36,11 @@ def get_tavily_search_tool(max_results: int = 5) -> TavilySearchResults:
             "Get your key at https://app.tavily.com"
         )
     
-    return TavilySearchResults(
+    return TavilySearch(
         max_results=max_results,
-        api_key=api_key,
+        topic="general",
         # search_depth="advanced",  # Optional: "basic" or "advanced"
+        # include_answer=True,       # Optional: include AI answer
         # include_domains=[],        # Optional: restrict to specific domains
         # exclude_domains=[],        # Optional: exclude specific domains
     )
