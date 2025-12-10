@@ -34,7 +34,15 @@ export function Dashboard() {
 
         // Subscribe to real-time updates via WebSocket
         const unsubscribe = addMessageHandler('run_list_update', (msg) => {
-            setRuns(msg.payload as RunSummary[]);
+            // Handle both array format (WebSocket) and paginated format (future)
+            const payload = msg.payload as any;
+            if (Array.isArray(payload)) {
+                // Old format: direct array
+                setRuns(payload);
+            } else if (payload.items) {
+                // New format: paginated response
+                setRuns(payload.items);
+            }
         });
 
         return unsubscribe;
