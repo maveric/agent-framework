@@ -4,6 +4,27 @@ Agent Orchestrator — LLM Client
 Version 1.0 — November 2025
 
 Wrapper for LLM interactions with retry logic and error handling.
+
+Supported Providers:
+- anthropic: Claude models (requires ANTHROPIC_API_KEY)
+- openai: GPT models (requires OPENAI_API_KEY)
+- google: Gemini models (requires GOOGLE_API_KEY)
+- glm: Zhipu AI models (requires GLM_API_KEY)
+- openrouter: OpenRouter proxy (requires OPENROUTER_API_KEY)
+- local: Ollama local models (requires Ollama running, optional OLLAMA_BASE_URL)
+
+Example:
+    # Use Ollama locally
+    from config import ModelConfig
+    config = ModelConfig(
+        provider="local",
+        model_name="llama3.2",  # or "qwen2.5-coder:7b", etc.
+        temperature=0.7
+    )
+    llm = get_llm(config)
+    
+    # Set custom Ollama URL via environment variable:
+    # OLLAMA_BASE_URL=http://192.168.1.100:11434/v1
 """
 
 from typing import Optional
@@ -73,7 +94,8 @@ def get_llm(model_config: Optional[ModelConfig] = None):
             temperature=model_config.temperature,
             max_tokens=model_config.max_tokens,
             api_key=os.getenv("GLM_API_KEY"),
-            base_url="https://open.bigmodel.cn/api/paas/v4/",  # GLM API endpoint
+            # base_url="https://open.bigmodel.cn/api/paas/v4/",  # GLM API endpoint
+            base_url="https://api.z.ai/api/coding/paas/v4",
             max_retries=5,
             timeout=60.0,
         )
@@ -92,6 +114,19 @@ def get_llm(model_config: Optional[ModelConfig] = None):
                 "HTTP-Referer": "https://github.com/yourusername/agent-framework",  # Optional but recommended
                 "X-Title": "Agent Framework"  # Optional but recommended
             }
+        )
+    elif provider == "local":
+        # Local Ollama server (OpenAI-compatible API)
+        from langchain_openai import ChatOpenAI
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        llm = ChatOpenAI(
+            model=model_config.model_name,
+            temperature=model_config.temperature,
+            max_tokens=model_config.max_tokens,
+            api_key="ollama",  # Ollama doesn't require an API key, but langchain needs something
+            base_url=base_url,
+            max_retries=3,  # Fewer retries for local
+            timeout=120.0,  # Longer timeout for local inference
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")
