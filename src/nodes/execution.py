@@ -249,13 +249,15 @@ async def _execute_react_loop(
 
                     # Convert dicts to SuggestedTask objects
                     import uuid
+                    parse_errors = []  # Track validation errors
 
-                    for st in subtasks:
+                    for idx, st in enumerate(subtasks):
                         try:
                             # STRICT VALIDATION: Only accept proper dict format
                             if not isinstance(st, dict):
-                                logger.error(f"  [ERROR] Invalid subtask format: expected dict, got {type(st).__name__}. Subtask will be skipped.")
-                                logger.error(f"  [ERROR] LLM must call create_subtasks with a LIST of DICTS, not strings or other types.")
+                                error_msg = f"Subtask #{idx+1}: expected dict, got {type(st).__name__}"
+                                parse_errors.append(error_msg)
+                                logger.error(f"  [ERROR] {error_msg}")
                                 continue
 
                             title = st.get("title", "Untitled")
@@ -267,11 +269,22 @@ async def _execute_react_loop(
 
                             # Generate a temporary ID if not provided
                             suggested_id = f"suggested_{uuid.uuid4().hex[:8]}"
+                            
+                            # Validate phase before creating task
+                            phase_value = st.get("phase", "build")
+                            try:
+                                phase = TaskPhase(phase_value)
+                            except ValueError:
+                                valid_phases = [p.value for p in TaskPhase]
+                                error_msg = f"Subtask '{title}' (#{idx+1}): invalid phase '{phase_value}'. Valid phases: {valid_phases}"
+                                parse_errors.append(error_msg)
+                                logger.error(f"  [ERROR] {error_msg}")
+                                continue
 
                             suggested_tasks.append(SuggestedTask(
                                 suggested_id=suggested_id,
                                 component=st.get("component", task.component),
-                                phase=TaskPhase(st.get("phase", "build")),
+                                phase=phase,
                                 description=full_desc,
                                 rationale=f"Suggested by planner task {task.id}",
                                 depends_on=st.get("depends_on", []),
@@ -280,7 +293,16 @@ async def _execute_react_loop(
                                 priority=st.get("priority", 5)
                             ))
                         except Exception as e:
-                            logger.error(f"  [ERROR] Failed to parse suggested task: {e}")
+                            error_msg = f"Subtask '{st.get('title', 'Unknown')}' (#{idx+1}): {e}"
+                            parse_errors.append(error_msg)
+                            logger.error(f"  [ERROR] {error_msg}")
+                    
+                    # If we have parse errors and it's a planner task, track them for potential failure
+                    if parse_errors and task.assigned_worker_profile == "planner_worker":
+                        # Store for later check
+                        if not hasattr(task, '_parse_errors'):
+                            task._parse_errors = []
+                        task._parse_errors.extend(parse_errors)
 
 
     # Remove duplicates
@@ -351,6 +373,52 @@ async def _execute_react_loop(
                     files_modified=files_modified
                 ),
                 suggested_tasks=suggested_tasks,
+                messages=result["messages"] if "messages" in result else []
+            )
+    
+    # CRITICAL: Validation Check for PLAN tasks
+    # If planner created 0 tasks due to parse errors, fail with detailed feedback
+    if task.phase == TaskPhase.PLAN and not suggested_tasks:
+        # Check if we have parse errors from create_subtasks
+        parse_errors = getattr(task, '_parse_errors', [])
+        
+        if parse_errors:
+            logger.error(f"  [FAILURE] Plan task {task.id} failed: All subtasks had validation errors.")
+            
+            error_details = "\n".join(f"  - {err}" for err in parse_errors)
+            failure_message = (
+                f"CRITICAL FAILURE: All {len(parse_errors)} subtasks failed validation.\n\n"
+                "VALIDATION ERRORS:\n"
+                f"{error_details}\n\n"
+                "COMMON MISTAKES:\n"
+                "- Using invalid 'phase' values like 'setup', 'backend', 'frontend', 'integration'\n"
+                "- Valid phase values are: 'plan', 'build', 'test'\n"
+                "- 'plan' = planning/design tasks that create more subtasks\n"
+                "- 'build' = coding/implementation tasks that write actual code\n"
+                "- 'test' = testing tasks that run tests and verify functionality\n\n"
+                "ACTION REQUIRED ON RETRY:\n"
+                "1. Use ONLY valid phase values: 'plan', 'build', or 'test'\n"
+                "2. For frontend/backend work, use phase='build' (not 'frontend' or 'backend')\n"
+                "3. For setup/initialization work, use phase='build' (not 'setup')\n"
+                "4. For integration work, use phase='build' or 'test' (not 'integration')\n"
+                "5. Ensure each subtask dict has required fields: title, description, phase, component"
+            )
+            
+            return WorkerResult(
+                status="failed",
+                result_path=result_path,
+                aar=AAR(
+                    summary=failure_message,
+                    approach="ReAct agent execution - failed due to invalid subtask phases",
+                    challenges=[
+                        f"All {len(parse_errors)} subtasks failed validation",
+                        "Invalid 'phase' values used in subtask definitions",
+                        "Must use only: 'plan', 'build', or 'test'"
+                    ],
+                    decisions_made=["Marked task as FAILED to trigger retry with validation guidance"],
+                    files_modified=files_modified
+                ),
+                suggested_tasks=[],
                 messages=result["messages"] if "messages" in result else []
             )
 
