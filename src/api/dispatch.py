@@ -17,7 +17,8 @@ from config import OrchestratorConfig
 from git_manager import WorktreeManager, initialize_git_repo
 
 # Import global state
-from api.state import runs_index, run_states, manager, get_orchestrator_graph
+import api.state
+from api.state import runs_index, run_states, get_orchestrator_graph
 
 logger = logging.getLogger(__name__)
 
@@ -347,14 +348,14 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             except Exception as e2:
                 logger.error(f"Failed to save error checkpoint: {e2}")
 
-            await manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+            await api_state.manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
 
     finally:
         # Cancel any remaining workers
         await task_queue.cancel_all()
 
         # Final broadcast
-        await manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
+        await api_state.manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
         logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
 
 
@@ -369,7 +370,7 @@ async def broadcast_state_update(run_id: str, state: dict):
         for task_id, messages in raw_memories.items():
             task_memories[task_id] = serialize_messages(messages)
 
-        await manager.broadcast_to_run(run_id, {
+        await api_state.manager.broadcast_to_run(run_id, {
             "type": "state_update",
             "payload": {
                 "tasks": serialized_tasks,
