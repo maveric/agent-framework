@@ -78,10 +78,12 @@ export function RunDetails() {
                     return {
                         ...prev,
                         status: message.payload.status || prev.status,
-                        tasks: message.payload.tasks || prev.tasks,
-                        task_counts: message.payload.task_counts || prev.task_counts,
-                        insights: message.payload.insights || prev.insights,
-                        design_log: message.payload.design_log || prev.design_log,
+                        // CRITICAL: Use explicit undefined check, not ||
+                        // Empty array [] is truthy and would clear the graph!
+                        tasks: message.payload.tasks !== undefined ? message.payload.tasks : prev.tasks,
+                        task_counts: message.payload.task_counts !== undefined ? message.payload.task_counts : prev.task_counts,
+                        insights: message.payload.insights !== undefined ? message.payload.insights : prev.insights,
+                        design_log: message.payload.design_log !== undefined ? message.payload.design_log : prev.design_log,
                         task_memories: message.payload.task_memories
                             ? { ...prev.task_memories, ...message.payload.task_memories }
                             : prev.task_memories
