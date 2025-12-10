@@ -355,7 +355,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         await task_queue.cancel_all()
 
         # Final broadcast
-        await api_state.manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
+        await manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
         logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
 
 
