@@ -108,22 +108,22 @@ class TaskCompletionQueue:
         """Check if a specific task is currently running."""
         return task_id in self._running
     
-    async def wait_for_any(self, timeout: float = 0.5) -> List[CompletedTask]:
+    async def wait_for_any(self, timeout: float = 0.5) -> None:
         """
         Wait for at least one task to complete, or timeout.
         
+        CRITICAL: This does NOT collect completed tasks - that's Phase 1's job.
+        This only waits for tasks to finish, leaving collection to the caller.
+        
         Args:
             timeout: Max seconds to wait
-            
-        Returns:
-            List of completed tasks (may be empty if timeout)
         """
         if not self._running:
-            return self.collect_completed()
+            return
         
         # Wait for any task to complete or timeout
         try:
-            done, _ = await asyncio.wait(
+            await asyncio.wait(
                 list(self._running.values()),
                 timeout=timeout,
                 return_when=asyncio.FIRST_COMPLETED
@@ -131,7 +131,7 @@ class TaskCompletionQueue:
         except Exception:
             pass
         
-        return self.collect_completed()
+        # Do NOT collect here - Phase 1 is the sole collection point
     
     async def cancel_task(self, task_id: str) -> bool:
         """

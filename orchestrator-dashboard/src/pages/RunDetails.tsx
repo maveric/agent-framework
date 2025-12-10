@@ -277,9 +277,13 @@ export function RunDetails() {
 
                         {viewMode === 'graph' ? (
                             <div className="bg-slate-900 rounded-lg border border-slate-800 h-[1170px] overflow-hidden relative">
-                                <TaskGraph tasks={sortedTasks} onTaskClick={(id) => {
-                                    setSelectedTaskId(id);
-                                }} />
+                                <TaskGraph
+                                    tasks={sortedTasks}
+                                    runId={runId}
+                                    onTaskClick={(id) => {
+                                        setSelectedTaskId(id);
+                                    }}
+                                />
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

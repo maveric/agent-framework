@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import ReactFlow, {
     Node,
     Edge,
@@ -10,7 +10,8 @@ import ReactFlow, {
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
-import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, RefreshCw } from 'lucide-react';
+import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, RefreshCw, Link, X } from 'lucide-react';
+import { addTaskDependency } from '../api/client';
 
 // Reuse Task interface (or import it if we move it to a shared types file)
 interface Task {
@@ -27,6 +28,7 @@ interface Task {
 interface TaskGraphProps {
     tasks: Task[];
     onTaskClick?: (taskId: string) => void;
+    runId?: string; // Needed for API calls
 }
 
 // Helper function to extract title from description
@@ -36,8 +38,8 @@ const extractTitle = (description: string): string => {
     return titleMatch ? titleMatch[1].trim() : description.split('\n')[0];
 };
 
-// Custom Node Component
-const TaskNode = ({ data }: { data: Task }) => {
+// Custom Node Component with link mode support
+const TaskNode = ({ data }: { data: Task & { isLinkSource?: boolean; linkModeActive?: boolean } }) => {
     const statusColors = {
         complete: 'border-green-500 bg-green-900/20',
         failed: 'border-red-500 bg-red-900/20',
@@ -50,7 +52,7 @@ const TaskNode = ({ data }: { data: Task }) => {
         abandoned: 'border-slate-600 bg-slate-800/50 opacity-60',
     };
 
-    const StatusIcon = {
+    const statusIconMap: Record<string, typeof CheckCircle> = {
         complete: CheckCircle,
         failed: AlertCircle,
         active: Activity,
@@ -59,7 +61,8 @@ const TaskNode = ({ data }: { data: Task }) => {
         blocked: StopCircle,
         awaiting_qa: Clock,
         waiting_human: PauseCircle,
-    }[data.status] || PauseCircle;
+    };
+    const StatusIcon = statusIconMap[data.status] || PauseCircle;
 
     const workerColors: Record<string, string> = {
         planner_worker: 'bg-indigo-900/30 text-indigo-300 border-indigo-800/50',
@@ -71,10 +74,15 @@ const TaskNode = ({ data }: { data: Task }) => {
 
     const title = extractTitle(data.description);
     const isWaiting = data.status === 'failed' || data.status === 'waiting_human';
+    const isLinkSource = data.isLinkSource;
+    const linkModeActive = data.linkModeActive;
 
     return (
-        <div className={`w-64 p-3 rounded-lg border-2 ${statusColors[data.status] || statusColors.planned} shadow-lg transition-all hover:shadow-xl ${isWaiting ? '!border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow' : ''
-            }`}>
+        <div className={`w-64 p-3 rounded-lg border-2 ${statusColors[data.status] || statusColors.planned} shadow-lg transition-all hover:shadow-xl 
+            ${isWaiting ? '!border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow' : ''}
+            ${isLinkSource ? '!border-cyan-400 !border-4 shadow-[0_0_20px_rgba(34,211,238,0.5)]' : ''}
+            ${linkModeActive && !isLinkSource ? 'cursor-crosshair' : ''}
+        `}>
             <Handle type="target" position={Position.Top} className="!bg-slate-500" />
 
             <div className="flex items-start justify-between mb-2">
@@ -115,6 +123,12 @@ const TaskNode = ({ data }: { data: Task }) => {
                 </div>
             )}
 
+            {isLinkSource && (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-cyan-500 text-white px-2 py-0.5 rounded text-[10px] font-bold">
+                    SOURCE
+                </div>
+            )}
+
             <Handle type="source" position={Position.Bottom} className="!bg-slate-500" />
         </div>
     );
@@ -124,7 +138,7 @@ const nodeTypes = {
     taskNode: TaskNode,
 };
 
-const getLayoutedElements = (tasks: Task[]) => {
+const getLayoutedElements = (tasks: Task[], linkingFrom: string | null, linkModeActive: boolean) => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
 
@@ -159,7 +173,11 @@ const getLayoutedElements = (tasks: Task[]) => {
                 x: nodeWithPosition.x - nodeWidth / 2,
                 y: nodeWithPosition.y - nodeHeight / 2,
             },
-            data: task,
+            data: {
+                ...task,
+                isLinkSource: linkingFrom === task.id,
+                linkModeActive: linkModeActive,
+            },
             style: { zIndex: 10 }, // Ensure nodes are above edges
         };
     });
@@ -189,12 +207,127 @@ const getLayoutedElements = (tasks: Task[]) => {
     return { nodes, edges };
 };
 
-export function TaskGraph({ tasks, onTaskClick }: TaskGraphProps) {
+// Confirmation Dialog Component
+function ConfirmDialog({
+    isOpen,
+    sourceTask,
+    targetTask,
+    onConfirm,
+    onCancel,
+    isSubmitting
+}: {
+    isOpen: boolean;
+    sourceTask: Task | null;
+    targetTask: Task | null;
+    onConfirm: () => void;
+    onCancel: () => void;
+    isSubmitting: boolean;
+}) {
+    if (!isOpen || !sourceTask || !targetTask) return null;
+
+    const sourceTitle = extractTitle(sourceTask.description);
+    const targetTitle = extractTitle(targetTask.description);
+
+    return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md mx-4 shadow-xl">
+                <h3 className="text-lg font-semibold text-white mb-4">Add Dependency</h3>
+                <p className="text-slate-300 mb-6">
+                    Make <span className="text-cyan-400 font-medium">"{targetTitle}"</span> depend on <span className="text-green-400 font-medium">"{sourceTitle}"</span>?
+                </p>
+                <p className="text-sm text-slate-500 mb-6">
+                    This means "{targetTitle}" will wait for "{sourceTitle}" to complete before it can start.
+                </p>
+                <div className="flex gap-3 justify-end">
+                    <button
+                        onClick={onCancel}
+                        className="px-4 py-2 text-slate-300 hover:text-white transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        disabled={isSubmitting}
+                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isSubmitting ? 'Adding...' : 'Add Dependency'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+export function TaskGraph({ tasks, onTaskClick, runId }: TaskGraphProps) {
     const [hoveredNode, setHoveredNode] = useState<string | null>(null);
     const [connectedEdges, setConnectedEdges] = useState<Set<string>>(new Set());
     const [connectedNodes, setConnectedNodes] = useState<Set<string>>(new Set());
 
-    const { nodes: initialNodes, edges: initialEdges } = useMemo(() => getLayoutedElements(tasks), [tasks]);
+    // Link mode state
+    const [linkModeActive, setLinkModeActive] = useState(false);
+    const [linkingFrom, setLinkingFrom] = useState<string | null>(null);
+    const [pendingLink, setPendingLink] = useState<{ from: string; to: string } | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Escape key handler
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && linkModeActive) {
+                setLinkModeActive(false);
+                setLinkingFrom(null);
+                setPendingLink(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [linkModeActive]);
+
+    const { nodes: initialNodes, edges: initialEdges } = useMemo(
+        () => getLayoutedElements(tasks, linkingFrom, linkModeActive),
+        [tasks, linkingFrom, linkModeActive]
+    );
+
+    const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+        if (!linkModeActive) {
+            // Normal mode - show task details
+            onTaskClick?.(node.id);
+            return;
+        }
+
+        // Link mode
+        if (!linkingFrom) {
+            // First click - set source
+            setLinkingFrom(node.id);
+        } else if (linkingFrom === node.id) {
+            // Clicked same node - deselect
+            setLinkingFrom(null);
+        } else {
+            // Second click - show confirmation
+            setPendingLink({ from: linkingFrom, to: node.id });
+        }
+    }, [linkModeActive, linkingFrom, onTaskClick]);
+
+    const handleConfirmLink = useCallback(async () => {
+        if (!pendingLink || !runId) return;
+
+        setIsSubmitting(true);
+        try {
+            await addTaskDependency(runId, pendingLink.to, pendingLink.from);
+            // Reset state
+            setPendingLink(null);
+            setLinkingFrom(null);
+            // Stay in link mode for more links
+        } catch (error) {
+            console.error('Failed to add dependency:', error);
+            alert('Failed to add dependency: ' + (error as Error).message);
+        } finally {
+            setIsSubmitting(false);
+        }
+    }, [pendingLink, runId]);
+
+    const handleCancelLink = useCallback(() => {
+        setPendingLink(null);
+    }, []);
 
     const onNodeMouseEnter = useCallback((_: React.MouseEvent, node: Node) => {
         setHoveredNode(node.id);
@@ -252,8 +385,54 @@ export function TaskGraph({ tasks, onTaskClick }: TaskGraphProps) {
         }));
     }, [initialEdges, hoveredNode, connectedEdges]);
 
+    const sourceTask = linkingFrom ? tasks.find(t => t.id === linkingFrom) || null : null;
+    const targetTask = pendingLink ? tasks.find(t => t.id === pendingLink.to) || null : null;
+
     return (
-        <div className="h-full w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
+        <div className="h-full w-full bg-slate-950 rounded-lg border border-slate-800 overflow-hidden relative">
+            {/* Toolbar */}
+            <div className="absolute top-4 left-4 z-20 flex gap-2">
+                <button
+                    onClick={() => {
+                        setLinkModeActive(!linkModeActive);
+                        if (linkModeActive) {
+                            setLinkingFrom(null);
+                            setPendingLink(null);
+                        }
+                    }}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${linkModeActive
+                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/30'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                >
+                    <Link size={16} />
+                    {linkModeActive ? 'Exit Link Mode' : 'Link Mode'}
+                </button>
+                {linkModeActive && (
+                    <button
+                        onClick={() => {
+                            setLinkModeActive(false);
+                            setLinkingFrom(null);
+                            setPendingLink(null);
+                        }}
+                        className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    >
+                        <X size={16} />
+                        Cancel
+                    </button>
+                )}
+            </div>
+
+            {/* Link mode instructions */}
+            {linkModeActive && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-slate-800/90 backdrop-blur-sm border border-slate-700 px-4 py-2 rounded-lg text-sm text-slate-300">
+                    {!linkingFrom
+                        ? '👆 Click a task to select it as the dependency source'
+                        : '👆 Click another task to make it depend on the selected task'
+                    }
+                </div>
+            )}
+
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -262,13 +441,24 @@ export function TaskGraph({ tasks, onTaskClick }: TaskGraphProps) {
                 minZoom={0.2}
                 maxZoom={2.0}
                 attributionPosition="bottom-right"
-                onNodeClick={(_, node) => onTaskClick?.(node.id)}
+                onNodeClick={handleNodeClick}
                 onNodeMouseEnter={onNodeMouseEnter}
                 onNodeMouseLeave={onNodeMouseLeave}
             >
                 <Background color="#1e293b" gap={16} />
                 <Controls className="bg-slate-800 border-slate-700 text-slate-200" />
             </ReactFlow>
+
+            {/* Confirmation Dialog */}
+            <ConfirmDialog
+                isOpen={!!pendingLink}
+                sourceTask={sourceTask}
+                targetTask={targetTask}
+                onConfirm={handleConfirmLink}
+                onCancel={handleCancelLink}
+                isSubmitting={isSubmitting}
+            />
         </div>
     );
 }
+

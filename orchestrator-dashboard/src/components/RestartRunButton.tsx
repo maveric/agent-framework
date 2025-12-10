@@ -24,7 +24,7 @@ export function RestartRunButton({ runId, status, onRestart }: RestartRunButtonP
         setIsRestarting(true);
 
         try {
-            const result = await apiClient(`/api/runs/${runId}/restart`, { method: 'POST' });
+            const result = await apiClient<{ status?: string; message?: string }>(`/api/runs/${runId}/restart`, { method: 'POST' });
             if (result.status === 'error') {
                 alert(result.message || 'Failed to restart run');
             } else {

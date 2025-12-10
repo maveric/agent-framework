@@ -304,6 +304,11 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
             # No work and no ready tasks? Check if we're stuck
             # CRITICAL: Also check if there are completed workers waiting to be collected!
             # Workers may complete between Phase 1 and here, so we must not exit if there are completions pending
+            
+            # DEBUG: Log all conditions
+            logger.debug(f"  [DEBUG EXIT CHECK] has_work={task_queue.has_work}, has_completed={task_queue.has_completed}, "
+                        f"ready_tasks={len(ready_tasks)}, tasks_requiring_qa={len(tasks_requiring_qa)}, has_pending={has_pending}")
+            
             if not task_queue.has_work and not task_queue.has_completed and not ready_tasks and not tasks_requiring_qa and not has_pending:
                 # Check for planned tasks that might become ready
                 planned = [t for t in all_tasks if t.get("status") == "planned"]
@@ -314,6 +319,14 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                                     if t.get("status") == "awaiting_qa"
                                     and t.get("assigned_worker_profile") == "planner_worker"
                                     and t.get("suggested_tasks")]
+
+                # DEBUG: Log task statuses
+                status_counts = {}
+                for t in all_tasks:
+                    s = t.get("status", "unknown")
+                    status_counts[s] = status_counts.get(s, 0) + 1
+                logger.warning(f"  [DEBUG] About to break! Task statuses: {status_counts}")
+                logger.warning(f"  [DEBUG] planned={len(planned)}, awaiting_planners={len(awaiting_planners)}")
 
                 if not planned and not awaiting_planners:
                     logger.warning(f"⚠️  No more work to do, but not all tasks complete")

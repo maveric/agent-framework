@@ -32,7 +32,7 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
     const [newPhase, setNewPhase] = useState(interruptData.phase);
     const [newWorkerProfile, setNewWorkerProfile] = useState(interruptData.assigned_worker_profile);
     const [newCriteria, setNewCriteria] = useState(interruptData.acceptance_criteria || []);
-    const [newDependencies, setNewDependencies] = useState<string[]>(interruptData.depends_on || []);
+    const [newDependencies, _setNewDependencies] = useState<string[]>(interruptData.depends_on || []);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async () => {

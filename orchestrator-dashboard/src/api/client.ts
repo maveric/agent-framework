@@ -54,3 +54,32 @@ export async function apiClient<T>(
 
     return response.json();
 }
+
+/**
+ * Add a dependency between tasks
+ * Makes taskId depend on dependsOnId
+ */
+export async function addTaskDependency(
+    runId: string,
+    taskId: string,
+    dependsOnId: string
+): Promise<{ task_id: string; depends_on: string[]; updated: boolean }> {
+    return apiClient(`/runs/${runId}/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ add_dependency: dependsOnId }),
+    });
+}
+
+/**
+ * Remove a dependency between tasks
+ */
+export async function removeTaskDependency(
+    runId: string,
+    taskId: string,
+    dependsOnId: string
+): Promise<{ task_id: string; depends_on: string[]; updated: boolean }> {
+    return apiClient(`/runs/${runId}/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ remove_dependency: dependsOnId }),
+    });
+}
