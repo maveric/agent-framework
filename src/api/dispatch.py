@@ -209,7 +209,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 wt_manager = state.get("_wt_manager")
                 if wt_manager and not state.get("mock_mode", False):
                     try:
-                        wt_manager.create_worktree(task_id)
+                        await wt_manager.create_worktree(task_id)
                     except Exception as e:
                         logger.warning(f"Failed to create worktree: {e}")
 

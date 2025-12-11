@@ -146,8 +146,9 @@ class AsyncWorktreeManager:
                 )
             except Exception as e:
                 print(f"  Warning: Failed to sync worktree with main: {e}")
-            
-            return WorktreeInfo(
+
+            # CRITICAL: Track existing worktree (bug fix - was missing!)
+            info = WorktreeInfo(
                 task_id=task_id,
                 branch_name=branch_name,
                 worktree_path=wt_path,
@@ -155,6 +156,8 @@ class AsyncWorktreeManager:
                 retry_number=retry_number,
                 previous_branch=previous_branch
             )
+            self.worktrees[task_id] = info
+            return info
         
         # Cleanup existing directory if it exists but isn't a valid worktree
         if wt_path.exists():

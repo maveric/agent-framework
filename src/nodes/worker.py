@@ -57,16 +57,12 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
 
     if wt_manager and not state.get("mock_mode", False):
         try:
-            wt_info = wt_manager.create_worktree(task_id)
+            wt_info = await wt_manager.create_worktree(task_id)
             worktree_path = wt_info.worktree_path
             logger.info(f"  Created worktree: {worktree_path}")
 
-            # IMPORTANT: Check for and recover any dirty worktree state
-            # This handles restarts/retries where previous agent left uncommitted changes
-            recovery_result = wt_manager.recover_dirty_worktree(task_id)
-            if recovery_result and recovery_result.get("had_changes"):
-                recovery_context = recovery_result.get("summary", "")
-                logger.info(f"  [RECOVERY] Found prior uncommitted work, see context below")
+            # TODO: Implement recover_dirty_worktree method for async worktree manager
+            # For now, create_worktree handles existing worktrees by syncing with main
         except Exception as e:
             logger.warning(f"  Warning: Failed to create worktree: {e}")
             worktree_path = state.get("_workspace_path")
@@ -121,7 +117,7 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                 # If our file detection misses anything, we still commit it
                 commit_msg = f"[{task_id}] {task.phase.value if hasattr(task, 'phase') else 'work'}: {result.aar.summary[:50]}"
                 # Pass None to commit_changes to stage ALL files (git add -A)
-                commit_hash = wt_manager.commit_changes(
+                commit_hash = await wt_manager.commit_changes(
                     task_id,
                     commit_msg,
                     None  # Commit all changes, not just detected files

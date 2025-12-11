@@ -81,16 +81,10 @@ def route_after_director(state: OrchestratorState):
                 t["status"] = "active"
                 t["started_at"] = datetime.now().isoformat()
                 task_updated = True
-                
-                # Create worktree for this task (if not in mock mode)
-                wt_manager = state.get("_wt_manager")
-                if wt_manager and not state.get("mock_mode", False):
-                    try:
-                        info = wt_manager.create_worktree(t["id"])
-                        print(f"Created worktree: {info.worktree_path}", flush=True)
-                    except Exception as e:
-                        print(f"Warning: Failed to create worktree: {e}", flush=True)
-                
+
+                # NOTE: Worktree creation moved to dispatch loop (async)
+                # This routing function must be sync for LangGraph compatibility
+
                 print(f"Dispatching task: {t['id']}", flush=True)
                 break
         
