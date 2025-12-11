@@ -1,0 +1,43 @@
+# Prometheus Configuration for Agent Orchestrator
+
+global:
+  scrape_interval: 15s  # Scrape metrics every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  scrape_timeout: 10s
+
+  # Attach labels to all metrics
+  external_labels:
+    monitor: 'agent-orchestrator'
+    environment: 'development'
+
+# Scrape configurations
+scrape_configs:
+  # Agent Orchestrator API
+  - job_name: 'agent-orchestrator'
+    static_configs:
+      - targets: ['host.docker.internal:8000']  # Mac/Windows Docker Desktop
+        # For Linux, use: ['172.17.0.1:8000'] or bridge network IP
+        labels:
+          service: 'orchestrator-api'
+          instance: 'local'
+
+    # Optional: Add metrics path if different from /metrics
+    metrics_path: '/metrics'
+
+    # Scrape interval for this job (overrides global)
+    scrape_interval: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Alerting rules (optional)
+# rule_files:
+#   - "alerts.yml"
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
