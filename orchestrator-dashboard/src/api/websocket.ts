@@ -16,7 +16,8 @@ export type WSMessageType =
     | 'pong'
     | 'run_list_update'
     | 'interrupted'
-    | 'task_interrupted';
+    | 'task_interrupted'
+    | 'status';
 
 
 export interface WSMessage {

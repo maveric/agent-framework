@@ -26,6 +26,8 @@ export function RunDetails() {
     const [isReplanning, setIsReplanning] = useState(false);
     const [interruptData, setInterruptData] = useState<any>(null);
     const [showInterruptModal, setShowInterruptModal] = useState(false);
+    const [statusMessage, setStatusMessage] = useState<string>('');
+    const [statusPhase, setStatusPhase] = useState<string>('');
 
     const toggleTask = (taskId: string) => {
         setExpandedTasks(prev => {
@@ -119,10 +121,22 @@ export function RunDetails() {
             }
         });
 
+        // Handle status messages (initialization progress)
+        const removeStatusHandler = addMessageHandler('status', (message) => {
+            if (message.run_id === runId) {
+                console.log('Status message received:', message.payload);
+                if (message.payload.message) {
+                    setStatusMessage(message.payload.message);
+                    setStatusPhase(message.payload.phase || '');
+                }
+            }
+        });
+
         return () => {
             removeStateUpdateHandler();
             removeInterruptHandler();
             removeTaskInterruptHandler();
+            removeStatusHandler();
             unsubscribe(runId);
         };
     }, [runId, addMessageHandler, subscribe, unsubscribe]);
@@ -299,8 +313,20 @@ export function RunDetails() {
                                     />
                                 ))}
                                 {run.tasks.length === 0 && (
-                                    <div className="text-center py-8 text-slate-500 bg-slate-800/50 rounded-lg border border-slate-700 border-dashed">
-                                        No tasks generated yet
+                                    <div className="text-center py-8 bg-slate-800/50 rounded-lg border border-slate-700 border-dashed col-span-full">
+                                        {statusMessage ? (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                                                    <span className="text-slate-300">{statusMessage}</span>
+                                                </div>
+                                                {statusPhase === 'init' && (
+                                                    <div className="text-xs text-slate-500">Setting up workspace environment...</div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div className="text-slate-500">No tasks generated yet</div>
+                                        )}
                                     </div>
                                 )}
                             </div>
