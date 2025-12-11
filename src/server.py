@@ -47,10 +47,6 @@ from api.types import CreateRunRequest, RunSummary, HumanResolution
 from api.dispatch import run_orchestrator, continuous_dispatch_loop, broadcast_state_update
 import api.state as api_state
 
-# Prometheus metrics
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from metrics import git_metrics, task_metrics, llm_metrics, dispatch_metrics
-
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("server")
@@ -254,33 +250,14 @@ async def ensure_run_in_index(run_id: str) -> bool:
 # =============================================================================
 
 # Import route modules
-from api.routes import runs_router, tasks_router, interrupts_router, ws_router
+from api.routes import runs_router, tasks_router, interrupts_router, ws_router, metrics_router
 
 # Register routers
 app.include_router(runs_router)
 app.include_router(tasks_router)
 app.include_router(interrupts_router)
 app.include_router(ws_router)
-
-# =============================================================================
-# METRICS ENDPOINT
-# =============================================================================
-
-@app.get("/metrics", include_in_schema=False)
-async def metrics():
-    """
-    Prometheus metrics endpoint.
-
-    This endpoint is scraped by Prometheus to collect metrics about:
-    - Git operations (merge duration, conflicts, etc.)
-    - Task execution (duration, retries, etc.)
-    - LLM API calls (requests, tokens, cost)
-    - Dispatch loop performance
-
-    Access via http://localhost:8000/metrics
-    """
-    from fastapi.responses import Response
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+app.include_router(metrics_router)
 
 # =============================================================================
 # BACKGROUND WORKER
