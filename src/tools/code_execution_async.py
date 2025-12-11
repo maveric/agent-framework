@@ -197,7 +197,3 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
         
     except Exception as e:
         return f"Error executing command: {str(e)}"
-
-
-# Keep sync versions available for backwards compatibility
-from .code_execution import run_python, run_shell
