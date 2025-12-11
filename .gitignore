@@ -30,3 +30,6 @@ node_modules/
 # Logs
 logs/
 error.log
+
+# Observability - generated configs
+observability/prometheus.yml

@@ -5,8 +5,10 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: agent-prometheus
+    env_file:
+      - ./observability/.env
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -24,11 +26,13 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: agent-grafana
+    env_file:
+      - ./observability/.env
     ports:
-      - "3001:3000"  # Using 3001 to avoid conflict with your frontend (3000)
+      - "${GRAFANA_PORT:-3001}:3000"  # Using 3001 to avoid conflict with your frontend (3000)
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana

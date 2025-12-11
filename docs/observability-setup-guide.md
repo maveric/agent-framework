@@ -27,7 +27,48 @@ echo "prometheus-client==0.19.0" >> requirements.txt
 pip install -r requirements.txt
 ```
 
-### Step 2: Start Prometheus + Grafana
+### Step 2: Configure for Your Environment
+
+**Choose your deployment scenario:**
+
+#### Option A: Localhost Development (Mac/Windows)
+```bash
+# Copy environment template
+cp observability/.env.example observability/.env
+
+# Leave defaults (API_HOST=localhost)
+# Run configuration script
+cd observability && ./configure.sh && cd ..
+```
+
+#### Option B: VM Deployment
+```bash
+# Copy environment template
+cp observability/.env.example observability/.env
+
+# Edit .env and set your VM's IP address
+# Example: API_HOST=192.168.1.100
+nano observability/.env
+
+# Generate prometheus.yml with your VM IP
+cd observability && ./configure.sh && cd ..
+```
+
+#### Option C: Docker Network (Advanced)
+```bash
+# Copy environment template
+cp observability/.env.example observability/.env
+
+# Edit .env and use Docker bridge IP
+# Linux: API_HOST=172.17.0.1
+# Mac/Windows: API_HOST=host.docker.internal
+nano observability/.env
+
+# Generate config
+cd observability && ./configure.sh && cd ..
+```
+
+### Step 3: Start Prometheus + Grafana
 
 ```bash
 # Start containers
@@ -41,14 +82,14 @@ docker-compose -f docker-compose.observability.yml logs -f
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3001 (admin/admin)
 
-### Step 3: Start Your API
+### Step 4: Start Your API
 
 ```bash
-# Start the orchestrator API
+# Start the orchestrator API (on your host/VM)
 python src/server.py
 ```
 
-### Step 4: Verify Metrics
+### Step 5: Verify Metrics
 
 ```bash
 # Check metrics endpoint
@@ -60,7 +101,7 @@ curl http://localhost:8000/metrics
 # ...
 ```
 
-### Step 5: View Grafana Dashboard
+### Step 6: View Grafana Dashboard
 
 1. Open http://localhost:3001
 2. Login with `admin` / `admin`
@@ -94,34 +135,70 @@ Go to Grafana and watch the dashboard come alive!
 
 ## 🔧 Configuration
 
-### Prometheus Target Configuration
+### Environment Variables
 
-If you're **not** using Docker Desktop (Mac/Windows), update the target in `observability/prometheus.yml`:
+All configuration is managed through `observability/.env`:
 
-```yaml
-# For Linux (find Docker bridge IP)
-scrape_configs:
-  - job_name: 'agent-orchestrator'
-    static_configs:
-      - targets: ['172.17.0.1:8000']  # Docker bridge IP
+```bash
+# API Server Configuration - WHERE Prometheus should scrape from
+API_HOST=localhost          # Change to VM IP for VM deployments
+API_PORT=8000
+
+# Grafana Configuration
+GRAFANA_PORT=3001
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin
+
+# Prometheus Configuration
+PROMETHEUS_PORT=9090
+PROMETHEUS_SCRAPE_INTERVAL=15s
 ```
 
-**Find your bridge IP:**
+**After changing .env, regenerate the Prometheus config:**
 ```bash
-# Linux
-docker network inspect bridge | grep Gateway
+cd observability
+./configure.sh
+docker-compose -f ../docker-compose.observability.yml restart prometheus
+cd ..
+```
 
-# Or add to same network
-docker-compose -f docker-compose.observability.yml down
-# Edit docker-compose.observability.yml to use host network mode
+### Common Configuration Scenarios
+
+#### Localhost (Default)
+```bash
+API_HOST=localhost
+API_PORT=8000
+```
+
+#### VM Deployment
+```bash
+API_HOST=192.168.1.100  # Your VM's IP
+API_PORT=8000
+```
+
+#### Docker Bridge Network (Linux)
+```bash
+API_HOST=172.17.0.1     # Find with: docker network inspect bridge | grep Gateway
+API_PORT=8000
+```
+
+#### Docker Desktop (Mac/Windows)
+```bash
+API_HOST=host.docker.internal
+API_PORT=8000
 ```
 
 ### Change Scrape Interval
 
-```yaml
-# observability/prometheus.yml
-global:
-  scrape_interval: 5s  # More frequent (default: 15s)
+Edit `observability/.env`:
+```bash
+PROMETHEUS_SCRAPE_INTERVAL=5s  # More frequent (default: 15s)
+```
+
+Then regenerate config:
+```bash
+cd observability && ./configure.sh && cd ..
+docker-compose -f docker-compose.observability.yml restart prometheus
 ```
 
 ---
@@ -319,7 +396,84 @@ Title: "Worker Success Rate (%)"
 
 ## 🐛 Troubleshooting
 
-### Issue: Prometheus can't scrape metrics
+### Issue: VM Deployment - Prometheus can't reach API
+
+**Symptoms**: Dashboard shows "No data", Prometheus targets show DOWN
+
+**This is the most common issue when running Docker in a VM!**
+
+**Diagnosis**:
+1. Check Prometheus targets: http://localhost:9090/targets
+2. Look for `agent-orchestrator` - it should show state "UP"
+3. If DOWN, click "show more" to see the error
+
+**Fixes**:
+
+#### Step 1: Verify API is accessible from your host
+```bash
+# From your host machine (not in Docker), test the API
+curl http://<YOUR_VM_IP>:8000/metrics
+
+# Example: curl http://192.168.1.100:8000/metrics
+# Should return Prometheus metrics, not connection refused
+```
+
+#### Step 2: Update .env with correct IP
+```bash
+# Edit observability/.env
+nano observability/.env
+
+# Set API_HOST to your VM's IP address
+# NOT localhost, NOT 127.0.0.1
+API_HOST=192.168.1.100  # Your actual VM IP
+API_PORT=8000
+```
+
+#### Step 3: Find your VM IP if unknown
+```bash
+# On Linux VM:
+hostname -I | awk '{print $1}'
+
+# Or:
+ip addr show | grep "inet " | grep -v 127.0.0.1
+
+# On Mac VM (Parallels/VMware):
+# Check VM network settings → Shared/Bridged IP
+```
+
+#### Step 4: Regenerate Prometheus config
+```bash
+cd observability
+./configure.sh
+cd ..
+```
+
+#### Step 5: Restart Prometheus
+```bash
+docker-compose -f docker-compose.observability.yml restart prometheus
+
+# Check logs
+docker-compose -f docker-compose.observability.yml logs prometheus
+```
+
+#### Step 6: Verify target is UP
+- Visit http://localhost:9090/targets
+- `agent-orchestrator` should now show UP with green checkmark
+
+**Still not working?**
+
+Check if your VM firewall is blocking port 8000:
+```bash
+# On Linux VM, allow port 8000
+sudo ufw allow 8000
+
+# Or disable firewall temporarily for testing
+sudo ufw disable
+```
+
+---
+
+### Issue: Prometheus can't scrape metrics (localhost)
 
 **Symptoms**: Dashboard shows "No data"
 
@@ -332,7 +486,10 @@ Title: "Worker Success Rate (%)"
    # Mac/Windows: use host.docker.internal
    # Linux: use docker network inspect bridge | grep Gateway
    ```
-4. Update `observability/prometheus.yml` with correct IP
+4. Update `observability/.env` with correct IP and regenerate:
+   ```bash
+   cd observability && ./configure.sh && cd ..
+   ```
 5. Restart: `docker-compose -f docker-compose.observability.yml restart prometheus`
 
 ### Issue: Grafana dashboard is empty
