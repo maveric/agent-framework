@@ -2,38 +2,48 @@
 Worker utility functions.
 """
 
+import asyncio
 from orchestrator_types import Task, WorkerResult, AAR
 
 
-def _detect_modified_files_via_git(worktree_path) -> list[str]:
+async def _detect_modified_files_via_git(worktree_path) -> list[str]:
     """
-    Use git to detect actual file changes in the worktree.
+    Use git to detect actual file changes in the worktree (async).
     More reliable than parsing tool calls - catches all changes including deletions.
 
     Returns:
         List of modified file paths (relative to worktree root)
     """
-    import subprocess
     from pathlib import Path
 
     files_modified = []
 
     try:
         # Get list of modified, added, and deleted files using git status
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            capture_output=True,
-            text=True,
-            timeout=5
+        process = await asyncio.create_subprocess_exec(
+            "git", "status", "--porcelain",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(worktree_path)
         )
 
-        if result.returncode == 0:
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5.0)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            print(f"  [GIT-ERROR] git status timed out", flush=True)
+            return files_modified
+
+        stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
+        stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+        if process.returncode == 0:
             # Parse git status output
             # Format: XY filename (or XY  filename with varying whitespace)
             # X = status in index, Y = status in worktree
             # M = modified, A = added, D = deleted, R = renamed, etc.
-            for line in result.stdout.strip().split('\n'):
+            for line in stdout_str.strip().split('\n'):
                 if line and len(line) >= 4:  # At least "XY f" where f is a filename
                     # Use split to handle variable whitespace between status and filename
                     # The first 2 chars are status, rest is filename with possible leading space
@@ -53,7 +63,7 @@ def _detect_modified_files_via_git(worktree_path) -> list[str]:
 
             print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
         else:
-            print(f"  [GIT-WARNING] git status failed: {result.stderr}", flush=True)
+            print(f"  [GIT-WARNING] git status failed: {stderr_str}", flush=True)
 
     except Exception as e:
         print(f"  [GIT-ERROR] Failed to detect file changes via git: {e}", flush=True)

@@ -182,7 +182,7 @@ async def _execute_react_loop(
     # PRIMARY: Use git to detect actual file changes in the worktree
     worktree_path = state.get("worktree_path")
     if worktree_path:
-        files_modified = _detect_modified_files_via_git(worktree_path)
+        files_modified = await _detect_modified_files_via_git(worktree_path)
 
     # FALLBACK: If git detection failed or found nothing, parse tool calls
     # This also handles the case where worktree_path is not set

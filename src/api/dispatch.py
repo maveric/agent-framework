@@ -6,7 +6,6 @@ Continuous task dispatch loop and orchestrator execution management.
 
 import asyncio
 import logging
-import subprocess
 import platform
 from datetime import datetime
 from pathlib import Path
@@ -459,53 +458,74 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
         if not venv_path.exists():
             logger.info(f"Creating shared venv at {venv_path}...")
             try:
-                subprocess.run(
-                    ["python", "-m", "venv", str(venv_path)],
-                    cwd=str(workspace_path),
-                    check=True,
-                    capture_output=True,
-                    timeout=120  # 2 minute timeout
+                # Create venv asynchronously
+                process = await asyncio.create_subprocess_exec(
+                    "python", "-m", "venv", str(venv_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(workspace_path)
                 )
+                try:
+                    await asyncio.wait_for(process.communicate(), timeout=120.0)
+                    if process.returncode != 0:
+                        raise Exception("Venv creation failed")
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                    raise Exception("Venv creation timed out")
+
                 logger.info(f"✅ Shared venv created at {venv_path}")
 
                 # Install basic packages (requests for test harness pattern)
                 pip_exe = venv_path / "Scripts" / "pip.exe" if platform.system() == "Windows" else venv_path / "bin" / "pip"
                 if pip_exe.exists():
-                    subprocess.run(
-                        [str(pip_exe), "install", "requests"],
-                        cwd=str(workspace_path),
-                        capture_output=True,
-                        timeout=120
+                    # Install requests
+                    process = await asyncio.create_subprocess_exec(
+                        str(pip_exe), "install", "requests",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=str(workspace_path)
                     )
+                    try:
+                        await asyncio.wait_for(process.communicate(), timeout=120.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await process.wait()
 
                     logger.info(f"✅ Installed 'requests' in shared venv")
 
                     # Install nodeenv and set up Node.js in the venv
                     logger.info(f"Installing nodeenv for npm support...")
-                    subprocess.run(
-                        [str(pip_exe), "install", "nodeenv"],
-                        cwd=str(workspace_path),
-                        capture_output=True,
-                        timeout=120
+                    process = await asyncio.create_subprocess_exec(
+                        str(pip_exe), "install", "nodeenv",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=str(workspace_path)
                     )
+                    try:
+                        await asyncio.wait_for(process.communicate(), timeout=120.0)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await process.wait()
 
                     # Add Node.js to the venv using nodeenv -p (prebuilt binaries)
                     python_exe = venv_path / "Scripts" / "python.exe" if platform.system() == "Windows" else venv_path / "bin" / "python"
                     try:
-                        subprocess.run(
-                            [str(python_exe), "-m", "nodeenv", "-p", "--prebuilt"],
-                            cwd=str(workspace_path),
-                            capture_output=True,
-                            timeout=300  # 5 minute timeout for node download
+                        process = await asyncio.create_subprocess_exec(
+                            str(python_exe), "-m", "nodeenv", "-p", "--prebuilt",
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=str(workspace_path)
                         )
+                        await asyncio.wait_for(process.communicate(), timeout=300.0)
                         logger.info(f"✅ Installed Node.js/npm in shared venv via nodeenv")
-                    except subprocess.TimeoutExpired:
+                    except asyncio.TimeoutError:
                         logger.warning(f"nodeenv installation timed out - agents may need npm globally")
                     except Exception as e:
                         logger.warning(f"nodeenv installation failed: {e} - agents may need npm globally")
-            except subprocess.TimeoutExpired:
+            except asyncio.TimeoutError:
                 logger.warning(f"Venv creation timed out - agents may need to create manually")
-            except subprocess.CalledProcessError as e:
+            except Exception as e:
                 logger.warning(f"Venv creation failed: {e} - agents may need to create manually")
         else:
             logger.info(f"Shared venv already exists at {venv_path}")
