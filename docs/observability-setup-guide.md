@@ -93,7 +93,7 @@ python src/server.py
 
 ```bash
 # Check metrics endpoint
-curl http://localhost:8000/metrics
+curl http://localhost:8085/metrics
 
 # You should see output like:
 # # HELP git_merge_duration_seconds ...
@@ -114,7 +114,7 @@ curl http://localhost:8000/metrics
 
 ```bash
 # Create a test run
-curl -X POST http://localhost:8000/runs \
+curl -X POST http://localhost:8085/runs \
   -H "Content-Type: application/json" \
   -d '{
     "objective": "Create a simple hello world function",
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8000/runs \
   }'
 
 # Watch metrics update in real-time
-watch -n 1 'curl -s http://localhost:8000/metrics | grep -E "(git_merge|task_execution)"'
+watch -n 1 'curl -s http://localhost:8085/metrics | grep -E "(git_merge|task_execution)"'
 ```
 
 Go to Grafana and watch the dashboard come alive!
@@ -142,7 +142,7 @@ All configuration is managed through `observability/.env`:
 ```bash
 # API Server Configuration - WHERE Prometheus should scrape from
 API_HOST=localhost          # Change to VM IP for VM deployments
-API_PORT=8000
+API_PORT=8085               # Default server port (matches src/server.py)
 
 # Grafana Configuration
 GRAFANA_PORT=3001
@@ -167,25 +167,25 @@ cd ..
 #### Localhost (Default)
 ```bash
 API_HOST=localhost
-API_PORT=8000
+API_PORT=8085
 ```
 
 #### VM Deployment
 ```bash
 API_HOST=192.168.1.100  # Your VM's IP
-API_PORT=8000
+API_PORT=8085
 ```
 
 #### Docker Bridge Network (Linux)
 ```bash
 API_HOST=172.17.0.1     # Find with: docker network inspect bridge | grep Gateway
-API_PORT=8000
+API_PORT=8085
 ```
 
 #### Docker Desktop (Mac/Windows)
 ```bash
 API_HOST=host.docker.internal
-API_PORT=8000
+API_PORT=8085
 ```
 
 ### Change Scrape Interval
@@ -412,9 +412,9 @@ Title: "Worker Success Rate (%)"
 #### Step 1: Verify API is accessible from your host
 ```bash
 # From your host machine (not in Docker), test the API
-curl http://<YOUR_VM_IP>:8000/metrics
+curl http://<YOUR_VM_IP>:8085/metrics
 
-# Example: curl http://192.168.1.100:8000/metrics
+# Example: curl http://192.168.1.100:8085/metrics
 # Should return Prometheus metrics, not connection refused
 ```
 
@@ -426,7 +426,7 @@ nano observability/.env
 # Set API_HOST to your VM's IP address
 # NOT localhost, NOT 127.0.0.1
 API_HOST=192.168.1.100  # Your actual VM IP
-API_PORT=8000
+API_PORT=8085
 ```
 
 #### Step 3: Find your VM IP if unknown
@@ -462,10 +462,10 @@ docker-compose -f docker-compose.observability.yml logs prometheus
 
 **Still not working?**
 
-Check if your VM firewall is blocking port 8000:
+Check if your VM firewall is blocking port 8085:
 ```bash
-# On Linux VM, allow port 8000
-sudo ufw allow 8000
+# On Linux VM, allow port 8085
+sudo ufw allow 8085
 
 # Or disable firewall temporarily for testing
 sudo ufw disable
@@ -478,7 +478,7 @@ sudo ufw disable
 **Symptoms**: Dashboard shows "No data"
 
 **Fixes**:
-1. Check API is running: `curl http://localhost:8000/metrics`
+1. Check API is running: `curl http://localhost:8085/metrics`
 2. Check Prometheus targets: http://localhost:9090/targets
    - Should show `agent-orchestrator` as UP
 3. If DOWN, check target IP:
