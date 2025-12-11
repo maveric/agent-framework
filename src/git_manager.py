@@ -7,6 +7,7 @@ Manages git worktrees for isolated task execution.
 Based on Spec/git_filesystem_spec.py.
 """
 
+import asyncio
 import logging
 import subprocess
 from dataclasses import dataclass, field
@@ -171,7 +172,7 @@ Output the resolved file content:"""
 class WorktreeManager:
     """
     Manages git worktrees for task isolation.
-    
+
     Each task gets its own worktree branching from main.
     Workers commit to their task branch, then merge on QA approval.
     """
@@ -179,6 +180,9 @@ class WorktreeManager:
     worktree_base: Path
     main_branch: str = "main"
     worktrees: Dict[str, WorktreeInfo] = field(default_factory=dict)
+
+    # Merge lock to prevent concurrent merge race conditions (Strategy 1A)
+    _merge_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     
     def _task_branch_name(self, task_id: str) -> str:
         """Generate branch name for a task."""
@@ -439,117 +443,42 @@ class WorktreeManager:
     async def merge_to_main(self, task_id: str) -> MergeResult:
         """
         Merge a task's branch to main (async for LLM conflict resolution).
-        
+
+        Uses an asyncio lock to ensure only one merge happens at a time,
+        preventing race conditions and data loss (Git Strategy 1A).
+
         Returns:
             MergeResult indicating success or conflict
         """
-        info = self.worktrees.get(task_id)
-        if not info:
-            info = self._restore_worktree_info(task_id)
-            
-        if not info:
-            raise ValueError(f"No worktree for task: {task_id}")
-        
-        # CRITICAL: Check for uncommitted changes in the worktree
-        # This indicates the worker didn't properly complete (crash, bug, etc.)
-        # NOTE: We only care about modified/staged files, NOT untracked files (??)
-        status_check = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=info.worktree_path,
-            capture_output=True,
-            text=True
-        )
-        
-        # Filter out untracked files (??) - only block on actual uncommitted changes
-        uncommitted_lines = [
-            line for line in status_check.stdout.strip().split('\n')
-            if line and not line.startswith('??')
-        ]
-        
-        if uncommitted_lines:
-            error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n" + "\n".join(uncommitted_lines)
-            logger.error(f"  ❌ MERGE BLOCKED: {error_msg}")
-            return MergeResult(
-                success=False,
-                task_id=task_id,
-                conflict=False,
-                error_message=error_msg
-            )
-        
-        # Switch to main
-        # First abort any in-progress merge that might be blocking checkout
-        subprocess.run(
-            ["git", "merge", "--abort"],
-            cwd=self.repo_path,
-            capture_output=True  # Ignore if no merge in progress
-        )
-        
-        try:
-            subprocess.run(
-                ["git", "checkout", self.main_branch],
-                cwd=self.repo_path,
-                check=True,
-                capture_output=True
-            )
-        except subprocess.CalledProcessError as e:
-            # Checkout failed - repo likely has uncommitted changes
-            error_msg = f"Cannot checkout {self.main_branch}: {e.stderr.decode() if e.stderr else str(e)}"
-            logger.error(f"  ❌ {error_msg}")
-            return MergeResult(
-                success=False,
-                task_id=task_id,
-                conflict=False,
-                error_message=error_msg
-            )
-        
-        # Check for uncommitted changes in main repo (should never happen with worktrees)
-        # NOTE: We only care about modified/staged files, NOT untracked files (??)
-        # Untracked directories like .llm_logs/, .worktrees/, logs/ are fine
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=self.repo_path,
-            capture_output=True,
-            text=True
-        )
-        
-        # Filter out untracked files (??) - only block on actual changes
-        uncommitted_lines = [
-            line for line in status_result.stdout.strip().split('\n')
-            if line and not line.startswith('??')
-        ]
-        
-        if uncommitted_lines:
-            # RECOVERY: Auto-commit dirty main repo changes as WIP
-            # This handles restarts/crashes where previous agent left uncommitted work
-            logger.warning(f"  ⚠️ Main repo has uncommitted changes ({len(uncommitted_lines)} items), attempting recovery...")
-            
-            try:
-                # Stage all changes
-                subprocess.run(
-                    ["git", "add", "-A"],
-                    cwd=self.repo_path,
-                    check=True,
-                    capture_output=True
-                )
-                
-                # Commit with WIP message
-                commit_result = subprocess.run(
-                    ["git", "commit", "-m", f"WIP: Auto-recovered uncommitted changes before merge (task {task_id})"],
-                    cwd=self.repo_path,
-                    capture_output=True,
-                    text=True
-                )
+        # CRITICAL: Acquire merge lock to prevent concurrent merges
+        async with self._merge_lock:
+            logger.info(f"🔒 Acquired merge lock for task {task_id}")
 
-                if commit_result.returncode == 0:
-                    logger.info(f"  ✅ RECOVERY: Committed {len(uncommitted_lines)} uncommitted items to main as WIP")
-                    logger.info(f"     Files: {', '.join(uncommitted_lines[:5])}{'...' if len(uncommitted_lines) > 5 else ''}")
-                else:
-                    # Commit failed (maybe nothing to commit after all)
-                    logger.warning(f"  ⚠️ RECOVERY: Commit returned non-zero but continuing: {commit_result.stderr[:100]}")
-                    
-            except subprocess.CalledProcessError as e:
-                # Recovery failed - report but don't block entirely
-                error_msg = f"Uncommitted changes in main repo - recovery failed:\n" + "\n".join(uncommitted_lines)
+            info = self.worktrees.get(task_id)
+            if not info:
+                info = self._restore_worktree_info(task_id)
+
+            if not info:
+                raise ValueError(f"No worktree for task: {task_id}")
+
+            # CRITICAL: Check for uncommitted changes in the worktree
+            # This indicates the worker didn't properly complete (crash, bug, etc.)
+            # NOTE: We only care about modified/staged files, NOT untracked files (??)
+            status_check = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=info.worktree_path,
+                capture_output=True,
+                text=True
+            )
+        
+            # Filter out untracked files (??) - only block on actual uncommitted changes
+            uncommitted_lines = [
+                line for line in status_check.stdout.strip().split('\n')
+                if line and not line.startswith('??')
+            ]
+        
+            if uncommitted_lines:
+                error_msg = f"Uncommitted changes in worktree - worker may have crashed or failed to complete properly:\n" + "\n".join(uncommitted_lines)
                 logger.error(f"  ❌ MERGE BLOCKED: {error_msg}")
                 return MergeResult(
                     success=False,
@@ -558,119 +487,201 @@ class WorktreeManager:
                     error_message=error_msg
                 )
         
-        # Attempt merge
-        result = subprocess.run(
-            ["git", "merge", info.branch_name, "--no-ff", "-m",
-             f"Merge {info.branch_name} (task {task_id})"],
-            cwd=self.repo_path,
-            capture_output=True,
-            text=True
-        )
+            # Switch to main
+            # First abort any in-progress merge that might be blocking checkout
+            subprocess.run(
+                ["git", "merge", "--abort"],
+                cwd=self.repo_path,
+                capture_output=True  # Ignore if no merge in progress
+            )
         
-        if result.returncode == 0:
-            info.status = WorktreeStatus.MERGED
-            info.merged_at = datetime.now()
-            return MergeResult(success=True, task_id=task_id)
-        else:
-            # Merge conflict detected - try LLM resolution before aborting
-            logger.warning(f"  ⚠️ Merge conflict detected for {task_id}")
-            
-            # Get list of conflicted files
+            try:
+                subprocess.run(
+                    ["git", "checkout", self.main_branch],
+                    cwd=self.repo_path,
+                    check=True,
+                    capture_output=True
+                )
+            except subprocess.CalledProcessError as e:
+                # Checkout failed - repo likely has uncommitted changes
+                error_msg = f"Cannot checkout {self.main_branch}: {e.stderr.decode() if e.stderr else str(e)}"
+                logger.error(f"  ❌ {error_msg}")
+                return MergeResult(
+                    success=False,
+                    task_id=task_id,
+                    conflict=False,
+                    error_message=error_msg
+                )
+        
+            # Check for uncommitted changes in main repo (should never happen with worktrees)
+            # NOTE: We only care about modified/staged files, NOT untracked files (??)
+            # Untracked directories like .llm_logs/, .worktrees/, logs/ are fine
             status_result = subprocess.run(
-                ["git", "diff", "--name-only", "--diff-filter=U"],
+                ["git", "status", "--porcelain"],
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True
             )
-            conflicted_files = [f for f in status_result.stdout.strip().split('\n') if f]
-
-            if conflicted_files:
-                logger.info(f"  📝 Conflicted files: {conflicted_files}")
-                
-                # Fast-path: Auto-resolve test result and doc files (disposable)
-                auto_resolve_patterns = ['agents-work/test-results/', 'agents-work/plans/']
-                auto_resolved = []
-                for cf in conflicted_files[:]:  # Copy list to allow modification
-                    if any(pattern in cf for pattern in auto_resolve_patterns):
-                        # Just accept the incoming (theirs) version for these files
-                        try:
-                            subprocess.run(
-                                ["git", "checkout", "--theirs", cf],
-                                cwd=self.repo_path,
-                                check=True,
-                                capture_output=True
-                            )
-                            subprocess.run(
-                                ["git", "add", cf],
-                                cwd=self.repo_path,
-                                check=True,
-                                capture_output=True
-                            )
-                            auto_resolved.append(cf)
-                            conflicted_files.remove(cf)
-                            logger.info(f"  ✅ Auto-resolved (accept incoming): {cf}")
-                        except Exception as e:
-                            logger.warning(f"  ⚠️ Failed to auto-resolve {cf}: {e}")
-                
-                # If all conflicts are auto-resolved, we can proceed without LLM
-                if not conflicted_files:
-                    commit_result = subprocess.run(
-                        ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - auto-resolved conflicts"],
+        
+            # Filter out untracked files (??) - only block on actual changes
+            uncommitted_lines = [
+                line for line in status_result.stdout.strip().split('\n')
+                if line and not line.startswith('??')
+            ]
+        
+            if uncommitted_lines:
+                # RECOVERY: Auto-commit dirty main repo changes as WIP
+                # This handles restarts/crashes where previous agent left uncommitted work
+                logger.warning(f"  ⚠️ Main repo has uncommitted changes ({len(uncommitted_lines)} items), attempting recovery...")
+            
+                try:
+                    # Stage all changes
+                    subprocess.run(
+                        ["git", "add", "-A"],
                         cwd=self.repo_path,
-                        capture_output=True,
-                        text=True
+                        check=True,
+                        capture_output=True
                     )
-                    if commit_result.returncode == 0:
-                        logger.info(f"  ✅ All conflicts auto-resolved for {task_id}")
-                        info.status = WorktreeStatus.MERGED
-                        info.merged_at = datetime.now()
-                        return MergeResult(
-                            success=True,
-                            task_id=task_id,
-                            llm_resolved=False,
-                            conflicting_files=auto_resolved
-                        )
                 
-                # Try LLM-assisted resolution for remaining files
-                if await _llm_resolve_conflict(self.repo_path, conflicted_files):
-                    # LLM resolved the conflicts - complete the merge
+                    # Commit with WIP message
                     commit_result = subprocess.run(
-                        ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - LLM resolved conflicts"],
+                        ["git", "commit", "-m", f"WIP: Auto-recovered uncommitted changes before merge (task {task_id})"],
                         cwd=self.repo_path,
                         capture_output=True,
                         text=True
                     )
 
                     if commit_result.returncode == 0:
-                        logger.info(f"  ✅ LLM successfully resolved merge conflict for {task_id}")
-                        info.status = WorktreeStatus.MERGED
-                        info.merged_at = datetime.now()
-                        return MergeResult(
-                            success=True, 
-                            task_id=task_id, 
-                            llm_resolved=True,
-                            conflicting_files=conflicted_files
-                        )
+                        logger.info(f"  ✅ RECOVERY: Committed {len(uncommitted_lines)} uncommitted items to main as WIP")
+                        logger.info(f"     Files: {', '.join(uncommitted_lines[:5])}{'...' if len(uncommitted_lines) > 5 else ''}")
                     else:
-                        logger.error(f"  ❌ Failed to commit LLM resolution: {commit_result.stderr}")
-            
-            # LLM resolution failed or no conflicted files - abort merge
-            subprocess.run(
-                ["git", "merge", "--abort"],
+                        # Commit failed (maybe nothing to commit after all)
+                        logger.warning(f"  ⚠️ RECOVERY: Commit returned non-zero but continuing: {commit_result.stderr[:100]}")
+                    
+                except subprocess.CalledProcessError as e:
+                    # Recovery failed - report but don't block entirely
+                    error_msg = f"Uncommitted changes in main repo - recovery failed:\n" + "\n".join(uncommitted_lines)
+                    logger.error(f"  ❌ MERGE BLOCKED: {error_msg}")
+                    return MergeResult(
+                        success=False,
+                        task_id=task_id,
+                        conflict=False,
+                        error_message=error_msg
+                    )
+        
+            # Attempt merge
+            result = subprocess.run(
+                ["git", "merge", info.branch_name, "--no-ff", "-m",
+                 f"Merge {info.branch_name} (task {task_id})"],
                 cwd=self.repo_path,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
+        
+            if result.returncode == 0:
+                info.status = WorktreeStatus.MERGED
+                info.merged_at = datetime.now()
+                return MergeResult(success=True, task_id=task_id)
+            else:
+                # Merge conflict detected - try LLM resolution before aborting
+                logger.warning(f"  ⚠️ Merge conflict detected for {task_id}")
             
-            # Git can output errors to stderr OR stdout, so capture both
-            error_output = result.stderr.strip() or result.stdout.strip() or "Merge conflict (no details available)"
+                # Get list of conflicted files
+                status_result = subprocess.run(
+                    ["git", "diff", "--name-only", "--diff-filter=U"],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True
+                )
+                conflicted_files = [f for f in status_result.stdout.strip().split('\n') if f]
+
+                if conflicted_files:
+                    logger.info(f"  📝 Conflicted files: {conflicted_files}")
+                
+                    # Fast-path: Auto-resolve test result and doc files (disposable)
+                    auto_resolve_patterns = ['agents-work/test-results/', 'agents-work/plans/']
+                    auto_resolved = []
+                    for cf in conflicted_files[:]:  # Copy list to allow modification
+                        if any(pattern in cf for pattern in auto_resolve_patterns):
+                            # Just accept the incoming (theirs) version for these files
+                            try:
+                                subprocess.run(
+                                    ["git", "checkout", "--theirs", cf],
+                                    cwd=self.repo_path,
+                                    check=True,
+                                    capture_output=True
+                                )
+                                subprocess.run(
+                                    ["git", "add", cf],
+                                    cwd=self.repo_path,
+                                    check=True,
+                                    capture_output=True
+                                )
+                                auto_resolved.append(cf)
+                                conflicted_files.remove(cf)
+                                logger.info(f"  ✅ Auto-resolved (accept incoming): {cf}")
+                            except Exception as e:
+                                logger.warning(f"  ⚠️ Failed to auto-resolve {cf}: {e}")
+                
+                    # If all conflicts are auto-resolved, we can proceed without LLM
+                    if not conflicted_files:
+                        commit_result = subprocess.run(
+                            ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - auto-resolved conflicts"],
+                            cwd=self.repo_path,
+                            capture_output=True,
+                            text=True
+                        )
+                        if commit_result.returncode == 0:
+                            logger.info(f"  ✅ All conflicts auto-resolved for {task_id}")
+                            info.status = WorktreeStatus.MERGED
+                            info.merged_at = datetime.now()
+                            return MergeResult(
+                                success=True,
+                                task_id=task_id,
+                                llm_resolved=False,
+                                conflicting_files=auto_resolved
+                            )
+                
+                    # Try LLM-assisted resolution for remaining files
+                    if await _llm_resolve_conflict(self.repo_path, conflicted_files):
+                        # LLM resolved the conflicts - complete the merge
+                        commit_result = subprocess.run(
+                            ["git", "commit", "-m", f"Merge {info.branch_name} (task {task_id}) - LLM resolved conflicts"],
+                            cwd=self.repo_path,
+                            capture_output=True,
+                            text=True
+                        )
+
+                        if commit_result.returncode == 0:
+                            logger.info(f"  ✅ LLM successfully resolved merge conflict for {task_id}")
+                            info.status = WorktreeStatus.MERGED
+                            info.merged_at = datetime.now()
+                            return MergeResult(
+                                success=True, 
+                                task_id=task_id, 
+                                llm_resolved=True,
+                                conflicting_files=conflicted_files
+                            )
+                        else:
+                            logger.error(f"  ❌ Failed to commit LLM resolution: {commit_result.stderr}")
             
-            return MergeResult(
-                success=False,
-                task_id=task_id,
-                conflict=True,
-                conflicting_files=conflicted_files,
-                error_message=error_output
-            )
+                # LLM resolution failed or no conflicted files - abort merge
+                subprocess.run(
+                    ["git", "merge", "--abort"],
+                    cwd=self.repo_path,
+                    capture_output=True
+                )
+            
+                # Git can output errors to stderr OR stdout, so capture both
+                error_output = result.stderr.strip() or result.stdout.strip() or "Merge conflict (no details available)"
+            
+                return MergeResult(
+                    success=False,
+                    task_id=task_id,
+                    conflict=True,
+                    conflicting_files=conflicted_files,
+                    error_message=error_output
+                )
     
     def cleanup_worktree(self, task_id: str) -> None:
         """Remove a worktree (but keep branch)."""
