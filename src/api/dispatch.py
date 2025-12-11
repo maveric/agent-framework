@@ -457,7 +457,7 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
         })
 
         # Initialize git
-        initialize_git_repo(workspace_path)
+        await initialize_git_repo(workspace_path)
         await api_state.manager.broadcast_to_run(run_id, {
             "type": "status",
             "payload": {"message": "Git repository initialized", "phase": "init"}
