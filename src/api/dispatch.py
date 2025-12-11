@@ -450,12 +450,26 @@ async def broadcast_state_update(run_id: str, state: dict):
 async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: dict, workspace_path):
     """Core execution logic for the run."""
     try:
+        # Send initialization started message
+        await api_state.manager.broadcast_to_run(run_id, {
+            "type": "status",
+            "payload": {"message": "Initializing workspace...", "phase": "init"}
+        })
+
         # Initialize git
         initialize_git_repo(workspace_path)
+        await api_state.manager.broadcast_to_run(run_id, {
+            "type": "status",
+            "payload": {"message": "Git repository initialized", "phase": "init"}
+        })
 
         # Create SHARED venv at workspace root (all worktrees will use this)
         venv_path = workspace_path / ".venv"
         if not venv_path.exists():
+            await api_state.manager.broadcast_to_run(run_id, {
+                "type": "status",
+                "payload": {"message": "Creating Python virtual environment...", "phase": "init"}
+            })
             logger.info(f"Creating shared venv at {venv_path}...")
             try:
                 # Create venv asynchronously
@@ -475,11 +489,19 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
                     raise Exception("Venv creation timed out")
 
                 logger.info(f"✅ Shared venv created at {venv_path}")
+                await api_state.manager.broadcast_to_run(run_id, {
+                    "type": "status",
+                    "payload": {"message": "Virtual environment created", "phase": "init"}
+                })
 
                 # Install basic packages (requests for test harness pattern)
                 pip_exe = venv_path / "Scripts" / "pip.exe" if platform.system() == "Windows" else venv_path / "bin" / "pip"
                 if pip_exe.exists():
                     # Install requests
+                    await api_state.manager.broadcast_to_run(run_id, {
+                        "type": "status",
+                        "payload": {"message": "Installing Python packages (requests)...", "phase": "init"}
+                    })
                     process = await asyncio.create_subprocess_exec(
                         str(pip_exe), "install", "requests",
                         stdout=asyncio.subprocess.PIPE,
@@ -493,8 +515,16 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
                         await process.wait()
 
                     logger.info(f"✅ Installed 'requests' in shared venv")
+                    await api_state.manager.broadcast_to_run(run_id, {
+                        "type": "status",
+                        "payload": {"message": "Python packages installed", "phase": "init"}
+                    })
 
                     # Install nodeenv and set up Node.js in the venv
+                    await api_state.manager.broadcast_to_run(run_id, {
+                        "type": "status",
+                        "payload": {"message": "Installing Node.js environment (this may take a minute)...", "phase": "init"}
+                    })
                     logger.info(f"Installing nodeenv for npm support...")
                     process = await asyncio.create_subprocess_exec(
                         str(pip_exe), "install", "nodeenv",
@@ -519,16 +549,32 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
                         )
                         await asyncio.wait_for(process.communicate(), timeout=300.0)
                         logger.info(f"✅ Installed Node.js/npm in shared venv via nodeenv")
+                        await api_state.manager.broadcast_to_run(run_id, {
+                            "type": "status",
+                            "payload": {"message": "Node.js environment ready", "phase": "init"}
+                        })
                     except asyncio.TimeoutError:
                         logger.warning(f"nodeenv installation timed out - agents may need npm globally")
+                        await api_state.manager.broadcast_to_run(run_id, {
+                            "type": "status",
+                            "payload": {"message": "Node.js setup timed out (agents will use global npm)", "phase": "init"}
+                        })
                     except Exception as e:
                         logger.warning(f"nodeenv installation failed: {e} - agents may need npm globally")
+                        await api_state.manager.broadcast_to_run(run_id, {
+                            "type": "status",
+                            "payload": {"message": "Node.js setup failed (agents will use global npm)", "phase": "init"}
+                        })
             except asyncio.TimeoutError:
                 logger.warning(f"Venv creation timed out - agents may need to create manually")
             except Exception as e:
                 logger.warning(f"Venv creation failed: {e} - agents may need to create manually")
         else:
             logger.info(f"Shared venv already exists at {venv_path}")
+            await api_state.manager.broadcast_to_run(run_id, {
+                "type": "status",
+                "payload": {"message": "Using existing virtual environment", "phase": "init"}
+            })
 
         # Create config
         config = OrchestratorConfig(mock_mode=False)
@@ -571,6 +617,12 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
                 "mock_mode": False
             }
         }
+
+        # Send initialization complete message
+        await api_state.manager.broadcast_to_run(run_id, {
+            "type": "status",
+            "payload": {"message": "Initialization complete - starting orchestrator...", "phase": "ready"}
+        })
 
         # Use continuous dispatch (non-blocking worker execution)
         # instead of LangGraph's blocking superstep model
