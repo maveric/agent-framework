@@ -34,13 +34,13 @@ docker-compose -f docker-compose.observability.yml up -d
 ### For Localhost Development
 ```bash
 API_HOST=localhost
-API_PORT=8000
+API_PORT=8085
 ```
 
 ### For VM Deployment
 ```bash
 API_HOST=192.168.1.100  # Your VM's IP address
-API_PORT=8000
+API_PORT=8085
 ```
 
 Find your VM IP:
@@ -53,7 +53,7 @@ hostname -I | awk '{print $1}'
 ### Prometheus shows "DOWN" target
 
 1. Check Prometheus targets: http://localhost:9090/targets
-2. Verify API is accessible: `curl http://<API_HOST>:8000/metrics`
+2. Verify API is accessible: `curl http://<API_HOST>:8085/metrics`
 3. Update `.env` with correct `API_HOST`
 4. Regenerate: `./configure.sh`
 5. Restart: `docker-compose -f ../docker-compose.observability.yml restart prometheus`
@@ -61,7 +61,7 @@ hostname -I | awk '{print $1}'
 ### VM-specific issues
 
 - Make sure API is running on the VM
-- Check firewall isn't blocking port 8000: `sudo ufw allow 8000`
+- Check firewall isn't blocking port 8085: `sudo ufw allow 8085`
 - Use VM's IP address, not `localhost` in .env
 
 ## Files
