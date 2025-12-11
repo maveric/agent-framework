@@ -38,7 +38,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from langgraph_definition import create_orchestrator
 from config import OrchestratorConfig
 from state import OrchestratorState, tasks_reducer, task_memories_reducer, insights_reducer, design_log_reducer
-from git_manager import WorktreeManager, initialize_git_repo
+from git_manager import AsyncWorktreeManager as WorktreeManager
+from git_manager import AsyncWorktreeManager as WorktreeManager, initialize_git_repo_async as initialize_git_repo
 from orchestrator_types import worker_result_to_dict, task_to_dict, TaskStatus, serialize_messages
 
 # Import API modules

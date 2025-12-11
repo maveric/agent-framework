@@ -187,7 +187,3 @@ async def git_log_async(count: int = 10) -> str:
         
     except Exception as e:
         return f"Error getting log: {str(e)}"
-
-
-# Keep sync versions available for backwards compatibility
-from .git import git_commit, git_status, git_diff, git_add, git_log

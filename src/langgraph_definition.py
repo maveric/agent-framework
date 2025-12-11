@@ -97,7 +97,8 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
     import uuid
     from datetime import datetime
     from pathlib import Path
-    from git_manager import WorktreeManager, initialize_git_repo
+    from git_manager import AsyncWorktreeManager as WorktreeManager
+    from git_manager import AsyncWorktreeManager as WorktreeManager, initialize_git_repo_async as initialize_git_repo
     
     orchestrator = create_orchestrator(config, checkpointer=checkpointer)
     
