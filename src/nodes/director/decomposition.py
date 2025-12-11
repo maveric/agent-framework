@@ -265,7 +265,7 @@ Be specific enough that workers can implement without ambiguity."""),
             wt_manager = state.get("_wt_manager")
             if wt_manager and not state.get("mock_mode", False):
                 try:
-                    wt_manager.commit_to_main(
+                    await wt_manager.commit_to_main(
                         message="Director: Add design specification",
                         files=["design_spec.md"]
                     )

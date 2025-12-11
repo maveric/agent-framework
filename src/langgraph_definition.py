@@ -6,6 +6,7 @@ Version 1.0 — November 2025
 Assembles all nodes into a StateGraph.
 """
 
+import logging
 from langgraph.graph import StateGraph, END
 try:
     from langgraph.checkpoint.sqlite import SqliteSaver
@@ -24,6 +25,8 @@ from nodes import (
     route_after_worker,
 )
 from config import OrchestratorConfig
+
+logger = logging.getLogger(__name__)
 
 
 def create_orchestrator(
@@ -73,7 +76,7 @@ def create_orchestrator(
             checkpointer = SqliteSaver.from_conn_string(":memory:")
         else:
             if checkpoint_mode == "sqlite":
-                print("Warning: SqliteSaver not available, falling back to MemorySaver")
+                logger.warning("SqliteSaver not available, falling back to MemorySaver")
             checkpointer = MemorySaver()
     
     # Compile
@@ -106,10 +109,10 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
     workspace_path = Path(workspace).resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
     
-    print(f"Initializing workspace: {workspace_path}")
-    
+    logger.info(f"Initializing workspace: {workspace_path}")
+
     # Initialize git repository in workspace
-    initialize_git_repo(workspace_path)
+    await initialize_git_repo(workspace_path)
     
     # Create worktree manager for workspace
     worktree_base = workspace_path / ".worktrees"
@@ -143,7 +146,7 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
     
     # Generate unique thread ID for this run
     thread_id = str(uuid.uuid4())
-    print(f"Starting run with thread_id: {thread_id}", flush=True)
+    logger.info(f"Starting run with thread_id: {thread_id}")
     
     # Run graph with thread_id for checkpointing (async)
     run_config = {
