@@ -7,11 +7,14 @@ Async version of git worktree manager using asyncio subprocess.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Type definitions
@@ -145,7 +148,7 @@ class AsyncWorktreeManager:
                     check=False
                 )
             except Exception as e:
-                print(f"  Warning: Failed to sync worktree with main: {e}")
+                logger.warning(f"Failed to sync worktree with main: {e}")
 
             # CRITICAL: Track existing worktree (bug fix - was missing!)
             info = WorktreeInfo(
@@ -307,7 +310,7 @@ class AsyncWorktreeManager:
         
             if stdout.strip():
                 error_msg = f"Uncommitted changes in worktree:\n{stdout}"
-                print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+                logger.error(f"❌ MERGE BLOCKED: {error_msg}")
                 return MergeResult(
                     success=False,
                     task_id=task_id,
@@ -326,7 +329,7 @@ class AsyncWorktreeManager:
         
             if stdout.strip():
                 error_msg = f"Uncommitted changes in main repo:\n{stdout}"
-                print(f"  ❌ MERGE BLOCKED: {error_msg}", flush=True)
+                logger.error(f"❌ MERGE BLOCKED: {error_msg}")
                 return MergeResult(
                     success=False,
                     task_id=task_id,

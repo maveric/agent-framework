@@ -6,9 +6,12 @@ Version 1.0 — November 2025
 Conditional routing between nodes.
 """
 
+import logging
 from typing import Literal
 from langgraph.types import Send
 from state import OrchestratorState
+
+logger = logging.getLogger(__name__)
 
 
 def route_after_director(state: OrchestratorState):
@@ -28,7 +31,7 @@ def route_after_director(state: OrchestratorState):
         for t in tasks
     )
     if all_complete:
-        print("\nAll tasks complete or awaiting human intervention!", flush=True)
+        logger.info("All tasks complete or awaiting human intervention!")
         return "__end__"
     
     # Find ready tasks
@@ -39,11 +42,11 @@ def route_after_director(state: OrchestratorState):
         planned_tasks = [t for t in tasks if t.get("status") == "planned"]
         if planned_tasks:
             # Route back to director to evaluate readiness
-            print(f"  {len(planned_tasks)} planned task(s) need readiness evaluation", flush=True)
+            logger.info(f"{len(planned_tasks)} planned task(s) need readiness evaluation")
             return "director"
-        
+
         # No ready or planned tasks but not all complete - might be waiting
-        print("No ready tasks, ending run", flush=True)
+        logger.info("No ready tasks, ending run")
         return "__end__"
     
     # Dispatch ALL ready tasks to workers in parallel
@@ -59,7 +62,7 @@ def route_after_director(state: OrchestratorState):
     available_slots = max_concurrent - active_count
     
     if available_slots <= 0:
-        print(f"  Max concurrent workers ({max_concurrent}) reached, waiting...", flush=True)
+        logger.info(f"Max concurrent workers ({max_concurrent}) reached, waiting...")
         return "__end__"  # Will retry on next director cycle
     
     # Limit ready tasks to available slots
@@ -67,7 +70,7 @@ def route_after_director(state: OrchestratorState):
     
     # PERF: Log queue depth metrics
     waiting_count = len([t for t in tasks if t.get("status") == "planned"])
-    print(f"  📊 Dispatching {len(tasks_to_dispatch)}/{len(ready_tasks)} ready tasks (active={active_count}/{max_concurrent}, waiting={waiting_count})", flush=True)
+    logger.info(f"📊 Dispatching {len(tasks_to_dispatch)}/{len(ready_tasks)} ready tasks (active={active_count}/{max_concurrent}, waiting={waiting_count})")
     
     updated_tasks = []
     sends = []
@@ -85,7 +88,7 @@ def route_after_director(state: OrchestratorState):
                 # NOTE: Worktree creation moved to dispatch loop (async)
                 # This routing function must be sync for LangGraph compatibility
 
-                print(f"Dispatching task: {t['id']}", flush=True)
+                logger.info(f"Dispatching task: {t['id']}")
                 break
         
         updated_tasks.append(t)
@@ -125,7 +128,7 @@ def route_after_worker(state: OrchestratorState):
             else:
                 # Non-test tasks (plan/build) skip QA and go straight to complete
                 # Worker.py already handled the merge, so we just mark it complete
-                print(f"  Task {t['id'][:8]} ({phase}) skipping QA - marking complete...", flush=True)
+                logger.info(f"Task {t['id'][:8]} ({phase}) skipping QA - marking complete...")
                 t["status"] = "complete"
                 updated_tasks.append(t)
         else:
@@ -133,7 +136,7 @@ def route_after_worker(state: OrchestratorState):
     
     # If we have test tasks, dispatch them ALL to strategist in parallel
     if test_tasks:
-        print(f"  Dispatching {len(test_tasks)} test task(s) to QA in parallel", flush=True)
+        logger.info(f"Dispatching {len(test_tasks)} test task(s) to QA in parallel")
         sends = []
         for test_task in test_tasks:
             sends.append(Send("strategist", {"task_id": test_task["id"], "tasks": updated_tasks, **state}))

@@ -3,7 +3,10 @@ Worker utility functions.
 """
 
 import asyncio
+import logging
 from orchestrator_types import Task, WorkerResult, AAR
+
+logger = logging.getLogger(__name__)
 
 
 async def _detect_modified_files_via_git(worktree_path) -> list[str]:
@@ -32,7 +35,7 @@ async def _detect_modified_files_via_git(worktree_path) -> list[str]:
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            print(f"  [GIT-ERROR] git status timed out", flush=True)
+            logger.error("git status timed out")
             return files_modified
 
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
@@ -58,22 +61,22 @@ async def _detect_modified_files_via_git(worktree_path) -> list[str]:
                             filename = filename.split(' -> ')[1]
 
                         files_modified.append(filename)
-                        print(f"  [GIT-TRACKED] {status_part.strip()} {filename}", flush=True)
+                        logger.debug(f"[GIT-TRACKED] {status_part.strip()} {filename}")
 
 
-            print(f"  [GIT] Detected {len(files_modified)} modified file(s) via git status", flush=True)
+            logger.info(f"Detected {len(files_modified)} modified file(s) via git status")
         else:
-            print(f"  [GIT-WARNING] git status failed: {stderr_str}", flush=True)
+            logger.warning(f"git status failed: {stderr_str}")
 
     except Exception as e:
-        print(f"  [GIT-ERROR] Failed to detect file changes via git: {e}", flush=True)
+        logger.error(f"Failed to detect file changes via git: {e}")
 
     return files_modified
 
 
 def _mock_execution(task: Task) -> WorkerResult:
     """Mock execution for testing."""
-    print("  MOCK: Executing task...", flush=True)
+    logger.info("MOCK: Executing task...")
     return WorkerResult(
         status="complete",
         result_path="mock_output.py",
