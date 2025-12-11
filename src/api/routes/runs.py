@@ -22,7 +22,7 @@ from api.dispatch import run_orchestrator, continuous_dispatch_loop
 
 # Import orchestrator types
 from orchestrator_types import task_to_dict, serialize_messages, TaskStatus
-from git_manager import WorktreeManager
+from git_manager import AsyncWorktreeManager as WorktreeManager
 
 logger = logging.getLogger(__name__)
 

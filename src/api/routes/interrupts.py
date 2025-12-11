@@ -18,7 +18,7 @@ from api.dispatch import continuous_dispatch_loop
 
 # Import orchestrator types
 from orchestrator_types import task_to_dict, TaskStatus
-from git_manager import WorktreeManager
+from git_manager import AsyncWorktreeManager as WorktreeManager
 
 logger = logging.getLogger(__name__)
 

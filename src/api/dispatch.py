@@ -14,7 +14,8 @@ from pathlib import Path
 from state import tasks_reducer, task_memories_reducer, insights_reducer, design_log_reducer
 from orchestrator_types import task_to_dict, serialize_messages
 from config import OrchestratorConfig
-from git_manager import WorktreeManager, initialize_git_repo
+from git_manager import AsyncWorktreeManager as WorktreeManager
+from git_manager import AsyncWorktreeManager as WorktreeManager, initialize_git_repo_async as initialize_git_repo
 
 # Import global state
 import api.state as api_state
