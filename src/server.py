@@ -15,6 +15,37 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
+# =============================================================================
+# EARLY DIAGNOSTIC - Write to file BEFORE anything else loads
+# This bypasses all Python infrastructure to detect process death
+# =============================================================================
+_DIAGNOSTIC_FILE = os.path.join(os.path.dirname(__file__), "..", "exit_diagnostic.log")
+
+def _write_diagnostic(msg: str):
+    """Write directly to file, bypassing logging."""
+    try:
+        with open(_DIAGNOSTIC_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+            f.flush()
+            os.fsync(f.fileno())  # Force OS to write to disk
+    except:
+        pass
+
+_write_diagnostic("=== SERVER STARTING ===")
+
+import atexit
+def _atexit_diagnostic():
+    _write_diagnostic("ATEXIT HANDLER CALLED - Python is shutting down normally")
+atexit.register(_atexit_diagnostic)
+
+# Also catch when Python interpreter is finalizing
+class _CleanupSentinel:
+    def __del__(self):
+        _write_diagnostic("DESTRUCTOR CALLED - Python garbage collection running")
+_cleanup_sentinel = _CleanupSentinel()
+
+# =============================================================================
+
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -68,6 +99,7 @@ import traceback as _traceback
 def _signal_handler(sig, frame):
     """Log signals that would terminate the server."""
     signal_name = signal.Signals(sig).name
+    _write_diagnostic(f"SIGNAL RECEIVED: {signal_name} (code {sig})")
     logger.error(f"🚨 SIGNAL RECEIVED: {signal_name} (code {sig})")
     logger.error(f"   Stack trace at signal:")
     for line in _traceback.format_stack(frame):
