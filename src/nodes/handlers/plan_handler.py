@@ -126,20 +126,20 @@ CRITICAL INSTRUCTIONS:
    **Examples:**
    Frontend planner creating tasks:
    ```json
-   {
+   {{
      "title": "Wire up user API calls in profile page",
      "depends_on": ["Build user profile UI component"],  // Local dependency
      "dependency_queries": ["Backend API endpoint for fetching user profile data"]  // External dependency
-   }
+   }}
    ```
 
    Backend planner creating tasks:
    ```json
-   {
+   {{
      "title": "Create user profile API endpoint",
      "depends_on": ["Setup database connection"],  // Local dependency
      "dependency_queries": []  // No external dependencies
-   }
+   }}
    ```
 
    The Director will semantically match the frontend's query to the backend's task title.
