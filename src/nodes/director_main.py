@@ -329,6 +329,8 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
     if active_planners:
         if len(active_planners) != prev_active_planners:
             logger.info(f"Director: Waiting for {len(active_planners)} planners to complete before integrating plans")
+        # Return early - don't process suggestions until all planners complete
+        return {"_prev_active_planners": len(active_planners)}
     elif replan_requested:
         # MANUAL REPLAN TRIGGER
         # User says dependency tree is wrong - ask LLM to rebuild depends_on relationships
