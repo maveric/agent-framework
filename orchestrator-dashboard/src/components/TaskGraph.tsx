@@ -31,13 +31,6 @@ interface TaskGraphProps {
     runId?: string; // Needed for API calls
 }
 
-// Helper function to extract title from description
-const extractTitle = (description: string): string => {
-    // Look for "Title: <title>" pattern in the description
-    const titleMatch = description.match(/Title:\s*(.+?)(?:\n|$)/i);
-    return titleMatch ? titleMatch[1].trim() : description.split('\n')[0];
-};
-
 // Custom Node Component with link mode support
 const TaskNode = ({ data }: { data: Task & { isLinkSource?: boolean; linkModeActive?: boolean } }) => {
     const statusColors = {
@@ -72,7 +65,7 @@ const TaskNode = ({ data }: { data: Task & { isLinkSource?: boolean; linkModeAct
         writer_worker: 'bg-rose-900/30 text-rose-300 border-rose-800/50',
     };
 
-    const title = extractTitle(data.description);
+    const title = data.title || data.description.split('\n')[0]; // Fallback for backwards compatibility
     const isWaiting = data.status === 'failed' || data.status === 'waiting_human';
     const isLinkSource = data.isLinkSource;
     const linkModeActive = data.linkModeActive;

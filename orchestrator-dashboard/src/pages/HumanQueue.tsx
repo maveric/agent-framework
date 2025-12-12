@@ -150,7 +150,7 @@ export function HumanQueue() {
                                             )}
                                         </div>
                                         <h3 className="font-semibold text-lg truncate">
-                                            {item.task.description.split('\n')[0].replace(/^Title:\s*/i, '').slice(0, 80)}
+                                            {(item.task.title || item.task.description.split('\n')[0]).slice(0, 80)}
                                         </h3>
                                         <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
                                             <span className="text-slate-500">Task: {item.task.id.slice(0, 12)}</span>

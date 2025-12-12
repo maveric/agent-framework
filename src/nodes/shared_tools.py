@@ -18,12 +18,19 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
             - description: str (REQUIRED - what changes, why, acceptance criteria)
             - phase: "build" | "test" (NOT separate - build includes inline tests)
             - component: str (optional, use feature name instead of "backend"/"frontend")
-            - depends_on: List[str] (REQUIRED - List of EXACT task TITLES this depends on, NOT IDs!)
+            - depends_on: List[str] (Local dependencies - List of EXACT task TITLES from YOUR subtasks, NOT IDs!)
+            - dependency_queries: List[str] (External dependencies - Natural language descriptions of tasks from OTHER planners)
             - worker_profile: "code_worker" | "test_worker" (default based on phase)
 
-    CRITICAL - depends_on MUST use EXACT TITLES:
+    CRITICAL - TWO TYPES OF DEPENDENCIES:
+
+    **LOCAL (depends_on)** - Tasks YOU are creating in this call:
     ❌ WRONG: "depends_on": ["task-1", "infra-1", "setup"]
     ✅ CORRECT: "depends_on": ["Create tasks table in SQLite database", "Setup FastAPI backend"]
+
+    **EXTERNAL (dependency_queries)** - Tasks OTHER planners might create:
+    ✅ CORRECT: "dependency_queries": ["Backend API endpoint for fetching user profile data"]
+    ✅ CORRECT: "dependency_queries": ["Completed database schema setup"]
 
     EXAMPLES OF GOOD TASKS:
     {
