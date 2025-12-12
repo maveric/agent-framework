@@ -112,7 +112,17 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
             logger.info(f"  📤 Promoting {task.id[:12]}: {current_status} → {new_status.value}")
             task.status = new_status
             task.updated_at = datetime.now()
-            updates.append(task_to_dict(task))
+
+            # CRITICAL: Preserve suggested_tasks by updating the raw dict, not converting from Task object
+            # task_to_dict() doesn't include suggested_tasks, which would strip them from planner tasks!
+            raw_task = next((t for t in tasks if t["id"] == task.id), None)
+            if raw_task:
+                raw_task["status"] = new_status.value
+                raw_task["updated_at"] = task.updated_at.isoformat()
+                updates.append(raw_task)
+            else:
+                # Fallback if not found in raw tasks (shouldn't happen)
+                updates.append(task_to_dict(task))
 
     # PERF: Print batch summary ONLY when counts change
     completed_count = len([t for t in tasks if t.get("status") == "complete" or t.get("status") == "awaiting_qa"])
