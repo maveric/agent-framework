@@ -106,12 +106,43 @@ CRITICAL INSTRUCTIONS:
    - E2E tests: Final task after feature is complete
 
    DEPENDENCIES (CRITICAL - READ CAREFULLY):
-   - The "depends_on" field MUST contain EXACT TASK TITLES, not IDs!
+
+   **LOCAL DEPENDENCIES (Within your component):**
+   - The "depends_on" field MUST contain EXACT TASK TITLES from YOUR create_subtasks call
    - ❌ WRONG: "depends_on": ["infra-1", "task-1", "setup"]
    - ✅ CORRECT: "depends_on": ["Create tasks table in SQLite database"]
-   - Link tasks in logical build order (database → API → UI → tests)
+   - Link YOUR tasks in logical build order (database → API → UI → tests)
    - Use the FULL TITLE you defined earlier in the same create_subtasks call
    - Tasks within same feature can run parallel if independent (empty depends_on)
+
+   **EXTERNAL DEPENDENCIES (From other components/planners):**
+   - Other planners are working INDEPENDENTLY - you don't know their task titles
+   - For cross-component dependencies, use "dependency_queries" with natural language
+   - ✅ CORRECT: "dependency_queries": ["A backend API endpoint that provides user profile data"]
+   - ✅ CORRECT: "dependency_queries": ["Completed database schema setup"]
+   - ✅ CORRECT: "dependency_queries": ["Frontend UI components for user authentication"]
+   - The Director will match your query to the actual task created by the other planner
+
+   **Examples:**
+   Frontend planner creating tasks:
+   ```json
+   {
+     "title": "Wire up user API calls in profile page",
+     "depends_on": ["Build user profile UI component"],  // Local dependency
+     "dependency_queries": ["Backend API endpoint for fetching user profile data"]  // External dependency
+   }
+   ```
+
+   Backend planner creating tasks:
+   ```json
+   {
+     "title": "Create user profile API endpoint",
+     "depends_on": ["Setup database connection"],  // Local dependency
+     "dependency_queries": []  // No external dependencies
+   }
+   ```
+
+   The Director will semantically match the frontend's query to the backend's task title.
 5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
 6. **CRITICAL**: Include at least ONE TEST task to validate your component
 7. DO NOT output the plan in the chat - use tools only

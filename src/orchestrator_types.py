@@ -161,6 +161,7 @@ class SuggestedTask:
     acceptance_criteria: List[str] = field(default_factory=list)
     suggested_by_task: str = ""   # Task ID that proposed this
     priority: int = 5             # Suggested priority (1-10)
+    dependency_queries: List[str] = field(default_factory=list)  # Natural language descriptions of external dependencies
 
 
 @dataclass
@@ -358,6 +359,7 @@ class Task:
     
     # Dependencies & Scheduling
     depends_on: List[str] = field(default_factory=list)
+    dependency_queries: List[str] = field(default_factory=list)  # Natural language queries for external dependencies
     priority: int = 5             # Higher = more important (1-10 scale)
     assigned_worker_profile: Optional[WorkerProfile] = None
     
@@ -628,6 +630,7 @@ def task_to_dict(t: Task) -> Dict[str, Any]:
         "description": t.description,
         "status": t.status.value,
         "depends_on": t.depends_on,
+        "dependency_queries": t.dependency_queries,
         "priority": t.priority,
         "assigned_worker_profile": t.assigned_worker_profile.value if t.assigned_worker_profile else None,
         "retry_count": t.retry_count,
@@ -656,6 +659,7 @@ def _dict_to_task(data: Dict[str, Any]) -> Task:
         description=data["description"],
         status=TaskStatus(data.get("status", "planned")),
         depends_on=data.get("depends_on", []),
+        dependency_queries=data.get("dependency_queries", []),
         priority=data.get("priority", 5),
         assigned_worker_profile=WorkerProfile(data["assigned_worker_profile"]) if data.get("assigned_worker_profile") else None,
         retry_count=data.get("retry_count", 0),
