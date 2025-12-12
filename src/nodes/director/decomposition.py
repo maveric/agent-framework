@@ -57,6 +57,7 @@ def mock_decompose(objective: str) -> List[Task]:
         # Task 1: Planning
         Task(
             id=plan_id,
+            title="Design API architecture",
             component="api",
             phase=TaskPhase.PLAN,
             status=TaskStatus.PLANNED,
@@ -73,6 +74,7 @@ def mock_decompose(objective: str) -> List[Task]:
         # Task 2: Implementation (depends on plan)
         Task(
             id=impl_id,
+            title="Implement API endpoints",
             component="api",
             phase=TaskPhase.BUILD,
             status=TaskStatus.PLANNED,
@@ -90,6 +92,7 @@ def mock_decompose(objective: str) -> List[Task]:
         # Task 3: Testing (depends on implementation)
         Task(
             id=test_id,
+            title="Test API endpoints",
             component="api",
             phase=TaskPhase.TEST,
             status=TaskStatus.PLANNED,

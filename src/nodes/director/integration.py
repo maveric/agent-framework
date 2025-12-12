@@ -97,19 +97,18 @@ async def resolve_dependency_queries(tasks: List[Task], state: Dict[str, Any]) -
     for task in tasks:
         # Build task list for matching
         all_tasks_for_matching.append({
-            "title": task.description.split("\n\nTitle: ")[-1].strip() if "\n\nTitle: " in task.description else task.description.split("\n")[0],
+            "title": task.title,
             "id": task.id,
             "component": task.component,
             "phase": task.phase.value if hasattr(task.phase, 'value') else str(task.phase),
             "description": task.description
         })
 
-        # Check if task has dependency queries (stored in description for now)
-        # TODO: Add dependency_queries field to Task dataclass
-        if hasattr(task, 'dependency_queries') and task.dependency_queries:
+        # Check if task has dependency queries
+        if task.dependency_queries:
             for query in task.dependency_queries:
                 tasks_with_queries.append({
-                    "task_title": all_tasks_for_matching[-1]["title"],
+                    "task_title": task.title,
                     "task_id": task.id,
                     "query": query
                 })
@@ -227,11 +226,9 @@ async def integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, An
     # Prepare input for LLM
     tasks_input = []
     for s in suggestions:
-        # Extract title if embedded in description
-        desc = s.get("description", "")
+        # Get title and description
         title = s.get("title", "Untitled")
-        if "Title: " in desc and title == "Untitled":
-            title = desc.split("Title: ")[-1].strip()
+        desc = s.get("description", "")
 
         tasks_input.append({
             "title": title,
@@ -255,11 +252,8 @@ async def integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, An
     for t_dict in existing_tasks:
         status = t_dict.get("status")
         if status in [TaskStatus.ACTIVE, TaskStatus.PLANNED, TaskStatus.READY]:
-            # Extract title from description if possible
-            desc = t_dict.get("description", "")
-            title = "Untitled"
-            if "Title: " in desc:
-                title = desc.split("Title: ")[-1].strip()
+            # Get title (with backwards compatibility fallback)
+            title = t_dict.get("title", "Untitled")
 
             relevant_existing_tasks.append({
                 "id": t_dict.get("id"),
@@ -267,7 +261,7 @@ async def integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, An
                 "component": t_dict.get("component"),
                 "phase": t_dict.get("phase"),
                 "status": status,
-                "description": desc,
+                "description": t_dict.get("description", ""),
                 "depends_on": t_dict.get("depends_on", [])
             })
 
@@ -517,13 +511,7 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
     # Pre-populate map with EXISTING tasks (to allow linking to completed tasks)
     existing_tasks = state.get("tasks", [])
     for t in existing_tasks:
-        t_desc = t.get("description", "")
-        t_title = ""
-        if "Title: " in t_desc:
-            t_title = t_desc.split("Title: ")[-1].strip()
-        else:
-            t_title = t_desc.split("\n")[0].strip()
-
+        t_title = t.get("title", "")
         if t_title:
             title_to_id_map[t_title.lower()] = t["id"]
 
@@ -581,11 +569,12 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
 
         new_task = Task(
             id=new_id,
+            title=t_def.title,
             component=t_def.component,
             phase=phase,
             status=TaskStatus.PLANNED,
             assigned_worker_profile=profile,
-            description=f"{t_def.description}\n\nTitle: {t_def.title}",
+            description=t_def.description,
             acceptance_criteria=t_def.acceptance_criteria,
             depends_on=resolved_deps,
             dependency_queries=t_def.dependency_queries,  # Preserve for Pass 2

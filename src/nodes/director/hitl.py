@@ -78,7 +78,7 @@ def process_human_resolution(state: OrchestratorState, resolution: dict) -> Dict
         # Create new task from resolution data
         new_component = resolution.get("new_component", task.component)
         new_phase_str = resolution.get("new_phase") or (task.phase.value if task.phase else "build")
-        new_title = f"{new_component} {new_phase_str} Task".title()
+        new_title = resolution.get("new_title") or f"{new_component} {new_phase_str} Task".title()
 
         # Validate required fields
         new_description = resolution.get("new_description")
@@ -92,9 +92,6 @@ def process_human_resolution(state: OrchestratorState, resolution: dict) -> Dict
             logger.warning(f"Invalid phase '{new_phase_str}'. Must be one of: {valid_phases}. Defaulting to 'build'")
             new_phase_str = "build"
 
-        if "Title: " not in new_description:
-            new_description += f"\n\nTitle: {new_title}"
-
         # Get worker profile with validation
         new_worker_profile_str = resolution.get("new_worker_profile") or (
             task.assigned_worker_profile.value if task.assigned_worker_profile else "code_worker"
@@ -102,6 +99,7 @@ def process_human_resolution(state: OrchestratorState, resolution: dict) -> Dict
 
         new_task = Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
+            title=new_title,
             component=new_component,
             phase=TaskPhase(new_phase_str),
             status=TaskStatus.PLANNED,

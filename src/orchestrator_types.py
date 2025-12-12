@@ -350,6 +350,7 @@ class Task:
     """A single unit of work in the task graph."""
     # Identity
     id: str
+    title: str                    # Concise task title (commit-message style)
     component: str                # Domain area (db, api, views, research, etc.)
     phase: TaskPhase
     description: str              # Human-readable description of what to do
@@ -625,6 +626,7 @@ def _dict_to_aar(data: Dict[str, Any]) -> AAR:
 def task_to_dict(t: Task) -> Dict[str, Any]:
     return {
         "id": t.id,
+        "title": t.title,
         "component": t.component,
         "phase": t.phase.value,
         "description": t.description,
@@ -654,6 +656,7 @@ def task_to_dict(t: Task) -> Dict[str, Any]:
 def _dict_to_task(data: Dict[str, Any]) -> Task:
     return Task(
         id=data["id"],
+        title=data.get("title", "Untitled"),  # Default for backwards compatibility
         component=data["component"],
         phase=TaskPhase(data["phase"]),
         description=data["description"],
