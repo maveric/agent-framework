@@ -4,6 +4,7 @@
 
 export interface Task {
     id: string;
+    title: string;
     description: string;
     status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human' | 'awaiting_qa' | 'abandoned';
     phase: string;
