@@ -66,6 +66,9 @@ class TaskCompletionQueue:
     
     async def _wrap(self, task_id: str, coro):
         """Wrap coroutine to capture result/error."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         try:
             result = await coro
             async with self._lock:
@@ -74,6 +77,7 @@ class TaskCompletionQueue:
         except Exception as e:
             async with self._lock:
                 self._completed.append(CompletedTask(task_id, None, e))
+            logger.error(f"  ❌ Background worker {task_id[:12]} failed: {e}", exc_info=True)
             print(f"  ❌ Background worker {task_id[:12]} failed: {e}", flush=True)
         finally:
             self._running.pop(task_id, None)
@@ -128,9 +132,12 @@ class TaskCompletionQueue:
                 timeout=timeout,
                 return_when=asyncio.FIRST_COMPLETED
             )
-        except Exception:
-            pass
-        
+        except Exception as e:
+            # Log the exception - don't swallow silently!
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in wait_for_any: {e}", exc_info=True)
+
         # Do NOT collect here - Phase 1 is the sole collection point
     
     async def cancel_task(self, task_id: str) -> bool:
@@ -154,9 +161,13 @@ class TaskCompletionQueue:
         try:
             await task
         except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Task {task_id[:12]} was cancelled during cancellation cleanup")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error cancelling task {task_id[:12]}: {e}", exc_info=True)
         
         self._running.pop(task_id, None)
         return True
