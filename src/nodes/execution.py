@@ -299,6 +299,7 @@ async def _execute_react_loop(
                                 description=desc,
                                 rationale=f"Suggested by planner task {task.id}",
                                 depends_on=st.get("depends_on", []),
+                                dependency_queries=st.get("dependency_queries", []),
                                 acceptance_criteria=st.get("acceptance_criteria", []),
                                 suggested_by_task=task.id,
                                 priority=st.get("priority", 5)
