@@ -24,8 +24,6 @@ from ..execution import _execute_react_loop
 
 async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any] = None) -> WorkerResult:
     """Coding tasks (async)."""
-    from tools import git_commit, git_status, git_diff, git_add
-
     # Tools for code workers - includes execution for verification
     tools = [
         read_file, write_file, list_directory, file_exists,
