@@ -91,12 +91,20 @@ class AsyncWorktreeManager:
         return self.worktree_base / safe_id
     
     async def _run_git(
-        self, 
-        args: List[str], 
+        self,
+        args: List[str],
         cwd: Path = None,
-        check: bool = True
+        check: bool = True,
+        timeout: float = 60.0
     ) -> tuple[int, str, str]:
-        """Run a git command asynchronously."""
+        """Run a git command asynchronously with timeout.
+
+        Args:
+            args: Git command arguments
+            cwd: Working directory
+            check: Raise exception on non-zero return
+            timeout: Max seconds to wait (default 60s, prevents hangs)
+        """
         cmd = ["git"] + args
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -104,14 +112,28 @@ class AsyncWorktreeManager:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd or self.repo_path)
         )
-        stdout, stderr = await process.communicate()
-        
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            # Kill the hung process
+            logger.error(f"⏰ Git command timed out after {timeout}s: git {' '.join(args)}")
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+            raise RuntimeError(f"Git command timed out after {timeout}s: git {' '.join(args)}")
+
         stdout_str = stdout.decode("utf-8", errors="replace") if stdout else ""
         stderr_str = stderr.decode("utf-8", errors="replace") if stderr else ""
-        
+
         if check and process.returncode != 0:
             raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{stderr_str}")
-        
+
         return process.returncode, stdout_str, stderr_str
     
     async def create_worktree(
@@ -424,15 +446,28 @@ class AsyncWorktreeManager:
 async def initialize_git_repo_async(repo_path: Path) -> None:
     """Initialize a git repository if it doesn't exist asynchronously."""
     git_dir = repo_path / ".git"
-    
-    async def run_git(args: List[str], check: bool = True):
+
+    async def run_git(args: List[str], check: bool = True, timeout: float = 60.0):
         process = await asyncio.create_subprocess_exec(
             "git", *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(repo_path)
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"⏰ Git init command timed out: git {' '.join(args)}")
+            try:
+                process.kill()
+                await process.wait()
+            except Exception:
+                pass
+            raise RuntimeError(f"Git init command timed out: git {' '.join(args)}")
+
         if check and process.returncode != 0:
             raise RuntimeError(f"Git command failed: git {' '.join(args)}")
         return stdout.decode("utf-8", errors="replace")

@@ -83,16 +83,24 @@ async def run_python_async(code: str, timeout: int = 30, cwd: str = None, worksp
                 import signal
                 try:
                     process.send_signal(signal.CTRL_BREAK_EVENT)
-                except:
+                except (ProcessLookupError, OSError, PermissionError):
+                    # Process may have already exited or we don't have permission
                     pass
-                process.kill()
+                try:
+                    process.kill()
+                except (ProcessLookupError, OSError):
+                    pass
             else:
                 import signal
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                except:
-                    process.kill()
-            
+                except (ProcessLookupError, OSError, PermissionError):
+                    # Process group may not exist or we don't have permission
+                    try:
+                        process.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+
             await process.wait()
             return f"Error: Execution timed out after {timeout} seconds (killed process and children)"
         
@@ -170,17 +178,25 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
                 import signal
                 try:
                     process.send_signal(signal.CTRL_BREAK_EVENT)
-                except:
+                except (ProcessLookupError, OSError, PermissionError):
+                    # Process may have already exited or we don't have permission
                     pass
-                process.kill()
+                try:
+                    process.kill()
+                except (ProcessLookupError, OSError):
+                    pass
             else:
                 # Unix: Kill process group
                 import signal
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                except:
-                    process.kill()
-            
+                except (ProcessLookupError, OSError, PermissionError):
+                    # Process group may not exist or we don't have permission
+                    try:
+                        process.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+
             await process.wait()
             return f"Error: Command timed out after {timeout} seconds (killed process and children)"
         

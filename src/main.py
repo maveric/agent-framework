@@ -10,6 +10,10 @@ import argparse
 import sys
 import os
 import asyncio
+import signal
+import atexit
+import traceback as _traceback
+import logging
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -21,54 +25,228 @@ if "LANGCHAIN_TRACING_V2" not in os.environ:
 from langgraph_definition import create_orchestrator, start_run
 from config import OrchestratorConfig, ModelConfig
 
+# Configure basic logging for crash detection
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
+
+class Tee:
+    """
+    A file-like object that writes to multiple destinations.
+
+    Properly implements all necessary file object methods to avoid
+    terminal corruption when used as stdout/stderr replacement.
+    """
+    def __init__(self, *files):
+        self.files = files
+        # Store reference to original terminal for isatty check
+        self._terminal = files[0] if files else None
+
+    def write(self, obj):
+        for f in self.files:
+            try:
+                f.write(obj)
+                f.flush()
+            except (ValueError, IOError):
+                # File might be closed, ignore
+                pass
+
+    def flush(self):
+        for f in self.files:
+            try:
+                f.flush()
+            except (ValueError, IOError):
+                pass
+
+    def isatty(self):
+        """Return True if the first file (terminal) is a tty."""
+        if self._terminal and hasattr(self._terminal, 'isatty'):
+            try:
+                return self._terminal.isatty()
+            except (ValueError, IOError):
+                return False
+        return False
+
+    def fileno(self):
+        """Return file descriptor of the terminal if available."""
+        if self._terminal and hasattr(self._terminal, 'fileno'):
+            try:
+                return self._terminal.fileno()
+            except (ValueError, IOError):
+                raise OSError("Stream does not have a file descriptor")
+        raise OSError("Stream does not have a file descriptor")
+
+    @property
+    def encoding(self):
+        """Return encoding of the first file."""
+        if self._terminal and hasattr(self._terminal, 'encoding'):
+            return self._terminal.encoding
+        return 'utf-8'
+
+    @property
+    def errors(self):
+        """Return error handling mode."""
+        if self._terminal and hasattr(self._terminal, 'errors'):
+            return self._terminal.errors
+        return 'replace'
+
+    @property
+    def mode(self):
+        """Return mode string."""
+        return 'w'
+
+    @property
+    def name(self):
+        """Return name of the stream."""
+        if self._terminal and hasattr(self._terminal, 'name'):
+            return self._terminal.name
+        return '<tee>'
+
+    @property
+    def closed(self):
+        """Return True if all files are closed."""
+        return all(getattr(f, 'closed', True) for f in self.files)
+
+    def close(self):
+        """Close all files except the original terminal."""
+        for f in self.files[1:]:  # Skip terminal (first file)
+            try:
+                if hasattr(f, 'close') and not getattr(f, 'closed', True):
+                    f.close()
+            except (ValueError, IOError):
+                pass
+
+    def readable(self):
+        return False
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+
+# =============================================================================
+# CRASH DETECTION - Diagnose Silent Failures
+# =============================================================================
+
+_original_stdout = None
+_original_stderr = None
+_log_file_handle = None
+
+
+def _restore_stdio():
+    """Restore original stdout/stderr."""
+    global _original_stdout, _original_stderr, _log_file_handle
+
+    if _original_stdout is not None:
+        sys.stdout = _original_stdout
+        _original_stdout = None
+    if _original_stderr is not None:
+        sys.stderr = _original_stderr
+        _original_stderr = None
+    if _log_file_handle is not None:
+        try:
+            _log_file_handle.flush()
+            _log_file_handle.close()
+        except (ValueError, IOError):
+            pass
+        _log_file_handle = None
+
+
+def _signal_handler(sig, frame):
+    """Log signals that would terminate the program."""
+    signal_name = signal.Signals(sig).name
+    logger.error(f"🚨 SIGNAL RECEIVED: {signal_name} (code {sig})")
+    logger.error(f"   Stack trace at signal:")
+    for line in _traceback.format_stack(frame):
+        logger.error(f"     {line.strip()}")
+
+    # Restore stdio before exiting
+    _restore_stdio()
+
+    # Re-raise to allow default handling
+    logger.error(f"   Program will now exit due to {signal_name}")
+    signal.signal(sig, signal.SIG_DFL)
+    os.kill(os.getpid(), sig)
+
+
+def _atexit_handler():
+    """Log when Python is exiting and restore terminal."""
+    logger.info("🔚 Program exiting - cleaning up...")
+    _restore_stdio()
+
+
+def _asyncio_exception_handler(loop, context):
+    """Log unhandled exceptions in asyncio tasks."""
+    logger.error("🚨 ASYNCIO UNHANDLED EXCEPTION:")
+    logger.error(f"   Message: {context.get('message', 'Unknown')}")
+
+    exception = context.get('exception')
+    if exception:
+        logger.error(f"   Exception type: {type(exception).__name__}")
+        logger.error(f"   Exception: {exception}")
+        logger.error(f"   Traceback:")
+        for line in _traceback.format_exception(type(exception), exception, exception.__traceback__):
+            logger.error(f"     {line.rstrip()}")
+
+    task = context.get('task')
+    if task:
+        logger.error(f"   Failed task: {task}")
+
+
+# Register handlers
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
+if hasattr(signal, 'SIGBREAK'):
+    signal.signal(signal.SIGBREAK, _signal_handler)
+atexit.register(_atexit_handler)
+
+# =============================================================================
+# END CRASH DETECTION
+# =============================================================================
+
 
 async def main():
     """Main entry point (async version)."""
+    global _original_stdout, _original_stderr, _log_file_handle
+
     parser = argparse.ArgumentParser(description="Agent Orchestrator")
     parser.add_argument("--objective", type=str, default="Build a simple API", help="What to build")
-    parser.add_argument("--workspace", type=str, default="projects/workspace", 
+    parser.add_argument("--workspace", type=str, default="projects/workspace",
                        help="Directory where the project will be built (default: projects/workspace)")
     parser.add_argument("--mock-run", action="store_true", help="Run in mock mode (no LLM)")
-    parser.add_argument("--provider", type=str, default="openai", 
+    parser.add_argument("--provider", type=str, default="openai",
                        choices=["openai", "anthropic", "google", "glm", "openrouter"],
                        help="LLM provider (default: openai)")
     parser.add_argument("--model", type=str, help="Model name (e.g., gpt-4o, claude-3-5-sonnet-20241022)")
-    
+
     args = parser.parse_args()
-    
+
+    # Set asyncio exception handler
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_asyncio_exception_handler)
+
     # Setup logging
     import datetime
-    
+
     # Create logs directory in the workspace
     workspace_path = os.path.abspath(args.workspace)
     log_dir = os.path.join(workspace_path, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    
+
     # Create log file with timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(log_dir, f"run_{timestamp}.log")
-    
-    class Tee:
-        def __init__(self, *files):
-            self.files = files
-            
-        def write(self, obj):
-            for f in self.files:
-                f.write(obj)
-                f.flush()
-                
-        def flush(self):
-            for f in self.files:
-                f.flush()
-                
+
     # Open log file and redirect stdout/stderr
-    f = open(log_file, 'w', encoding='utf-8')
-    original_stdout = sys.stdout
-    original_stderr = sys.stderr
-    
-    sys.stdout = Tee(sys.stdout, f)
-    sys.stderr = Tee(sys.stderr, f)
-    
+    _log_file_handle = open(log_file, 'w', encoding='utf-8')
+    _original_stdout = sys.stdout
+    _original_stderr = sys.stderr
+
+    sys.stdout = Tee(sys.stdout, _log_file_handle)
+    sys.stderr = Tee(sys.stderr, _log_file_handle)
+
     print(f"Logging to: {log_file}")
     
     # Load environment variables
@@ -192,10 +370,17 @@ async def main():
         return 0
         
     except Exception as e:
-        print(f"\nERROR: {e}")
+        logger.error(f"💥 FATAL ERROR: {e}")
         import traceback
         traceback.print_exc()
         return 1
+
+    finally:
+        # CRITICAL: Always restore stdout/stderr and close log file
+        # This prevents terminal corruption on any exit path
+        logger.info("🔚 Cleaning up resources...")
+        _restore_stdio()
+        logger.info("✅ Cleanup complete")
 
 
 if __name__ == "__main__":

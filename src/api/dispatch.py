@@ -444,21 +444,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         # Re-raise to ensure it's visible
         raise
 
-    except Exception as e:
-        logger.error(f"❌ Continuous dispatch error: {e}")
-        import traceback
-        traceback.print_exc()
-        if runs_index.get(run_id, {}).get("status") != "cancelled":
-            runs_index[run_id]["status"] = "failed"
-
-            # Save error state to database
-            try:
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="failed")
-            except Exception as e2:
-                logger.error(f"Failed to save error checkpoint: {e2}")
-
-            await api_state.manager.broadcast_to_run(run_id, {"type": "error", "payload": {"message": str(e)}})
+    # NOTE: Previous code had a second "except Exception" handler here that was unreachable
+    # (dead code) because the first handler catches all exceptions and re-raises.
+    # That dead code has been removed.
 
     finally:
         # Cancel any remaining workers

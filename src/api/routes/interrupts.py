@@ -373,8 +373,21 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 
                 def cleanup_task(t):
                     running_tasks.pop(run_id, None)
-                    logger.info(f"Cleaned up resumed task for run {run_id}")
-                
+                    # CRITICAL: Check if task raised an exception - don't let it silently disappear!
+                    try:
+                        exc = t.exception()
+                        if exc:
+                            logger.error(f"💥 RESUMED TASK FAILED for run {run_id}: {exc}")
+                            import traceback
+                            logger.error("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                            runs_index[run_id]["status"] = "failed"
+                        else:
+                            logger.info(f"Cleaned up resumed task for run {run_id}")
+                    except asyncio.CancelledError:
+                        logger.info(f"Resumed task for run {run_id} was cancelled")
+                    except asyncio.InvalidStateError:
+                        pass
+
                 dispatch_task.add_done_callback(cleanup_task)
                 
                 # Await the task
