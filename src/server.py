@@ -57,6 +57,75 @@ logger = logging.getLogger("server")
 # but don't affect functionality - purely cosmetic
 logging.getLogger("langchain_core.callbacks.manager").setLevel(logging.ERROR)
 
+# =============================================================================
+# CRASH DETECTION - Diagnose Silent Failures
+# =============================================================================
+
+import signal
+import atexit
+import traceback as _traceback
+
+def _signal_handler(sig, frame):
+    """Log signals that would terminate the server."""
+    signal_name = signal.Signals(sig).name
+    logger.error(f"🚨 SIGNAL RECEIVED: {signal_name} (code {sig})")
+    logger.error(f"   Stack trace at signal:")
+    for line in _traceback.format_stack(frame):
+        logger.error(f"     {line.strip()}")
+
+    # Re-raise to allow default handling
+    logger.error(f"   Server will now exit due to {signal_name}")
+    # Restore default handler and re-raise
+    signal.signal(sig, signal.SIG_DFL)
+    os.kill(os.getpid(), sig)
+
+def _atexit_handler():
+    """Log when Python is exiting."""
+    logger.error("🚨 PYTHON ATEXIT: Process is exiting")
+    logger.error(f"   Stack trace at exit:")
+    for line in _traceback.format_stack():
+        logger.error(f"     {line.strip()}")
+
+# Register signal handlers
+logger.info("🔍 Registering crash detection handlers...")
+signal.signal(signal.SIGINT, _signal_handler)   # Ctrl+C
+signal.signal(signal.SIGTERM, _signal_handler)  # Kill command
+if hasattr(signal, 'SIGBREAK'):
+    signal.signal(signal.SIGBREAK, _signal_handler)  # Windows Ctrl+Break
+
+# Register atexit handler
+atexit.register(_atexit_handler)
+
+# Asyncio exception handler for unhandled task exceptions
+def _asyncio_exception_handler(loop, context):
+    """Log unhandled exceptions in asyncio tasks."""
+    logger.error("🚨 ASYNCIO UNHANDLED EXCEPTION:")
+    logger.error(f"   Message: {context.get('message', 'Unknown')}")
+
+    exception = context.get('exception')
+    if exception:
+        logger.error(f"   Exception type: {type(exception).__name__}")
+        logger.error(f"   Exception: {exception}")
+        logger.error(f"   Traceback:")
+        logger.error(_traceback.format_exc())
+
+    # Log the task that failed
+    task = context.get('task')
+    if task:
+        logger.error(f"   Failed task: {task}")
+
+    # Log future if available
+    future = context.get('future')
+    if future:
+        logger.error(f"   Failed future: {future}")
+
+# Set asyncio exception handler (will be set on the event loop in lifespan)
+logger.info("✅ Crash detection handlers registered")
+
+# =============================================================================
+# END CRASH DETECTION
+# =============================================================================
+
 # Initialize connection manager
 manager = ConnectionManager()
 # Set the global manager in api.state so dispatch module can use it
@@ -86,11 +155,16 @@ async def lifespan(app: FastAPI):
         import traceback
         traceback.print_exc()
         raise
-    
+
     # Initialize our custom runs table
     from run_persistence import init_runs_table
     await init_runs_table()
-    
+
+    # Set asyncio exception handler on the current event loop
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(_asyncio_exception_handler)
+    logger.info("✅ Asyncio exception handler configured")
+
     logger.info("Starting Orchestrator Server")
     
     # Register signal handlers for cleanup
