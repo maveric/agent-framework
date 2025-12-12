@@ -16,6 +16,7 @@ import { addTaskDependency } from '../api/client';
 // Reuse Task interface (or import it if we move it to a shared types file)
 interface Task {
     id: string;
+    title?: string;  // Task title (may not exist in old data)
     description: string;
     status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'awaiting_qa' | 'waiting_human' | 'abandoned';
     phase: string;
@@ -218,8 +219,8 @@ function ConfirmDialog({
 }) {
     if (!isOpen || !sourceTask || !targetTask) return null;
 
-    const sourceTitle = extractTitle(sourceTask.description);
-    const targetTitle = extractTitle(targetTask.description);
+    const sourceTitle = sourceTask.title || sourceTask.description.split('\n')[0];
+    const targetTitle = targetTask.title || targetTask.description.split('\n')[0];
 
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
