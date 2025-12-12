@@ -132,6 +132,7 @@ TASK QUALITY REQUIREMENTS:
 2. **Self-contained**: Includes build + verification
 3. **Clear scope**: 3-6 specific acceptance criteria
 4. **Logical order**: Dependencies make sense in development flow
+5. **Ensure testing**: Include at least one test task - unit tests for commit level work, integration tests for integration level work, or end-to-end tests for end-to-end work
 
 AVOID THESE PATTERNS:
 - ❌ Creating "backend" vs "frontend" silos
