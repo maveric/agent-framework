@@ -335,10 +335,16 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
 
                 # DEADLOCK DETECTION: Check if any task statuses changed
                 current_statuses = {t["id"]: t.get("status") for t in all_tasks}
-                if current_statuses == last_task_statuses:
+
+                # Also check for "active" status tasks (might not be in task_queue due to race conditions)
+                active_tasks = [t for t in all_tasks if t.get("status") == "active"]
+
+                if current_statuses == last_task_statuses and not active_tasks:
                     iterations_without_progress += 1
                     logger.warning(f"  [DEADLOCK CHECK] No progress for {iterations_without_progress}/{max_iterations_without_progress} iterations")
                 else:
+                    if active_tasks:
+                        logger.debug(f"  Progress detected: {len(active_tasks)} active task(s) running")
                     iterations_without_progress = 0  # Reset counter
                     last_task_statuses = current_statuses
 
