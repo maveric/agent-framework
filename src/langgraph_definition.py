@@ -185,15 +185,15 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
     # If snapshot.next is non-empty, graph is paused/interrupted
     if final_snapshot.next:
         result["_paused_for_hitl"] = True
-        print(f"\n⏸️  GRAPH PAUSED - WAITING FOR HUMAN INPUT")
-        print(f"Thread ID: {thread_id}")
+        logger.info("GRAPH PAUSED - WAITING FOR HUMAN INPUT")
+        logger.info(f"Thread ID: {thread_id}")
         
         # Find tasks waiting for human
         tasks = result.get("tasks", [])
         waiting_tasks = [t for t in tasks if t.get("status") == "waiting_human"]
         if waiting_tasks:
-            print(f"\nTasks waiting for resolution: {len(waiting_tasks)}")
+            logger.info(f"Tasks waiting for resolution: {len(waiting_tasks)}")
             for task in waiting_tasks:
-                print(f"  • {task.get('id')}: {task.get('description', '')[:60]}...")
+                logger.info(f"  - {task.get('id')}: {task.get('description', '')[:60]}...")
     
     return result

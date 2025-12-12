@@ -393,7 +393,9 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                 # Await the task
                 await dispatch_task
 
-                logger.info(f"✅ Successfully resumed run {run_id} with action: {resolution.action}")
+                # Only log success if run wasn't cancelled
+                if runs_index.get(run_id, {}).get("status") != "cancelled":
+                    logger.info(f"Successfully resumed run {run_id} with action: {resolution.action}")
 
             except Exception as e:
                 logger.error(f"❌ Error during resume execution: {e}")

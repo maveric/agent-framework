@@ -349,14 +349,14 @@ async def main():
         
         # Check if paused vs actually complete
         if result.get("_paused_for_hitl"):
-            print("⏸️  RUN PAUSED FOR HUMAN INPUT")
-            print(f"{'='*60}")
-            print("\n💡 Open the dashboard to resolve:")
-            print("   http://localhost:3000")
-            print("\n   The run will resume after you provide input.")
+            logger.info("RUN PAUSED FOR HUMAN INPUT")
+            logger.info(f"{'='*60}")
+            logger.info("Open the dashboard to resolve:")
+            logger.info("   http://localhost:3000")
+            logger.info("   The run will resume after you provide input.")
         else:
-            print("✅ RUN COMPLETE")
-            print(f"{'='*60}")
+            logger.info("RUN COMPLETE")
+            logger.info(f"{'='*60}")
         
         tasks = result.get('tasks', [])
         print(f"Total tasks: {len(tasks)}")

@@ -2,11 +2,14 @@
 Tool binding and wrapper functions for worker agents.
 """
 
+import logging
 from typing import List, Callable, Dict, Any
 
 from langchain_core.tools import StructuredTool
 
 from orchestrator_types import WorkerProfile
+
+logger = logging.getLogger(__name__)
 
 
 def _create_read_file_wrapper(tool, worktree_path):
@@ -94,7 +97,7 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
             "Please start a new run."
         )
 
-    print(f"DEBUG: Binding tools to path: {worktree_path}", flush=True)
+    logger.debug(f"Binding tools to path: {worktree_path}")
 
     bound_tools = []
     for tool in tools:

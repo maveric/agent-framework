@@ -8,9 +8,12 @@ Tracks running workers and collects their results without blocking.
 """
 
 import asyncio
+import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,29 +59,25 @@ class TaskCompletionQueue:
             return False
         
         if task_id in self._running:
-            print(f"  ⚠️ Task {task_id} already running, skipping spawn", flush=True)
+            logger.warning(f"Task {task_id} already running, skipping spawn")
             return False
         
         async_task = asyncio.create_task(self._wrap(task_id, coro))
         self._running[task_id] = async_task
-        print(f"  🚀 Spawned background worker for {task_id} ({len(self._running)}/{self._max_concurrent} active)", flush=True)
+        logger.info(f"[SPAWN] Background worker for {task_id} ({len(self._running)}/{self._max_concurrent} active)")
         return True
     
     async def _wrap(self, task_id: str, coro):
         """Wrap coroutine to capture result/error."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         try:
             result = await coro
             async with self._lock:
                 self._completed.append(CompletedTask(task_id, result))
-            print(f"  ✅ Background worker {task_id[:12]} completed", flush=True)
+            logger.info(f"[DONE] Background worker {task_id[:12]} completed")
         except Exception as e:
             async with self._lock:
                 self._completed.append(CompletedTask(task_id, None, e))
-            logger.error(f"  ❌ Background worker {task_id[:12]} failed: {e}", exc_info=True)
-            print(f"  ❌ Background worker {task_id[:12]} failed: {e}", flush=True)
+            logger.error(f"[FAIL] Background worker {task_id[:12]} failed: {e}", exc_info=True)
         finally:
             self._running.pop(task_id, None)
     
@@ -133,9 +132,6 @@ class TaskCompletionQueue:
                 return_when=asyncio.FIRST_COMPLETED
             )
         except Exception as e:
-            # Log the exception - don't swallow silently!
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Error in wait_for_any: {e}", exc_info=True)
 
         # Do NOT collect here - Phase 1 is the sole collection point
@@ -154,19 +150,15 @@ class TaskCompletionQueue:
             return False
         
         task = self._running[task_id]
-        print(f"  ⚠️ Cancelling specific task {task_id[:12]}", flush=True)
+        logger.warning(f"Cancelling specific task {task_id[:12]}")
         task.cancel()
         
         # Wait for cancellation to complete
         try:
             await task
         except asyncio.CancelledError:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning(f"Task {task_id[:12]} was cancelled during cancellation cleanup")
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f"Error cancelling task {task_id[:12]}: {e}", exc_info=True)
         
         self._running.pop(task_id, None)
@@ -175,7 +167,7 @@ class TaskCompletionQueue:
     async def cancel_all(self):
         """Cancel all running tasks (for shutdown)."""
         for task_id, task in list(self._running.items()):
-            print(f"  ⚠️ Cancelling task {task_id}", flush=True)
+            logger.warning(f"Cancelling task {task_id}")
             task.cancel()
         
         # Wait for cancellations to complete

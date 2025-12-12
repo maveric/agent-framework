@@ -6,13 +6,50 @@ Version 1.0 — November 2025
 FastAPI server for the orchestrator dashboard.
 """
 
+# =============================================================================
+# EARLY DIAGNOSTIC - Write to file BEFORE anything else loads
+# This bypasses all Python infrastructure to detect process death
+# =============================================================================
 import os
 import sys
+from datetime import datetime
+
+_DIAGNOSTIC_FILE = os.path.join(os.path.dirname(__file__), "..", "exit_diagnostic.log")
+
+def _write_diagnostic(msg: str):
+    """Write directly to file, bypassing logging. Uses fsync to force OS write."""
+    try:
+        with open(_DIAGNOSTIC_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] [PID:{os.getpid()}] {msg}\n")
+            f.flush()
+            os.fsync(f.fileno())  # Force OS to write to disk immediately
+    except:
+        pass  # Never fail diagnostic
+
+_write_diagnostic("=== SERVER MODULE LOADING ===")
+
+# Register atexit EARLY - before any imports that might crash
+import atexit
+def _atexit_diagnostic():
+    _write_diagnostic("ATEXIT HANDLER - Python shutting down normally")
+atexit.register(_atexit_diagnostic)
+
+# Sentinel object to detect garbage collection (runs during interpreter shutdown)
+class _CleanupSentinel:
+    def __del__(self):
+        _write_diagnostic("DESTRUCTOR - Python garbage collection running")
+_cleanup_sentinel = _CleanupSentinel()
+
+_write_diagnostic("Early diagnostic initialized")
+
+# =============================================================================
+# END EARLY DIAGNOSTIC
+# =============================================================================
+
 import json
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv

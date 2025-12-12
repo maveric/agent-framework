@@ -222,7 +222,7 @@ AVOID THESE PATTERNS:
 
     # VALIDATION: Planners MUST create tasks
     if not result or not result.suggested_tasks or len(result.suggested_tasks) == 0:
-        print(f"  [ERROR] Planner {task.id} completed without creating any tasks!", flush=True)
+        logger.error(f"Planner {task.id} completed without creating any tasks!")
         # Return failed result
         return WorkerResult(
             status="failed",

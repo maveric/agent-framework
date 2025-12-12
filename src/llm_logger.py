@@ -5,9 +5,12 @@ Logs all requests sent to LLM for debugging.
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # Default log directory (fallback if workspace not provided)
 DEFAULT_LOG_DIR = Path("llm_logs")
@@ -169,6 +172,6 @@ def log_llm_response(
     with open(log_file, 'w', encoding='utf-8') as f:
         json.dump(log_entry, f, indent=2)
     
-    print(f"  [LOG] Response saved: {log_file}", flush=True)
+    logger.debug(f"[LOG] Response saved: {log_file}")
     return str(log_file)
 

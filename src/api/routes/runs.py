@@ -524,44 +524,69 @@ async def replan_run(run_id: str):
 async def cancel_run(run_id: str):
     """Cancel a running task."""
     from run_persistence import save_run_state
+    from api.state import active_task_queues
 
-    logger.info(f"🛑 Cancel requested for run {run_id}")
+    logger.info(f"Cancel requested for run {run_id}")
     logger.info(f"   runs_index keys: {list(runs_index.keys())}")
     logger.info(f"   running_tasks keys: {list(running_tasks.keys())}")
+    logger.info(f"   active_task_queues keys: {list(active_task_queues.keys())}")
 
     if run_id not in runs_index:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    if run_id not in running_tasks:
-        # Already completed or not running
-        logger.warning(f"   Run {run_id} has no active dispatch loop - returning early")
-        return {"status": runs_index[run_id].get("status", "unknown"), "message": "Run not active"}
-
-    task = running_tasks[run_id]
-    logger.info(f"   Dispatch loop found: done={task.done()}, cancelled={task.cancelled()}")
-
-    if task.done():
-        return {"status": "already_completed"}
-
-    # Mark as cancelled FIRST so dispatch loop sees it immediately
+    # Mark as cancelled FIRST so any still-running code sees it immediately
     runs_index[run_id]["status"] = "cancelled"
     runs_index[run_id]["updated_at"] = datetime.now().isoformat()
 
-    # Cancel the task
-    task.cancel()
-    logger.info(f"   Cancel signal sent to task")
+    cancelled_dispatch = False
+    cancelled_workers = False
 
-    # Wait briefly for cancellation - don't block forever if LLM calls are stuck
-    try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
-    except asyncio.TimeoutError:
-        logger.warning(f"   Task didn't stop within 2s - will terminate in background")
-    except asyncio.CancelledError:
-        logger.info(f"   ✓ Dispatch loop cancelled successfully")
-    except Exception as e:
-        logger.warning(f"   Dispatch loop ended with: {e}")
+    # 1. Try to cancel the dispatch loop (main orchestrator loop)
+    if run_id in running_tasks:
+        task = running_tasks[run_id]
+        logger.info(f"   Dispatch loop found: done={task.done()}, cancelled={task.cancelled()}")
 
-    logger.warning(f"🛑 Cancelled run {run_id}")
+        if not task.done():
+            # Cancel the task
+            task.cancel()
+            logger.info(f"   Cancel signal sent to dispatch loop")
+
+            # Wait briefly for cancellation - don't block forever if LLM calls are stuck
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"   Dispatch loop didn't stop within 2s - will terminate in background")
+            except asyncio.CancelledError:
+                logger.info(f"   Dispatch loop cancelled successfully")
+            except Exception as e:
+                logger.warning(f"   Dispatch loop ended with: {e}")
+
+            cancelled_dispatch = True
+    else:
+        logger.warning(f"   No active dispatch loop in running_tasks")
+
+    # 2. Cancel any orphaned workers via task queue
+    # This handles the case where the dispatch loop crashed but workers are still running
+    if run_id in active_task_queues:
+        task_queue = active_task_queues[run_id]
+        active_count = task_queue.active_count
+        if active_count > 0:
+            logger.info(f"   Cancelling {active_count} orphaned workers via task queue")
+            try:
+                await task_queue.cancel_all()
+                cancelled_workers = True
+                logger.info(f"   Successfully cancelled orphaned workers")
+            except Exception as e:
+                logger.error(f"   Error cancelling orphaned workers: {e}")
+
+        # Remove the task queue
+        active_task_queues.pop(run_id, None)
+
+    if not cancelled_dispatch and not cancelled_workers:
+        logger.warning(f"   Run {run_id} had no active dispatch loop or workers - may have already stopped")
+        return {"status": runs_index[run_id].get("status", "unknown"), "message": "Run not active"}
+
+    logger.info(f"Cancelled run {run_id} (dispatch={cancelled_dispatch}, workers={cancelled_workers})")
 
     # Save cancelled state to database
     if run_id in run_states:

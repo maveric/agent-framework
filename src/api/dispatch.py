@@ -7,6 +7,7 @@ Continuous task dispatch loop and orchestrator execution management.
 import asyncio
 import logging
 import platform
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,23 @@ from api.state import runs_index, run_states, get_orchestrator_graph
 
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# HEARTBEAT DIAGNOSTIC - Tracks exact location of silent failures
+# =============================================================================
+_HEARTBEAT_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "heartbeat.log")
+
+def _heartbeat(run_id: str, msg: str):
+    """Write heartbeat to file with fsync. Cross-platform (Windows/Linux)."""
+    try:
+        with open(_HEARTBEAT_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] [{run_id[:8]}] {msg}\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except:
+        pass
+# =============================================================================
+
 
 
 async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
@@ -57,9 +75,11 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     api_state.active_task_queues[run_id] = task_queue
 
     logger.info(f"🚀 Starting continuous dispatch loop for run {run_id}")
+    _heartbeat(run_id, "DISPATCH_LOOP_START")
 
     try:
         while iteration < max_iterations:
+            _heartbeat(run_id, f"LOOP_ITER_{iteration}_START")
             # IMMEDIATE CHECK: If cancelled externally, stop immediately
             if runs_index.get(run_id, {}).get("status") == "cancelled":
                 logger.info(f"🛑 Loop detected cancellation for run {run_id}, exiting.")
@@ -156,7 +176,9 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 })
             
             # Director modifies state directly
+            _heartbeat(run_id, f"ITER_{iteration}_DIRECTOR_CALL_START")
             director_result = await director_node(state, run_config)
+            _heartbeat(run_id, f"ITER_{iteration}_DIRECTOR_CALL_END")
 
             if director_result:
                 # Only count as activity if meaningful state changed (ignore internal counters)
@@ -220,6 +242,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
 
                 # Spawn worker as background task
                 worker_state = {**state, "task_id": task_id}
+                _heartbeat(run_id, f"ITER_{iteration}_WORKER_SPAWN_{task_id[:8]}")
                 task_queue.spawn(task_id, worker_node(worker_state, run_config))
                 dispatched += 1
                 activity_occurred = True
@@ -242,8 +265,11 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 if runs_index.get(run_id, {}).get("status") == "cancelled":
                     break
 
-                logger.info(f"  🔍 QA evaluating: {task.get('id', '')[:12]}")
+                task_id_short = task.get('id', '')[:12]
+                _heartbeat(run_id, f"ITER_{iteration}_STRATEGIST_START_{task_id_short}")
+                logger.info(f"  🔍 QA evaluating: {task_id_short}")
                 strategist_result = await strategist_node({**state, "task_id": task.get("id")}, run_config)
+                _heartbeat(run_id, f"ITER_{iteration}_STRATEGIST_END_{task_id_short}")
                 if strategist_result:
                     activity_occurred = True
                     for key, value in strategist_result.items():
@@ -424,6 +450,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
 
     except Exception as e:
         # CRITICAL: Log ALL unexpected exceptions
+        _heartbeat(run_id, f"EXCEPTION: {type(e).__name__}: {str(e)[:100]}")
         logger.error(f"💥 FATAL ERROR in dispatch loop for run {run_id}: {e}", exc_info=True)
         logger.error(f"   Exception type: {type(e).__name__}")
         logger.error(f"   Exception args: {e.args}")
@@ -451,6 +478,7 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     except BaseException as e:
         # Catch EVERYTHING including SystemExit, KeyboardInterrupt
         # This ensures we always log what killed the process
+        _heartbeat(run_id, f"BASE_EXCEPTION: {type(e).__name__}: {str(e)[:100]}")
         import sys
         logger.error(f"💀 CRITICAL: BaseException caught in dispatch loop: {type(e).__name__}: {e}")
         sys.stdout.flush()
