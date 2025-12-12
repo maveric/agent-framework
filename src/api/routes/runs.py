@@ -234,6 +234,12 @@ async def create_run(request: Request, run_request: CreateRunRequest, background
 
     # Cleanup task when done
     def cleanup_task(t):
+        import sys
+        # Force flush to ensure we see this message
+        logger.info(f"📍 Done callback fired for run {run_id}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         running_tasks.pop(run_id, None)
         # CRITICAL: Check if task raised an exception - don't let it silently disappear!
         try:
@@ -245,12 +251,19 @@ async def create_run(request: Request, run_request: CreateRunRequest, background
                 # Update run status to failed
                 runs_index[run_id]["status"] = "failed"
             else:
-                logger.info(f"Cleaned up task for run {run_id}")
+                logger.info(f"✅ Task completed successfully for run {run_id}")
         except asyncio.CancelledError:
             logger.info(f"Task for run {run_id} was cancelled")
         except asyncio.InvalidStateError:
             # Task not done yet (shouldn't happen in done_callback)
             logger.warning(f"Task for run {run_id} in invalid state during cleanup")
+        except Exception as callback_err:
+            logger.error(f"❌ Error in done_callback itself: {callback_err}")
+            import traceback
+            traceback.print_exc()
+
+        sys.stdout.flush()
+        sys.stderr.flush()
 
     task.add_done_callback(cleanup_task)
 

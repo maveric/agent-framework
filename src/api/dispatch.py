@@ -448,16 +448,40 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
     # (dead code) because the first handler catches all exceptions and re-raises.
     # That dead code has been removed.
 
+    except BaseException as e:
+        # Catch EVERYTHING including SystemExit, KeyboardInterrupt
+        # This ensures we always log what killed the process
+        import sys
+        logger.error(f"💀 CRITICAL: BaseException caught in dispatch loop: {type(e).__name__}: {e}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise
+
     finally:
+        # DEFENSIVE: Ensure this message is always visible
+        import sys
+        logger.info(f"🏁 Run {run_id} entering finally block after {iteration} iterations")
+        sys.stdout.flush()
+        sys.stderr.flush()
+
         # Cancel any remaining workers
-        await task_queue.cancel_all()
+        try:
+            await task_queue.cancel_all()
+        except Exception as cancel_err:
+            logger.error(f"Error cancelling workers: {cancel_err}")
 
         # Unregister task queue
         api_state.active_task_queues.pop(run_id, None)
 
         # Final broadcast
-        await api_state.manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
-        logger.info(f"🏁 Run {run_id} finished after {iteration} iterations")
+        try:
+            await api_state.manager.broadcast({"type": "run_list_update", "payload": list(runs_index.values())})
+        except Exception as broadcast_err:
+            logger.error(f"Error in final broadcast: {broadcast_err}")
+
+        logger.info(f"🏁 Run {run_id} cleanup complete")
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 
 async def broadcast_state_update(run_id: str, state: dict):
