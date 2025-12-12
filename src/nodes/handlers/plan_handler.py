@@ -3,9 +3,12 @@ Plan handler for planning tasks.
 """
 
 from typing import Dict, Any
+import logging
 import platform
 
 from orchestrator_types import Task, WorkerProfile, WorkerResult, AAR
+
+logger = logging.getLogger(__name__)
 
 # Import tools (ASYNC versions for non-blocking execution)
 from tools import (
@@ -31,7 +34,7 @@ async def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
 
     MAX_PLANNERS = 10  # Hard limit: should be plenty
     if planner_count >= MAX_PLANNERS:
-        print(f"  [WARNING] Max planner limit reached ({MAX_PLANNERS}). Forcing direct task creation.", flush=True)
+        logger.warning(f"Max planner limit reached ({MAX_PLANNERS}). Forcing direct task creation.")
 
     tools = [read_file, write_file, list_directory, file_exists, create_subtasks]
     tools = _bind_tools(tools, state, WorkerProfile.PLANNER)
@@ -99,12 +102,6 @@ CRITICAL INSTRUCTIONS:
    - Include its own verification (unit test in same commit, or integration test right after)
    - Have 3-6 clear acceptance criteria
 
-   BUILD TESTING INTO YOUR TASKS:
-   - Don't separate "build" from "test" - test what you build
-   - Unit tests: Include in same task as code
-   - Integration tests: Separate task that depends on the feature tasks
-   - E2E tests: Final task after feature is complete
-
    DEPENDENCIES (CRITICAL - READ CAREFULLY):
 
    **LOCAL DEPENDENCIES (Within your component):**
@@ -144,8 +141,56 @@ CRITICAL INSTRUCTIONS:
 
    The Director will semantically match the frontend's query to the backend's task title.
 5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
-6. **CRITICAL**: Include at least ONE TEST task to validate your component
-7. DO NOT output the plan in the chat - use tools only
+6. DO NOT output the plan in the chat - use tools only
+
+**🚨 MANDATORY TEST TASKS - HARD REQUIREMENT 🚨**
+You MUST create at least ONE task with `phase: "test"`. This is NON-NEGOTIABLE.
+Without test tasks, your plan will be REJECTED and you will FAIL.
+
+**Test Task Requirements:**
+- Set `phase: "test"` (NOT "build" - tests MUST be phase "test")
+- Set `worker_profile: "test_worker"`
+- Test tasks should depend on the build tasks they verify
+- Create tests that validate your component actually works
+
+**Test Task Examples:**
+```json
+{{
+  "title": "Add integration tests for task CRUD API",
+  "phase": "test",           // ← CRITICAL: Must be "test", not "build"
+  "worker_profile": "test_worker",
+  "depends_on": ["Implement task CRUD endpoints"],
+  "description": "Create pytest tests for all task API endpoints. Follow design_spec.md",
+  "acceptance_criteria": [
+    "Test POST /tasks creates a task successfully",
+    "Test GET /tasks returns list of tasks",
+    "Test DELETE /tasks/{{id}} removes task",
+    "All tests pass with `pytest tests/`"
+  ]
+}}
+```
+
+```json
+{{
+  "title": "Add Playwright E2E test for task board UI",
+  "phase": "test",           // ← CRITICAL: Must be "test", not "build"  
+  "worker_profile": "test_worker",
+  "depends_on": ["Build task board component", "Wire up API calls"],
+  "dependency_queries": ["Backend task CRUD API is complete and tested"],  // ← External dep on backend
+  "description": "Create Playwright test for task creation and movement. Follow design_spec.md",
+  "acceptance_criteria": [
+    "Test creates new task via UI",
+    "Test moves task between columns",
+    "Test persists after page reload"
+  ]
+}}
+```
+
+**Test Strategy by Component:**
+- **Backend/API**: Create pytest tests (unit + integration)
+- **Frontend/UI**: Create Playwright or browser tests
+- **Database**: Include validation queries in integration tests
+- **Full-stack**: E2E test that exercises the complete flow
 
 **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
 - **NO SCOPE EXPANSION**: You have ZERO authority to expand scope beyond design_spec.md
@@ -163,13 +208,14 @@ TASK QUALITY REQUIREMENTS:
 2. **Self-contained**: Includes build + verification
 3. **Clear scope**: 3-6 specific acceptance criteria
 4. **Logical order**: Dependencies make sense in development flow
-5. **Ensure testing**: Include at least one test task - unit tests for feature level work, integration tests for integration level work, or end-to-end tests for end-to-end work
+5. **MANDATORY TESTING**: At least one task with phase:"test" - your plan FAILS without this
 
 AVOID THESE PATTERNS:
 - ❌ Creating "backend" vs "frontend" silos
 - ❌ Separating all building from all testing
 - ❌ Tasks too large (>400 LOC changes) or too small (trivial changes)
 - ❌ Vague criteria like "make it work"
+- ❌ NO TEST TASKS (this will cause your plan to be REJECTED)
 """
 
     result = await _execute_react_loop(task, tools, system_prompt, state, config)
@@ -191,6 +237,33 @@ AVOID THESE PATTERNS:
             suggested_tasks=[]
         )
 
+    # VALIDATION: Planners MUST create at least one TEST task
+    test_tasks = [
+        t for t in result.suggested_tasks 
+        if hasattr(t, 'phase') and (
+            t.phase == 'test' or 
+            str(t.phase).lower() == 'test' or 
+            (hasattr(t.phase, 'value') and t.phase.value == 'test')
+        )
+    ]
+    
+    if len(test_tasks) == 0:
+        logger.error(f"Planner {task.id} created {len(result.suggested_tasks)} tasks but ZERO test tasks!")
+        logger.error(f"Task phases: {[str(t.phase) if hasattr(t, 'phase') else 'no-phase' for t in result.suggested_tasks]}")
+        # Return failed result - planners MUST include tests
+        return WorkerResult(
+            status="failed",
+            result_path=result.result_path if result else "",
+            aar=AAR(
+                summary=f"FAILED: Planner created {len(result.suggested_tasks)} tasks but NO test tasks. Every plan MUST include at least one task with phase:'test'.",
+                approach="N/A",
+                challenges=["Did not create any test tasks (phase: 'test')"],
+                decisions_made=[],
+                files_modified=result.aar.files_modified if result and result.aar else []
+            ),
+            suggested_tasks=[]  # Reject all tasks - force retry with tests
+        )
 
-    print(f"  [SUCCESS] Planner created {len(result.suggested_tasks)} tasks", flush=True)
+    logger.info(f"Planner created {len(result.suggested_tasks)} tasks ({len(test_tasks)} test tasks)")
     return result
+

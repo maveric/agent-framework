@@ -794,6 +794,7 @@ def _suggested_task_to_dict(s: SuggestedTask) -> Dict[str, Any]:
         "description": s.description,
         "rationale": s.rationale,
         "depends_on": s.depends_on,
+        "dependency_queries": s.dependency_queries,  # Cross-component dependencies
         "acceptance_criteria": s.acceptance_criteria,
         "suggested_by_task": s.suggested_by_task,
         "priority": s.priority,
@@ -854,6 +855,7 @@ def _dict_to_suggested_task(data: Dict[str, Any]) -> SuggestedTask:
         description=data["description"],
         rationale=data["rationale"],
         depends_on=data.get("depends_on", []),
+        dependency_queries=data.get("dependency_queries", []),  # Cross-component dependencies
         acceptance_criteria=data.get("acceptance_criteria", []),
         suggested_by_task=data.get("suggested_by_task", ""),
         priority=data.get("priority", 5),
