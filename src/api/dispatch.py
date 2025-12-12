@@ -416,11 +416,33 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         try:
             from run_persistence import save_run_state
             await save_run_state(run_id, state, status="cancelled")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to save cancelled state: {e}", exc_info=True)
 
         # Don't re-raise, graceful exit
         return
+
+    except Exception as e:
+        # CRITICAL: Log ALL unexpected exceptions
+        logger.error(f"💥 FATAL ERROR in dispatch loop for run {run_id}: {e}", exc_info=True)
+        logger.error(f"   Exception type: {type(e).__name__}")
+        logger.error(f"   Exception args: {e.args}")
+
+        import traceback
+        logger.error("   Full traceback:")
+        logger.error(traceback.format_exc())
+
+        runs_index[run_id]["status"] = "failed"
+
+        # Save failed state
+        try:
+            from run_persistence import save_run_state
+            await save_run_state(run_id, state, status="failed")
+        except Exception as save_err:
+            logger.error(f"Failed to save failed state: {save_err}", exc_info=True)
+
+        # Re-raise to ensure it's visible
+        raise
 
     except Exception as e:
         logger.error(f"❌ Continuous dispatch error: {e}")
