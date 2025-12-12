@@ -235,7 +235,22 @@ async def create_run(request: Request, run_request: CreateRunRequest, background
     # Cleanup task when done
     def cleanup_task(t):
         running_tasks.pop(run_id, None)
-        logger.info(f"Cleaned up task for run {run_id}")
+        # CRITICAL: Check if task raised an exception - don't let it silently disappear!
+        try:
+            exc = t.exception()
+            if exc:
+                logger.error(f"💥 BACKGROUND TASK FAILED for run {run_id}: {exc}")
+                import traceback
+                logger.error("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                # Update run status to failed
+                runs_index[run_id]["status"] = "failed"
+            else:
+                logger.info(f"Cleaned up task for run {run_id}")
+        except asyncio.CancelledError:
+            logger.info(f"Task for run {run_id} was cancelled")
+        except asyncio.InvalidStateError:
+            # Task not done yet (shouldn't happen in done_callback)
+            logger.warning(f"Task for run {run_id} in invalid state during cleanup")
 
     task.add_done_callback(cleanup_task)
 
@@ -459,6 +474,18 @@ async def replan_run(run_id: str):
 
         def cleanup(t):
             running_tasks.pop(run_id, None)
+            # CRITICAL: Check if task raised an exception
+            try:
+                exc = t.exception()
+                if exc:
+                    logger.error(f"💥 REPLAN TASK FAILED for run {run_id}: {exc}")
+                    import traceback
+                    logger.error("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                    runs_index[run_id]["status"] = "failed"
+            except asyncio.CancelledError:
+                logger.info(f"Replan task for run {run_id} was cancelled")
+            except asyncio.InvalidStateError:
+                pass
         task.add_done_callback(cleanup)
 
         logger.info(f"✅ Replan triggered for run {run_id}. Director will reorganize tasks.")
@@ -639,9 +666,22 @@ async def restart_run(run_id: str):
 
     # Cleanup when done
     def cleanup(t):
-        logger.info(f"Cleaned up task for run {run_id}")
         if run_id in running_tasks:
             del running_tasks[run_id]
+        # CRITICAL: Check if task raised an exception
+        try:
+            exc = t.exception()
+            if exc:
+                logger.error(f"💥 RESTART TASK FAILED for run {run_id}: {exc}")
+                import traceback
+                logger.error("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                runs_index[run_id]["status"] = "failed"
+            else:
+                logger.info(f"Cleaned up task for run {run_id}")
+        except asyncio.CancelledError:
+            logger.info(f"Restart task for run {run_id} was cancelled")
+        except asyncio.InvalidStateError:
+            pass
 
     task.add_done_callback(cleanup)
 
