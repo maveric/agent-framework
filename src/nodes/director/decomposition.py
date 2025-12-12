@@ -360,6 +360,7 @@ Create feature-level planner tasks based on the design spec. Remember:
 
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
+                title=t_def.title,
                 component=t_def.component,
                 phase=TaskPhase.PLAN,
                 status=TaskStatus.PLANNED,
@@ -380,6 +381,7 @@ Create feature-level planner tasks based on the design spec. Remember:
         # Fallback: single planner for the entire project
         return [Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
+            title=f"Plan implementation: {objective[:50]}",
             component="main",
             phase=TaskPhase.PLAN,
             status=TaskStatus.PLANNED,
