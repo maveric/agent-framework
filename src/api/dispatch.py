@@ -628,9 +628,9 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
         # Create config
         config = OrchestratorConfig(mock_mode=False)
 
-        # Create worktree manager (Always enabled to match main.py behavior)
-        worktree_base = workspace_path / ".worktrees"
-        worktree_base.mkdir(exist_ok=True)
+        # Create worktree manager (uses run-data path OUTSIDE workspace)
+        worktree_base = config.get_worktree_base(run_id)
+        worktree_base.mkdir(parents=True, exist_ok=True)
 
         wt_manager = WorktreeManager(
             repo_path=workspace_path,
@@ -657,6 +657,8 @@ async def execute_run_logic(run_id: str, thread_id: str, objective: str, spec: d
             "mock_mode": False,
             "_wt_manager": wt_manager,
             "_workspace_path": str(workspace_path),
+            "_worktree_base_path": str(worktree_base),  # Worktrees outside workspace
+            "_logs_base_path": str(config.get_llm_logs_path(run_id)),  # LLM logs outside workspace
             "orch_config": config,
         }
 

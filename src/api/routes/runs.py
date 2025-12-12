@@ -574,17 +574,43 @@ async def restart_run(run_id: str):
     # CRITICAL: Reinitialize _wt_manager after loading from DB
     # The _wt_manager object is not serializable, so we must recreate it
     # WITHOUT THIS, workers fall back to main workspace and files leak!
-    if workspace_path:
+    workspace_path = state.get("_workspace_path", "")
+    worktree_base_path = state.get("_worktree_base_path")  # Path outside workspace
+    logs_base_path = state.get("_logs_base_path")  # Path outside workspace
+    
+    # Get or create config for path generation
+    from config import OrchestratorConfig
+    config = state.get("orch_config") or OrchestratorConfig()
+    
+    if workspace_path and worktree_base_path:
         workspace_path_obj = Path(workspace_path)
-        worktree_base = workspace_path_obj / ".worktrees"
-        worktree_base.mkdir(exist_ok=True)
+        worktree_base = Path(worktree_base_path)
+        worktree_base.mkdir(parents=True, exist_ok=True)
         state["_wt_manager"] = WorktreeManager(
             repo_path=workspace_path_obj,
             worktree_base=worktree_base
         )
         logger.info(f"   Restored _wt_manager at: {worktree_base}")
+    elif workspace_path:
+        # OLD RUN: Generate NEW paths using config (outside workspace!)
+        workspace_path_obj = Path(workspace_path)
+        worktree_base = config.get_worktree_base(run_id)
+        worktree_base.mkdir(parents=True, exist_ok=True)
+        state["_wt_manager"] = WorktreeManager(
+            repo_path=workspace_path_obj,
+            worktree_base=worktree_base
+        )
+        # Update state with new paths for future restarts
+        state["_worktree_base_path"] = str(worktree_base)
+        logger.info(f"   Generated new worktree path for old run: {worktree_base}")
     else:
         logger.warning(f"   ⚠️ _workspace_path not found - workers will use fallback!")
+    
+    # Also fix logs path for old runs
+    if workspace_path and not logs_base_path:
+        logs_base_path = str(config.get_llm_logs_path(run_id))
+        state["_logs_base_path"] = logs_base_path
+        logger.info(f"   Generated new logs path for old run: {logs_base_path}")
 
     # Rebuild run_config
     run_config = {

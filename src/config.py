@@ -113,5 +113,38 @@ class OrchestratorConfig:
     checkpoint_dir: str = "./checkpoints"
     checkpoint_mode: str = "sqlite"  # "sqlite" or "memory"
     
+    # Framework data paths (OUTSIDE agent workspaces to avoid gitignore conflicts)
+    # Set to absolute path, e.g., "F:/coding/agent-framework/run-data"
+    # If None, defaults to agent-framework/run-data directory
+    run_data_base_path: Optional[str] = "F:/coding/agent-stuff/run-data"
+    
     # Dev/Test flags
     mock_mode: bool = False
+    
+    def get_run_data_path(self, run_id: str) -> "Path":
+        """Get the path for storing run-specific data (worktrees, logs).
+        
+        Structure: {run_data_base_path}/{run_id}/
+            ├── worktrees/
+            └── llm_logs/
+        """
+        from pathlib import Path
+        
+        if self.run_data_base_path:
+            base = Path(self.run_data_base_path)
+        else:
+            # Default: agent-framework/run-data
+            base = Path(__file__).parent.parent / "run-data"
+        
+        run_path = base / run_id
+        run_path.mkdir(parents=True, exist_ok=True)
+        return run_path
+    
+    def get_worktree_base(self, run_id: str) -> "Path":
+        """Get worktree base path for a run."""
+        return self.get_run_data_path(run_id) / "worktrees"
+    
+    def get_llm_logs_path(self, run_id: str) -> "Path":
+        """Get LLM logs path for a run."""
+        return self.get_run_data_path(run_id) / "llm_logs"
+

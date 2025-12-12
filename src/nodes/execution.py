@@ -82,7 +82,8 @@ async def _execute_react_loop(
     # Log request for debugging
     try:
         workspace_path = state.get("_workspace_path")
-        stats = log_llm_request(task.id, inputs["messages"], tools, {}, workspace_path=workspace_path)
+        logs_base_path = state.get("_logs_base_path")  # Logs outside workspace
+        stats = log_llm_request(task.id, inputs["messages"], tools, {}, workspace_path=workspace_path, logs_base_path=logs_base_path)
         logger.info(f"  [LOG] Request: {stats['message_count']} msgs, {stats['total_chars']} chars (~{stats['estimated_tokens']} tokens)")
         logger.info(f"  [LOG] Tools: {stats['tool_count']}, Log: {stats['log_file']}")
 
@@ -152,7 +153,8 @@ async def _execute_react_loop(
             )
 
         workspace_path = state.get("_workspace_path")
-        result_path = log_llm_response(task.id, {"messages": []}, [], status="failed", workspace_path=workspace_path)
+        logs_base_path = state.get("_logs_base_path")  # Logs outside workspace
+        result_path = log_llm_response(task.id, {"messages": []}, [], status="failed", workspace_path=workspace_path, logs_base_path=logs_base_path)
 
         return WorkerResult(
             status="failed",
@@ -345,7 +347,8 @@ async def _execute_react_loop(
 
     # Log the response
     workspace_path = state.get("_workspace_path")
-    result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path)
+    logs_base_path = state.get("_logs_base_path")  # Logs outside workspace
+    result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path, logs_base_path=logs_base_path)
     logger.info(f"  [LOG] Files modified: {files_modified}")
 
     # CRITICAL: Strict Success Check for BUILD tasks

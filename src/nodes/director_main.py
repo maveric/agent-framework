@@ -219,6 +219,7 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                         fix_task_id = f"task_{uuid.uuid4().hex[:8]}"
                         fix_task = Task(
                             id=fix_task_id,
+                            title=f"Fix {task.component} (QA feedback)",
                             component=task.component,
                             phase=TaskPhase.BUILD,
                             status=TaskStatus.PLANNED,

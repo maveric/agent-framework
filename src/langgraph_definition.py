@@ -114,17 +114,27 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
     # Initialize git repository in workspace
     await initialize_git_repo(workspace_path)
     
-    # Create worktree manager for workspace
-    worktree_base = workspace_path / ".worktrees"
-    worktree_base.mkdir(exist_ok=True)
+    # Ensure config exists for path methods
+    if config is None:
+        config = OrchestratorConfig()
+    
+    # Generate run_id first (needed for path methods)
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+    
+    # Create worktree manager with path OUTSIDE workspace (avoids gitignore conflicts)
+    worktree_base = config.get_worktree_base(run_id)
+    worktree_base.mkdir(parents=True, exist_ok=True)
     
     wt_manager = WorktreeManager(
         repo_path=workspace_path,
         worktree_base=worktree_base
     )
     
+    # Get logs path (also OUTSIDE workspace)
+    logs_base_path = config.get_llm_logs_path(run_id)
+    
     initial_state = {
-        "run_id": f"run_{uuid.uuid4().hex[:8]}",
+        "run_id": run_id,
         "objective": objective,
         "spec": spec or {},
         "tasks": [],
@@ -137,10 +147,11 @@ async def start_run(objective: str, workspace: str = "../workspace", spec: dict 
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat(),
         "mock_mode": config.mock_mode if config else False,
-        # Store WorktreeManager instance and workspace path
-        "_wt_manager": wt_manager,
+        # Store WorktreeManager instance and paths
         "_wt_manager": wt_manager,
         "_workspace_path": str(workspace_path),
+        "_worktree_base_path": str(worktree_base),  # Worktrees outside workspace
+        "_logs_base_path": str(logs_base_path),  # LLM logs outside workspace
         "orch_config": config,  # Store config (public key to ensure persistence)
     }
     

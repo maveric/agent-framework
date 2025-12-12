@@ -213,7 +213,11 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
             
             # Check for test results in files_modified (aar)
             if task.get("aar") and task["aar"].get("files_modified"):
-                worktree_path = Path(workspace_path) / ".worktrees" / task_id
+                worktree_base = state.get("_worktree_base_path")
+                if worktree_base:
+                    worktree_path = Path(worktree_base) / task_id
+                else:
+                    worktree_path = Path(workspace_path) / ".worktrees" / task_id
                 
                 for file in task["aar"]["files_modified"]:
                     if "test" in file.lower() and file.endswith((".md", ".txt", ".log")):
@@ -242,7 +246,12 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 task_filename = task.get("component", task_id)
                 expected_file = f"agents-work/test-results/test-{task_filename}.md"
                 
-                worktree_path = Path(workspace_path) / ".worktrees" / task_id
+                # Get worktree base path (may not have been set if no AAR files_modified)
+                worktree_base = state.get("_worktree_base_path")
+                if worktree_base:
+                    worktree_path = Path(worktree_base) / task_id
+                else:
+                    worktree_path = Path(workspace_path) / ".worktrees" / task_id
                 worktree_expected = worktree_path / expected_file
                 main_expected = Path(workspace_path) / expected_file
 

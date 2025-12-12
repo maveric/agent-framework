@@ -228,8 +228,9 @@ Be specific enough that workers can implement without ambiguity."""),
     ])
 
     # LOG: Director spec creation request
-    if workspace_path:
-        log_dir = Path(workspace_path) / ".llm_logs" / "director"
+    logs_base_path = state.get("_logs_base_path")
+    if logs_base_path:
+        log_dir = Path(logs_base_path) / "director"
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         request_log = log_dir / f"spec_request_{timestamp}.json"
@@ -247,7 +248,7 @@ Be specific enough that workers can implement without ambiguity."""),
         spec_content = str(spec_response.content)
 
         # LOG: Director spec response
-        if workspace_path:
+        if logs_base_path:
             response_log = log_dir / f"spec_response_{timestamp}.json"
             with open(response_log, 'w', encoding='utf-8') as f:
                 json.dump({

@@ -343,9 +343,9 @@ SAFE patterns:
     logger.info("Calling LLM for plan integration with scope validation")
 
     # LOG: Director integration request
-    workspace_path = state.get("_workspace_path")
-    if workspace_path:
-        log_dir = Path(workspace_path) / ".llm_logs" / "director"
+    logs_base_path = state.get("_logs_base_path")
+    if logs_base_path:
+        log_dir = Path(logs_base_path) / "director"
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         request_log = log_dir / f"integration_request_{timestamp}.json"
@@ -370,7 +370,7 @@ SAFE patterns:
         ), config={"callbacks": []})
 
         # LOG: Director integration response
-        if workspace_path:
+        if logs_base_path:
             response_log = log_dir / f"integration_response_{timestamp}.json"
             with open(response_log, 'w', encoding='utf-8') as f:
                 json.dump({

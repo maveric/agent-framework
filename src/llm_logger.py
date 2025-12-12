@@ -12,14 +12,20 @@ from typing import Any, Dict, List, Optional
 # Default log directory (fallback if workspace not provided)
 DEFAULT_LOG_DIR = Path("llm_logs")
 
-def _get_log_dir(task_id: str, workspace_path: Optional[str] = None) -> Path:
+def _get_log_dir(task_id: str, workspace_path: Optional[str] = None, logs_base_path: Optional[str] = None) -> Path:
     """
     Get the log directory for a task.
     
-    If workspace_path is provided, logs go to: workspace/.llm_logs/{task_id}/
-    Otherwise, logs go to: llm_logs/
+    Priority:
+    1. logs_base_path (from config.get_llm_logs_path()) - preferred
+    2. workspace_path/.llm_logs/{task_id}/ - legacy, inside workspace
+    3. DEFAULT_LOG_DIR - fallback
     """
-    if workspace_path:
+    if logs_base_path:
+        # Use external logs directory (preferred - outside workspace)
+        log_dir = Path(logs_base_path) / task_id
+    elif workspace_path:
+        # Legacy: logs inside workspace (may cause gitignore conflicts)
         log_dir = Path(workspace_path) / ".llm_logs" / task_id
     else:
         log_dir = DEFAULT_LOG_DIR
@@ -32,7 +38,8 @@ def log_llm_request(
     messages: List[Any],
     tools: List[Any],
     config: Dict[str, Any] = None,
-    workspace_path: Optional[str] = None
+    workspace_path: Optional[str] = None,
+    logs_base_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Log an LLM request and return stats.
@@ -42,13 +49,14 @@ def log_llm_request(
         messages: Messages being sent to LLM
         tools: Tools available to LLM
         config: Optional config dict
-        workspace_path: Path to workspace (for organized logging)
+        workspace_path: Path to workspace (legacy, logs inside workspace)
+        logs_base_path: Path to logs directory (preferred, outside workspace)
     
     Returns:
         dict with 'total_chars', 'estimated_tokens', 'message_count', 'tool_count'
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = _get_log_dir(task_id, workspace_path)
+    log_dir = _get_log_dir(task_id, workspace_path, logs_base_path)
     log_file = log_dir / f"request_{timestamp}.json"
     
     # Calculate stats
@@ -117,7 +125,8 @@ def log_llm_response(
     result: Any,
     files_modified: List[str] = None,
     status: str = "unknown",
-    workspace_path: Optional[str] = None
+    workspace_path: Optional[str] = None,
+    logs_base_path: Optional[str] = None
 ) -> str:
     """
     Log the LLM response and execution results.
@@ -127,13 +136,14 @@ def log_llm_response(
         result: Agent result object
         files_modified: List of files that were modified
         status: Task status (complete/failed)
-        workspace_path: Path to workspace (for organized logging)
+        workspace_path: Path to workspace (legacy, logs inside workspace)
+        logs_base_path: Path to logs directory (preferred, outside workspace)
     
     Returns:
         Path to log file
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = _get_log_dir(task_id, workspace_path)
+    log_dir = _get_log_dir(task_id, workspace_path, logs_base_path)
     log_file = log_dir / f"response_{timestamp}.json"
     
     # Extract messages from result

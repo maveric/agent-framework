@@ -172,7 +172,14 @@ class AsyncWorktreeManager:
         
         # Git operations
         try:
-            # Create branch from main (ignore error if exists)
+            # CRITICAL: Delete old branch if exists (for retries)
+            # This ensures retries start fresh from current main, not old conflicting state
+            await self._run_git(
+                ["branch", "-D", branch_name],
+                check=False  # Ignore if doesn't exist
+            )
+            
+            # Create branch from main (fresh, with latest main code)
             await self._run_git(
                 ["branch", branch_name, self.main_branch],
                 check=False
@@ -225,14 +232,17 @@ class AsyncWorktreeManager:
         
         wt_path = info.worktree_path
         
-        # Stage files
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Stage files first
         if files:
             for f in files:
                 await self._run_git(["add", f], cwd=wt_path)
         else:
             await self._run_git(["add", "-A"], cwd=wt_path)
         
-        # Check if there are changes
+        # Check if there are changes to commit
         returncode, _, _ = await self._run_git(
             ["diff", "--cached", "--quiet"],
             cwd=wt_path,
@@ -241,6 +251,39 @@ class AsyncWorktreeManager:
         
         if returncode == 0:
             return ""  # No changes
+        
+        # CRITICAL: Rebase on main BEFORE committing to get latest changes
+        # This surfaces conflicts early when agent still has context
+        logger.info(f"  📥 Rebasing worktree on {self.main_branch} before commit...")
+        
+        # Fetch latest main (in case it's changed since worktree was created)
+        await self._run_git(["fetch", ".", f"{self.main_branch}:{self.main_branch}"], cwd=wt_path, check=False)
+        
+        # Stash our staged changes temporarily
+        await self._run_git(["stash", "--include-untracked"], cwd=wt_path, check=False)
+        
+        # Rebase on main
+        rebase_code, rebase_out, rebase_err = await self._run_git(
+            ["rebase", self.main_branch],
+            cwd=wt_path,
+            check=False
+        )
+        
+        # Pop stash to restore our changes
+        await self._run_git(["stash", "pop"], cwd=wt_path, check=False)
+        
+        # Re-stage files after rebase
+        if files:
+            for f in files:
+                await self._run_git(["add", f], cwd=wt_path)
+        else:
+            await self._run_git(["add", "-A"], cwd=wt_path)
+        
+        if rebase_code != 0:
+            logger.warning(f"  ⚠️ Rebase had issues (may have conflicts): {rebase_out} {rebase_err}")
+            # Continue anyway - conflicts will appear in the commit/merge
+        else:
+            logger.info(f"  ✅ Rebase successful - worktree synced with {self.main_branch}")
         
         # Commit
         await self._run_git(["commit", "-m", message], cwd=wt_path)
@@ -349,14 +392,18 @@ class AsyncWorktreeManager:
                 info.merged_at = datetime.now()
                 return MergeResult(success=True, task_id=task_id)
             else:
-                # Conflict - abort merge
+                # Merge failed - capture full error info
+                error_details = f"stdout: {stdout}\nstderr: {stderr}" if stdout or stderr else "No error output captured"
+                logger.error(f"❌ MERGE FAILED for {task_id}: return={returncode}, {error_details}")
+                
+                # Abort merge if in progress
                 await self._run_git(["merge", "--abort"], check=False)
             
                 return MergeResult(
                     success=False,
                     task_id=task_id,
                     conflict=True,
-                    error_message=stderr
+                    error_message=f"return={returncode}: {error_details}"
                 )
     
     async def cleanup_worktree(self, task_id: str) -> None:
@@ -397,9 +444,7 @@ async def initialize_git_repo_async(repo_path: Path) -> None:
         
         # Create default .gitignore
         gitignore_path = repo_path / ".gitignore"
-        gitignore_content = """# Agent Framework Internal Directories
-.llm_logs/
-.worktrees/
+        gitignore_content = """# Agent Framework Logs (worktrees and llm_logs now stored externally)
 logs/
 
 # Git
