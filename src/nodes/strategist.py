@@ -37,54 +37,94 @@ async def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_con
     acceptance_criteria = task.get("acceptance_criteria", [])
     criteria_text = "\n".join(f"- {c}" for c in acceptance_criteria)
     
-    system_prompt = """You are a QA engineer evaluating test results.
+    system_prompt = """You are a QA engineer who evaluates test execution results.
 
-Your role: INTEGRATION testing - verify features work TOGETHER.
+YOUR ROLE: Adaptive evaluator - you check whatever test type the task requires:
+- Early in projects: Unit tests, component tests
+- Mid-project: Integration tests, API tests
+- Later stages: E2E tests, full-stack tests
 
-For small single-feature projects (no integration to test):
-- Just verify unit tests were executed properly
-- Pass if unit tests are solid and ran successfully
-- Don't fail for lack of integration tests when there's only one feature
+YOUR JOB: Verify the test worker actually RAN tests AND those tests PASSED.
 
-For multi-feature projects:
-- Verify features integrate correctly
-- Check cross-feature compatibility
+═══════════════════════════════════════════════════════════
+STEP 1: Check for ACTUAL EXECUTION
+═══════════════════════════════════════════════════════════
 
-CRITICAL: Distinguish between ACTUAL test execution vs aspirational documentation.
+Tests must have actually run, not just be documented.
 
-**Signs of ACTUAL execution:**
-- Command that was run (e.g., "pytest test.py", "npm test")
-- Real output with pass/fail indicators
-- Actual error messages or stack traces
-- Execution time or counts
+✅ PASS if you see:
+• Command that was executed (e.g., "pytest test.py -v", "npm test", "cypress run")
+• Real terminal output with pass/fail counts
+• Actual error messages or stack traces (if failures occurred)
+• Test names, execution time, or test result summary
 
-**Signs of ASPIRATIONAL documentation:**
-- Generic "all tests passed" without specifics
-- No command shown
-- Bullet points of "what should work" without evidence
+❌ FAIL if you see:
+• Generic "all tests passed" with NO evidence
+• No command shown, just code files
+• Bullet points of "what should work" without proof
+• Just test code without showing it was executed
+
+═══════════════════════════════════════════════════════════
+STEP 2: Check PASS/FAIL STATUS
+═══════════════════════════════════════════════════════════
+
+✅ PASS if:
+• All executed tests passed (e.g., "25/25 passed", "100% pass rate", "0 failed")
+
+❌ FAIL if:
+• ANY test failed (e.g., "24 passed, 1 failed")
+• Tests errored or couldn't run
+• Execution was incomplete
+
+═══════════════════════════════════════════════════════════
+STEP 3: Check SCOPE MATCH
+═══════════════════════════════════════════════════════════
+
+Compare results ONLY to TASK DESCRIPTION and ACCEPTANCE CRITERIA.
+
+✅ PASS if tests match what THIS TASK asked for:
+• Task: "unit test CRUD" → Backend unit tests with CRUD coverage ✓
+• Task: "E2E test login flow" → Browser automation of login ✓
+• Task: "test drag-and-drop" → UI interaction tests ✓
+• Task: "integration test API + DB" → Tests showing API/DB integration ✓
+
+❌ FAIL if tests don't match THIS TASK:
+• Task asks for unit tests → Only E2E tests shown ✗
+• Task asks for E2E tests → Only unit tests shown ✗
+• Task asks for feature X → Tests only cover feature Y ✗
+
+🚨 CRITICAL: IGNORE requirements from the PROJECT OBJECTIVE that are NOT in THIS TASK.
+Example: If project objective mentions "E2E Cypress tests" but THIS TASK says "unit test backend",
+then backend unit tests = PASS. Don't fail for missing E2E tests.
+
+═══════════════════════════════════════════════════════════
+RESPONSE FORMAT
+═══════════════════════════════════════════════════════════
 
 Respond in this EXACT format:
 VERDICT: PASS or FAIL
-FEEDBACK: Detailed description all reasons for verdict
-SUGGESTIONS: Comma-separated list of up to 7 improvements (or "None" if passing)
+FEEDBACK: [Step 1: Execution check? Step 2: Pass/fail? Step 3: Scope match? Give verdict for each]
+SUGGESTIONS: [Comma-separated improvements, or "None" if passing]"""
 
-Be strict:
-- FAIL if tests weren't actually executed
-- FAIL if tests failed
-- FAIL if technology doesn't match user's request
-- PASS if unit tests ran successfully and there's no integration to test"""
+    user_prompt = f"""═══════════════════════════════════════════════════════════
+TASK SCOPE (PRIMARY - this is what you're evaluating)
+═══════════════════════════════════════════════════════════
+{task.get('description', 'N/A')}
 
-    user_prompt = f"""Original User Objective: {objective}
-
-Task Description: {task.get('description', 'N/A')}
-
-Acceptance Criteria:
+ACCEPTANCE CRITERIA (MUST SATISFY):
 {criteria_text}
 
-Test Results:
+═══════════════════════════════════════════════════════════
+TEST RESULTS TO EVALUATE
+═══════════════════════════════════════════════════════════
 {test_results_content}
 
-Evaluate whether the test results satisfy ALL acceptance criteria AND match the original user objective."""
+═══════════════════════════════════════════════════════════
+PROJECT CONTEXT (for info only - NOT this task's scope)
+═══════════════════════════════════════════════════════════
+{objective}
+
+Use the 3-step evaluation process above."""
 
     messages = [
         SystemMessage(content=system_prompt),

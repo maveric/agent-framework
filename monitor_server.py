@@ -213,14 +213,23 @@ def main():
             time.sleep(0.1)
             
     except KeyboardInterrupt:
-        log("Monitor interrupted by user (Ctrl+C)")
-        log("Terminating server...")
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            log("Server didn't terminate, killing...")
-            proc.kill()
+        # Check if subprocess is still alive
+        # On Windows, subprocess death can sometimes raise KeyboardInterrupt
+        if proc.poll() is None:
+            # Process still running - this is a real Ctrl+C
+            log("Monitor interrupted by user (Ctrl+C)")
+            log("Terminating server...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                log("Server didn't terminate, killing...")
+                proc.kill()
+        else:
+            # Process already dead - not a real Ctrl+C, subprocess crashed
+            log("Server process terminated unexpectedly (triggered KeyboardInterrupt)")
+            log(f"Exit code: {format_exit_code(proc.returncode)}")
+            log("This is NOT a user Ctrl+C - the subprocess crashed first")
 
 
 if __name__ == "__main__":

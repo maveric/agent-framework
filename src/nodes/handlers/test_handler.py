@@ -44,7 +44,7 @@ async def _test_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     # QA looks for: agents-work/test-results/test-{component}.md
     task_filename = task.component if task.component else task.id
 
-    system_prompt = f"""You are a QA engineer who writes and runs UNIT TESTS for this specific feature.
+    system_prompt = f"""You are a QA engineer who writes and runs TESTS for this specific feature.
 
 🚨🚨🚨 YOUR #1 MANDATORY REQUIREMENT - READ THIS FIRST 🚨🚨🚨
 **BEFORE YOU FINISH, YOU MUST CREATE THIS FILE:**
@@ -73,7 +73,7 @@ tests/test_api.py::test_create_task PASSED
 ```
 
 ## Summary
-✅ All tests passed (2/2)
+✅ All tests passed (N/M)
 ```
 
 **DO NOT PROCEED WITHOUT WRITING THIS FILE. QA CHECKS FOR IT AUTOMATICALLY.**
@@ -124,20 +124,43 @@ finally:
 ```
 
     **BROWSER/UI TESTING**:
-    - Use `playwright` (python) for browser automation.
-    - MUST use `headless=True` to avoid GUI issues.
-    - Example pattern:
-      ```python
-      from playwright.sync_api import sync_playwright
-      # ... inside test harness ...
-      with sync_playwright() as p:
-          browser = p.chromium.launch(headless=True)
-          page = browser.new_page()
-          page.goto("http://localhost:5000")
-          # Use auto-waiting selectors: page.click("text=Add Task")
-          # Verify state: assert page.is_visible(".task-card")
-          browser.close()
-      ```
+    - Choose appropriate tool: Cypress (JS/TS), Playwright (Python/JS), Selenium, or TestCafe
+    - **Check project** for existing setup: look for `cypress/`, `playwright.config.js`, or test dependencies
+    - If no preference in acceptance criteria, choose based on project stack:
+      - React/Vue/Vite projects: Cypress or Vitest with Testing Library
+      - Python backend + frontend: Playwright (Python)
+      - Full JavaScript: Cypress (easier auto-waits)
+    - **MUST run headless** to avoid GUI issues (e.g., `headless: true`, `--headless`)
+    - **Use test harness pattern** to start/stop servers
+    - Focus on **critical user paths** (create, read, update, delete)
+    - Verify both **UI state** and **API persistence**
+    
+    **Example patterns** (adapt to chosen tool):
+    ```python
+    # Playwright (Python) - if backend is Python
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto("http://localhost:3000")
+        page.click("text=Add Task")
+        assert page.is_visible(".task-card")
+        browser.close()
+    ```
+    
+    ```javascript
+    // Cypress (JavaScript) - if project is JS/React
+    describe('Task Flow', function() {{
+      it('creates a task', function() {{
+        cy.visit('http://localhost:3000')
+        cy.get('[data-testid="add-task"]').click()
+        cy.get('#task-title').type('Test Task')
+        cy.get('[data-testid="submit"]').click()
+        cy.contains('Test Task').should('be.visible')
+      }})
+    }})
+    ```
+    
     **CRITICAL INSTRUCTION**:
     The agents-work/ folder is for agent artifacts, NOT project code.
     Write test files to the project root, but test RESULTS **must** be written to to agents-work/test-results/test-{task_filename}.md or your task will not pass QA.
