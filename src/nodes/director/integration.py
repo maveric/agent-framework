@@ -173,6 +173,16 @@ Resolve each dependency query to a task title.""")
 
         # Apply resolutions to task dependencies
         title_to_id_map = {t["title"].lower(): t["id"] for t in all_tasks_for_matching}
+        
+        # FALLBACK: Find the last foundation task for MISSING dependencies
+        foundation_tasks = [t for t in all_tasks_for_matching if t.get("component", "").lower() in ["foundation", "infrastructure"]]
+        last_foundation_task_id = None
+        if foundation_tasks:
+            # Find the one that other foundation tasks depend on (likely the last one)
+            # Simple heuristic: pick the last one in the list (often the final task)
+            last_foundation_task_id = foundation_tasks[-1]["id"]
+            last_foundation_title = foundation_tasks[-1]["title"]
+            logger.info(f"🔧 Fallback foundation task: '{last_foundation_title}' ({last_foundation_task_id})")
 
         for resolution in response.resolutions:
             # Find the task that has this query
@@ -183,10 +193,16 @@ Resolve each dependency query to a task title.""")
             if not task:
                 continue
 
-            # Handle missing dependencies
+            # Handle missing dependencies - FALLBACK to last foundation task
             if resolution.matched_task_title == "MISSING":
-                logger.warning(f"❌ MISSING DEPENDENCY: Task '{resolution.task_title}' needs '{resolution.query}' but no task provides it!")
-                # Don't add to depends_on - this will cause the task to be blocked
+                logger.warning(f"⚠️ MISSING DEPENDENCY: Task '{resolution.task_title}' needs '{resolution.query}' but no task provides it!")
+                
+                # FALLBACK: Link to the last foundation task instead of leaving it floating
+                if last_foundation_task_id and last_foundation_task_id not in task.depends_on:
+                    task.depends_on.append(last_foundation_task_id)
+                    logger.info(f"🔧 FALLBACK: Linked '{resolution.task_title}' to last foundation task instead")
+                else:
+                    logger.warning(f"   No fallback available - task may run without proper dependencies!")
                 continue
 
             # Find the matched task ID
