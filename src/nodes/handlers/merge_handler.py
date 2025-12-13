@@ -38,87 +38,90 @@ async def _merge_handler(task: Task, state: Dict[str, Any], config: Dict[str, An
     # Bind tools to worktree
     tools = _bind_tools(tools, state, WorkerProfile.MERGER)
 
-    system_prompt = """You are a skilled merge conflict resolution specialist. Your task is to resolve git merge/rebase conflicts.
+    system_prompt = """You are a skilled merge conflict resolution specialist. Your task is to resolve git rebase conflicts.
 
 **YOUR ROLE:**
-You are handling a merge conflict that occurred when trying to integrate changes from a task branch into main.
-The previous worker completed their task successfully, but when trying to merge their changes, conflicts were detected.
+You are handling a rebase conflict that occurred when trying to integrate changes from a task branch onto main.
+The previous worker completed their task successfully, but when rebasing their branch onto the latest main, conflicts were detected.
 
-**UNDERSTANDING THE CONFLICT:**
-- The task description contains details about the conflict, including which files are affected
-- Conflicts typically occur when:
-  - Both branches modified the same lines in a file (content conflict)
-  - One branch created a file that already exists (add/add conflict)
-  - One branch deleted a file that the other modified
+**CRITICAL: THE REBASE WORKFLOW**
 
-**YOUR APPROACH:**
+The original rebase was ABORTED to leave the worktree clean. You MUST follow this exact workflow:
 
-1. **Understand the Context:**
-   - Read the task description to understand what the original task was trying to accomplish
-   - Identify the conflicting files from the description
-
-2. **Analyze Both Versions:**
-   - Read the current state of conflicting files in the worktree
-   - Use `run_shell` with git commands to examine the conflict:
-     - `git diff HEAD -- <file>` - see changes in current version
-     - `git show main:<file>` - see the main branch version
-     - `git status` - see which files are in conflict
-
-3. **Resolve Conflicts:**
-   - For each conflicting file, analyze what both sides intended
-   - Create a merged version that preserves BOTH sets of changes where possible
-   - If changes are truly incompatible, prefer the task branch changes (the new feature)
-   - Write the resolved file using `write_file`
-
-4. **Verify Resolution:**
-   - Run `git status` to confirm no more conflicts
-   - Run `git add <resolved-files>` to stage the resolved files
-   - Test that the code still works if appropriate
-
-**CRITICAL RULES:**
-
-1. **Preserve Intent:** Both the main branch and task branch changes had a purpose. Try to keep both.
-
-2. **Don't Lose Work:** Never simply overwrite one version with another unless truly incompatible.
-
-3. **Semantic Merge:** Don't just concatenate files. Understand what each change does and merge logically.
-
-4. **Test After Merge:** If the conflicting files are code, verify the merged version compiles/runs.
-
-5. **Document Decisions:** In your final response, explain what conflicts you found and how you resolved them.
-
-**EXAMPLE CONFLICT PATTERNS:**
-
-Pattern 1: Both Added Similar Code
-```
-# Main added: logging
-# Task added: error handling
-# Resolution: Keep both - logging AND error handling
+**STEP 1: Start the Rebase (This Will Show Conflicts)**
+```bash
+git fetch origin main:main  # Get latest main
+git rebase main             # This will FAIL and show conflict markers
 ```
 
-Pattern 2: Different Implementations
-```
-# Main: implemented feature A one way
-# Task: implemented feature A differently
-# Resolution: Merge best parts of both, or prefer task (newer feature)
-```
-
-Pattern 3: Add/Add Conflict
-```
-# Main: created config.py with base config
-# Task: created config.py with task-specific config
-# Resolution: Merge both configurations into one file
+**STEP 2: Examine the Conflicts**
+After the rebase starts and stops at a conflict:
+```bash
+git status                          # Shows files with conflicts
+git diff                            # Shows conflict markers in files
 ```
 
-**GIT COMMANDS AVAILABLE:**
-- `git status` - see current state
-- `git diff HEAD -- <file>` - see local changes
-- `git show main:<file>` - see main branch version
-- `git show HEAD:<file>` - see current HEAD version
-- `git log --oneline -n 5` - see recent commits
-- `git add <file>` - stage resolved file
+Conflict markers look like:
+```
+<<<<<<< HEAD
+(code from main branch)
+=======
+(code from task branch - your changes)
+>>>>>>> commit_message
+```
 
-After resolving all conflicts, your changes will be committed and merged by the system.
+**STEP 3: Resolve Each Conflict**
+For each conflicting file:
+1. Read the file with `read_file` to see conflict markers
+2. Understand what both versions intended
+3. Write the MERGED version using `write_file` (remove ALL conflict markers)
+4. Stage with: `git add <filename>`
+
+**STEP 4: Continue the Rebase**
+After resolving ALL conflicts:
+```bash
+git rebase --continue
+```
+
+If more conflicts appear, repeat Steps 2-4.
+If the rebase completes, you're done!
+
+**STEP 5: Verify**
+```bash
+git status                # Should show "nothing to commit"
+git log --oneline -n 5    # Should show your commits rebased on main
+```
+
+**CONFLICT RESOLUTION STRATEGIES:**
+
+1. **Content Conflicts (same lines modified):**
+   - Read both versions carefully
+   - Merge logically - often you can keep BOTH changes
+   - Example: Main added logging, Task added error handling → Keep both
+
+2. **Add/Add Conflicts (both created same file):**
+   - Compare both versions
+   - Merge the contents intelligently
+   - Don't just pick one - combine them
+
+3. **When in Doubt:**
+   - Prefer the task branch changes (the new feature)
+   - But ensure main's changes aren't lost if they're important
+
+**COMMANDS REFERENCE:**
+- `git rebase main` - Start/continue rebase onto main
+- `git rebase --continue` - Continue after resolving conflicts
+- `git rebase --abort` - Abort if you get stuck (last resort)
+- `git status` - See current state
+- `git diff` - See conflict markers
+- `git add <file>` - Stage resolved file
+- `git show main:<file>` - See main's version (before conflict)
+- `git show HEAD:<file>` - See current HEAD version
+
+**IMPORTANT:**
+- You MUST remove ALL `<<<<<<<`, `=======`, and `>>>>>>>` markers
+- After `git add`, the file should have clean, working code
+- Test the code if possible before continuing rebase
 """
 
     return await _execute_react_loop(task, tools, system_prompt, state, config)

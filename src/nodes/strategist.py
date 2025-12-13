@@ -96,6 +96,8 @@ After you resolve the conflicts, the system will commit and merge your changes.
         "updated_at": datetime.now().isoformat(),
         "started_at": None,
         "completed_at": None,
+        # CRITICAL: Tell worker to use original task's worktree (has the branch with changes)
+        "_use_worktree_task_id": original_id,
         # Custom fields for merge context
         "_merge_context": {
             "original_task_id": original_id,
@@ -530,6 +532,9 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 # Rebase on main, then merge (only after QA passes)
                 wt_manager = state.get("_wt_manager")
                 if wt_manager and not mock_mode:
+                    # Check if this is already a merge task (to prevent infinite chains)
+                    is_merge_task = task.get("assigned_worker_profile") == WorkerProfile.MERGER.value
+
                     # Step 1: Rebase on main to handle concurrent edits
                     try:
                         logger.info(f"  [REBASE] Starting rebase for {task_id}...")
@@ -537,7 +542,8 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
 
                         if not rebase_result.success:
                             # Rebase failed (conflicts) - spawn merge agent instead of failing
-                            if rebase_result.conflict:
+                            # BUT: Don't spawn merge for merge tasks (prevents infinite chains)
+                            if rebase_result.conflict and not is_merge_task:
                                 logger.warning(f"  [REBASE CONFLICT] Spawning merge agent for {task_id}")
 
                                 # Create merge task
@@ -563,6 +569,12 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                     f"\n\n[MERGE PENDING] Rebase conflict detected. "
                                     f"Merge agent {merge_task['id']} will resolve conflicts."
                                 )
+                            elif rebase_result.conflict and is_merge_task:
+                                # Merge task also has conflict - don't spawn another merge (Phoenix retry)
+                                logger.error(f"  [MERGE TASK CONFLICT] Merge task {task_id} also has conflicts - Phoenix retry")
+                                task["status"] = "pending_failed"
+                                task["qa_verdict"]["passed"] = False
+                                task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE TASK CONFLICT: {rebase_result.error_message}"
                             else:
                                 # Non-conflict error - fail the task for Phoenix retry
                                 logger.error(f"  [REBASE FAILED]: {rebase_result.error_message}")
@@ -577,7 +589,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 merge_result = await wt_manager.merge_to_main(task_id)
                                 if merge_result.success:
                                     logger.info(f"  [MERGED] Task {task_id} merged successfully to main")
-                                elif merge_result.conflict:
+                                elif merge_result.conflict and not is_merge_task:
                                     # Merge conflict after successful rebase - spawn merge agent
                                     logger.warning(f"  [MERGE CONFLICT] Spawning merge agent for {task_id}")
 
@@ -603,6 +615,12 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                         f"\n\n[MERGE PENDING] Merge conflict detected. "
                                         f"Merge agent {merge_task['id']} will resolve conflicts."
                                     )
+                                elif merge_result.conflict and is_merge_task:
+                                    # Merge task also has conflict - don't spawn another merge (Phoenix retry)
+                                    logger.error(f"  [MERGE TASK CONFLICT] Merge task {task_id} also has conflicts - Phoenix retry")
+                                    task["status"] = "pending_failed"
+                                    task["qa_verdict"]["passed"] = False
+                                    task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE TASK CONFLICT: {merge_result.error_message}"
                                 else:
                                     # Non-conflict merge failure
                                     logger.error(f"  [MERGE FAILED]: {merge_result.error_message}")
