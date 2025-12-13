@@ -208,32 +208,33 @@ async def lifespan(app: FastAPI):
             logger.info("✅ AsyncPostgresSaver initialized successfully")
 
         elif checkpoint_mode == "mysql":
-            # MySQL checkpointer (async-friendly on Windows)
-            from mysql_checkpointer import AsyncMySQLSaver
+            # MySQL checkpointer (using official langgraph-checkpoint-mysql package)
+            # Install with: pip install langgraph-checkpoint-mysql[aiomysql]
+            from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
 
             # Get MySQL connection info from config or environment
+            # Format: mysql://user:password@host:port/database
             mysql_uri = config.mysql_uri or os.getenv("MYSQL_URI")
-
-            if mysql_uri:
-                logger.info(f"Using MySQL checkpointer (from URI)")
-                mysql_checkpointer_cm = AsyncMySQLSaver.from_conn_string(mysql_uri)
-            else:
-                logger.info(f"Using MySQL checkpointer (host: {config.mysql_host}:{config.mysql_port})")
-                mysql_checkpointer_cm = AsyncMySQLSaver.from_params(
-                    host=config.mysql_host,
-                    port=config.mysql_port,
-                    user=config.mysql_user,
-                    password=config.mysql_password,
-                    database=config.mysql_database,
+            
+            if not mysql_uri:
+                # Build URI from individual settings
+                mysql_uri = (
+                    f"mysql://{config.mysql_user}:{config.mysql_password}"
+                    f"@{config.mysql_host}:{config.mysql_port}/{config.mysql_database}"
                 )
-
-            # Store context manager reference for cleanup
-            postgres_checkpointer_cm = mysql_checkpointer_cm  # Reuse variable for cleanup
+            
+            logger.info(f"Using MySQL checkpointer: {config.mysql_host}:{config.mysql_port}/{config.mysql_database}")
+            
+            # AIOMySQLSaver works like AsyncPostgresSaver - context manager pattern
+            mysql_checkpointer_cm = AIOMySQLSaver.from_conn_string(mysql_uri)
+            
+            # Reuse postgres_checkpointer_cm variable for cleanup in finally block
+            postgres_checkpointer_cm = mysql_checkpointer_cm
             api_state.global_checkpointer = await mysql_checkpointer_cm.__aenter__()
 
             # Setup tables (idempotent - safe to call every time)
             await api_state.global_checkpointer.setup()
-            logger.info("✅ AsyncMySQLSaver initialized successfully")
+            logger.info("✅ AIOMySQLSaver (langgraph-checkpoint-mysql) initialized successfully")
 
         elif checkpoint_mode == "sqlite":
             # SQLite checkpointer (default)
