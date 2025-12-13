@@ -54,6 +54,7 @@ async def _execute_react_loop(
         WorkerProfile.TESTER: getattr(orch_config, 'tester_model', None),
         WorkerProfile.RESEARCHER: getattr(orch_config, 'researcher_model', None),
         WorkerProfile.WRITER: getattr(orch_config, 'writer_model', None),
+        WorkerProfile.MERGER: getattr(orch_config, 'merger_model', None),
     }
 
     # Use profile-specific model, or fall back to worker_model

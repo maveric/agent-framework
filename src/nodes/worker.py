@@ -24,7 +24,8 @@ from .handlers import (
     _plan_handler,
     _test_handler,
     _research_handler,
-    _write_handler
+    _write_handler,
+    _merge_handler
 )
 
 logger = logging.getLogger(__name__)
@@ -57,9 +58,15 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
 
     if wt_manager and not state.get("mock_mode", False):
         try:
-            wt_info = await wt_manager.create_worktree(task_id)
+            # MERGE TASK HANDLING: Use the original task's worktree instead of creating new
+            # This is critical because merge tasks need access to the original task's branch
+            # which has the uncommitted changes that caused the conflict
+            use_worktree_from = task_dict.get("_use_worktree_task_id")
+            worktree_task_id = use_worktree_from if use_worktree_from else task_id
+
+            wt_info = await wt_manager.create_worktree(worktree_task_id)
             worktree_path = wt_info.worktree_path
-            logger.info(f"  Created worktree: {worktree_path}")
+            logger.info(f"  Created worktree: {worktree_path}" + (f" (from task {use_worktree_from})" if use_worktree_from else ""))
 
             # TODO: Implement recover_dirty_worktree method for async worktree manager
             # For now, create_worktree handles existing worktrees by syncing with main
@@ -174,5 +181,6 @@ def _get_handler(profile: WorkerProfile) -> Callable:
         WorkerProfile.TESTER: _test_handler,
         WorkerProfile.RESEARCHER: _research_handler,
         WorkerProfile.WRITER: _write_handler,
+        WorkerProfile.MERGER: _merge_handler,
     }
     return handlers.get(profile, _code_handler)

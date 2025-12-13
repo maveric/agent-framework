@@ -7,14 +7,139 @@ QA evaluation node with LLM-based test result evaluation.
 """
 
 import logging
-from typing import Any, Dict
+import uuid
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
 from state import OrchestratorState
 from llm_client import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
+from orchestrator_types import TaskStatus, TaskPhase, WorkerProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _create_merge_task(
+    original_task: Dict[str, Any],
+    conflict_files: List[str],
+    error_message: str
+) -> Dict[str, Any]:
+    """
+    Create a merge resolution task to handle git conflicts.
+
+    Args:
+        original_task: The task that encountered the merge conflict
+        conflict_files: List of files with conflicts
+        error_message: The error message from the failed rebase/merge
+
+    Returns:
+        A new task dict configured for merge conflict resolution
+    """
+    original_id = original_task["id"]
+    merge_task_id = f"merge_{uuid.uuid4().hex[:8]}"
+
+    # Build a detailed description for the merge agent
+    conflict_details = "\n".join(f"  - {f}" for f in conflict_files) if conflict_files else "  (files not specified)"
+
+    description = f"""**MERGE CONFLICT RESOLUTION TASK**
+
+The task "{original_task.get('title', original_id)}" (ID: {original_id}) completed successfully,
+but encountered conflicts when trying to merge its changes into the main branch.
+
+**Original Task Description:**
+{original_task.get('description', 'No description available')}
+
+**Conflict Error:**
+{error_message}
+
+**Conflicting Files:**
+{conflict_details}
+
+**Your Mission:**
+1. Analyze the conflict between the task branch and main branch
+2. Understand what both versions were trying to accomplish
+3. Create a merged version that preserves both sets of changes
+4. Stage the resolved files using `git add`
+
+After you resolve the conflicts, the system will commit and merge your changes.
+"""
+
+    return {
+        "id": merge_task_id,
+        "title": f"Resolve merge conflicts from {original_task.get('title', original_id)[:30]}",
+        "component": original_task.get("component", "merge"),
+        "phase": TaskPhase.BUILD.value,
+        "description": description,
+        "status": TaskStatus.READY.value,  # Ready immediately since original task is done
+        "depends_on": [original_id],  # Depends on original task
+        "dependency_queries": [],
+        "priority": 10,  # High priority - blocks dependent tasks
+        "assigned_worker_profile": WorkerProfile.MERGER.value,
+        "retry_count": 0,
+        "max_retries": 3,
+        "acceptance_criteria": [
+            "All merge conflicts are resolved",
+            "Both versions' changes are preserved where possible",
+            "Resolved files are staged with git add",
+            "Code still compiles/runs after merge"
+        ],
+        "result_path": None,
+        "qa_verdict": None,
+        "aar": None,
+        "blocked_reason": None,
+        "escalation": None,
+        "checkpoint": None,
+        "waiting_for_tasks": [],
+        "branch_name": original_task.get("branch_name"),  # Use same branch
+        "worktree_path": original_task.get("worktree_path"),  # Use same worktree
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+        "started_at": None,
+        "completed_at": None,
+        # CRITICAL: Tell worker to use original task's worktree (has the branch with changes)
+        "_use_worktree_task_id": original_id,
+        # Custom fields for merge context
+        "_merge_context": {
+            "original_task_id": original_id,
+            "conflict_files": conflict_files,
+            "error_message": error_message
+        }
+    }
+
+
+def _rewire_dependencies_for_merge(
+    all_tasks: List[Dict[str, Any]],
+    original_task_id: str,
+    merge_task_id: str
+) -> int:
+    """
+    Update all tasks that depend on the original task to depend on the merge task instead.
+
+    This ensures that dependent tasks wait for the merge to complete before starting.
+
+    Args:
+        all_tasks: List of all task dicts
+        original_task_id: ID of the task that had the conflict
+        merge_task_id: ID of the new merge resolution task
+
+    Returns:
+        Number of tasks that had their dependencies updated
+    """
+    updated_count = 0
+
+    for task in all_tasks:
+        if task["id"] == merge_task_id:
+            continue  # Don't modify the merge task itself
+
+        depends_on = task.get("depends_on", [])
+        if original_task_id in depends_on:
+            # Replace original with merge task
+            new_depends = [merge_task_id if dep == original_task_id else dep for dep in depends_on]
+            task["depends_on"] = new_depends
+            updated_count += 1
+            logger.info(f"  [REWIRE] Task {task['id'][:12]} now depends on merge task {merge_task_id[:12]}")
+
+    return updated_count
 
 
 async def _evaluate_test_results_with_llm(task: Dict[str, Any], test_results_content: str, objective: str, config: Any) -> Dict[str, Any]:
@@ -407,17 +532,55 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 # Rebase on main, then merge (only after QA passes)
                 wt_manager = state.get("_wt_manager")
                 if wt_manager and not mock_mode:
+                    # Check if this is already a merge task (to prevent infinite chains)
+                    is_merge_task = task.get("assigned_worker_profile") == WorkerProfile.MERGER.value
+
                     # Step 1: Rebase on main to handle concurrent edits
                     try:
                         logger.info(f"  [REBASE] Starting rebase for {task_id}...")
                         rebase_result = await wt_manager.rebase_on_main(task_id)
 
                         if not rebase_result.success:
-                            # Rebase failed (conflicts) - fail the task, Phoenix will retry
-                            logger.error(f"  [REBASE FAILED]: {rebase_result.error_message}")
-                            task["status"] = "pending_failed"  # Director will confirm
-                            task["qa_verdict"]["passed"] = False
-                            task["qa_verdict"]["overall_feedback"] += f"\n\nREBASE FAILED: {rebase_result.error_message}"
+                            # Rebase failed (conflicts) - spawn merge agent instead of failing
+                            # BUT: Don't spawn merge for merge tasks (prevents infinite chains)
+                            if rebase_result.conflict and not is_merge_task:
+                                logger.warning(f"  [REBASE CONFLICT] Spawning merge agent for {task_id}")
+
+                                # Create merge task
+                                merge_task = _create_merge_task(
+                                    original_task=task,
+                                    conflict_files=rebase_result.conflicting_files,
+                                    error_message=rebase_result.error_message
+                                )
+
+                                # Rewire dependencies: tasks that depended on original now depend on merge
+                                all_tasks = state.get("tasks", [])
+                                rewired = _rewire_dependencies_for_merge(
+                                    all_tasks, task_id, merge_task["id"]
+                                )
+                                logger.info(f"  [MERGE AGENT] Created {merge_task['id']}, rewired {rewired} dependents")
+
+                                # Add merge task to updates (will be added to state)
+                                updates.append(merge_task)
+
+                                # Original task stays as pending_complete - it did its work
+                                # But add a note about the conflict
+                                task["qa_verdict"]["overall_feedback"] += (
+                                    f"\n\n[MERGE PENDING] Rebase conflict detected. "
+                                    f"Merge agent {merge_task['id']} will resolve conflicts."
+                                )
+                            elif rebase_result.conflict and is_merge_task:
+                                # Merge task also has conflict - don't spawn another merge (Phoenix retry)
+                                logger.error(f"  [MERGE TASK CONFLICT] Merge task {task_id} also has conflicts - Phoenix retry")
+                                task["status"] = "pending_failed"
+                                task["qa_verdict"]["passed"] = False
+                                task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE TASK CONFLICT: {rebase_result.error_message}"
+                            else:
+                                # Non-conflict error - fail the task for Phoenix retry
+                                logger.error(f"  [REBASE FAILED]: {rebase_result.error_message}")
+                                task["status"] = "pending_failed"
+                                task["qa_verdict"]["passed"] = False
+                                task["qa_verdict"]["overall_feedback"] += f"\n\nREBASE FAILED: {rebase_result.error_message}"
                         else:
                             logger.info(f"  [REBASE SUCCESS] Rebase completed successfully")
 
@@ -426,19 +589,52 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 merge_result = await wt_manager.merge_to_main(task_id)
                                 if merge_result.success:
                                     logger.info(f"  [MERGED] Task {task_id} merged successfully to main")
+                                elif merge_result.conflict and not is_merge_task:
+                                    # Merge conflict after successful rebase - spawn merge agent
+                                    logger.warning(f"  [MERGE CONFLICT] Spawning merge agent for {task_id}")
+
+                                    # Create merge task
+                                    merge_task = _create_merge_task(
+                                        original_task=task,
+                                        conflict_files=merge_result.conflicting_files,
+                                        error_message=merge_result.error_message
+                                    )
+
+                                    # Rewire dependencies
+                                    all_tasks = state.get("tasks", [])
+                                    rewired = _rewire_dependencies_for_merge(
+                                        all_tasks, task_id, merge_task["id"]
+                                    )
+                                    logger.info(f"  [MERGE AGENT] Created {merge_task['id']}, rewired {rewired} dependents")
+
+                                    # Add merge task to updates
+                                    updates.append(merge_task)
+
+                                    # Original task stays as pending_complete
+                                    task["qa_verdict"]["overall_feedback"] += (
+                                        f"\n\n[MERGE PENDING] Merge conflict detected. "
+                                        f"Merge agent {merge_task['id']} will resolve conflicts."
+                                    )
+                                elif merge_result.conflict and is_merge_task:
+                                    # Merge task also has conflict - don't spawn another merge (Phoenix retry)
+                                    logger.error(f"  [MERGE TASK CONFLICT] Merge task {task_id} also has conflicts - Phoenix retry")
+                                    task["status"] = "pending_failed"
+                                    task["qa_verdict"]["passed"] = False
+                                    task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE TASK CONFLICT: {merge_result.error_message}"
                                 else:
+                                    # Non-conflict merge failure
                                     logger.error(f"  [MERGE FAILED]: {merge_result.error_message}")
-                                    task["status"] = "pending_failed"  # Director will confirm
+                                    task["status"] = "pending_failed"
                                     task["qa_verdict"]["passed"] = False
                                     task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE FAILED: {merge_result.error_message}"
                             except Exception as e:
                                 logger.error(f"  [MERGE ERROR]: {e}")
-                                task["status"] = "pending_failed"  # Director will confirm
+                                task["status"] = "pending_failed"
                                 task["qa_verdict"]["passed"] = False
                                 task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
                     except Exception as e:
                         logger.error(f"  [REBASE ERROR]: {e}")
-                        task["status"] = "pending_failed"  # Director will confirm
+                        task["status"] = "pending_failed"
                         task["qa_verdict"]["passed"] = False
                         task["qa_verdict"]["overall_feedback"] += f"\n\nREBASE ERROR: {e}"
             else:

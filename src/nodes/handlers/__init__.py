@@ -7,6 +7,7 @@ from .plan_handler import _plan_handler
 from .test_handler import _test_handler
 from .research_handler import _research_handler
 from .write_handler import _write_handler
+from .merge_handler import _merge_handler
 
 __all__ = [
     '_code_handler',
@@ -14,4 +15,5 @@ __all__ = [
     '_test_handler',
     '_research_handler',
     '_write_handler',
+    '_merge_handler',
 ]

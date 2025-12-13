@@ -187,7 +187,7 @@ async def lifespan(app: FastAPI):
         if checkpoint_mode == "postgres":
             # PostgreSQL checkpointer
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-            
+
             # Get PostgreSQL URI from config or environment
             db_uri = config.postgres_uri or os.getenv("POSTGRES_URI")
             if not db_uri:
@@ -195,40 +195,68 @@ async def lifespan(app: FastAPI):
                     "PostgreSQL mode requires POSTGRES_URI. "
                     "Set config.postgres_uri or add POSTGRES_URI to .env"
                 )
-            
+
             logger.info(f"Using PostgreSQL checkpointer")
-            
+
             # AsyncPostgresSaver.from_conn_string returns a context manager
             # We need to enter it and keep the connection alive for the app lifespan
             postgres_checkpointer_cm = AsyncPostgresSaver.from_conn_string(db_uri)
             api_state.global_checkpointer = await postgres_checkpointer_cm.__aenter__()
-            
+
             # Setup tables (idempotent - safe to call every time)
             await api_state.global_checkpointer.setup()
             logger.info("✅ AsyncPostgresSaver initialized successfully")
-            
+
+        elif checkpoint_mode == "mysql":
+            # MySQL checkpointer (async-friendly on Windows)
+            from mysql_checkpointer import AsyncMySQLSaver
+
+            # Get MySQL connection info from config or environment
+            mysql_uri = config.mysql_uri or os.getenv("MYSQL_URI")
+
+            if mysql_uri:
+                logger.info(f"Using MySQL checkpointer (from URI)")
+                mysql_checkpointer_cm = AsyncMySQLSaver.from_conn_string(mysql_uri)
+            else:
+                logger.info(f"Using MySQL checkpointer (host: {config.mysql_host}:{config.mysql_port})")
+                mysql_checkpointer_cm = AsyncMySQLSaver.from_params(
+                    host=config.mysql_host,
+                    port=config.mysql_port,
+                    user=config.mysql_user,
+                    password=config.mysql_password,
+                    database=config.mysql_database,
+                )
+
+            # Store context manager reference for cleanup
+            postgres_checkpointer_cm = mysql_checkpointer_cm  # Reuse variable for cleanup
+            api_state.global_checkpointer = await mysql_checkpointer_cm.__aenter__()
+
+            # Setup tables (idempotent - safe to call every time)
+            await api_state.global_checkpointer.setup()
+            logger.info("✅ AsyncMySQLSaver initialized successfully")
+
         elif checkpoint_mode == "sqlite":
             # SQLite checkpointer (default)
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             import aiosqlite
-            
+
             db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
             logger.info(f"Using SQLite checkpointer: {db_path}")
-            
+
             conn = await aiosqlite.connect(db_path)
-            
+
             # Enable WAL mode for better concurrent access
-            # - Multiple readers + 1 writer simultaneously  
+            # - Multiple readers + 1 writer simultaneously
             # - Writers don't block readers
             # - Crash-safe with atomic checkpoints
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute("PRAGMA busy_timeout=5000")  # Wait 5s if DB locked
-            
+
             api_state.global_checkpointer = AsyncSqliteSaver(conn)
             logger.info("✅ AsyncSqliteSaver initialized (WAL mode)")
-            
+
         else:
-            raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}. Use 'sqlite' or 'postgres'")
+            raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}. Use 'sqlite', 'postgres', or 'mysql'")
             
     except Exception as e:
         logger.error(f"❌ Failed to initialize checkpointer: {e}")

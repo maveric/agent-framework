@@ -1,7 +1,7 @@
 """
 Run Persistence Module
 ======================
-Persistence for orchestrator runs - supports both SQLite and PostgreSQL.
+Persistence for orchestrator runs - supports SQLite, PostgreSQL, and MySQL.
 Backend is selected via config.checkpoint_mode.
 """
 
@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
 
+# Optional MySQL support
+try:
+    import aiomysql
+    AIOMYSQL_AVAILABLE = True
+except ImportError:
+    AIOMYSQL_AVAILABLE = False
+    aiomysql = None
+
+
 @asynccontextmanager
 async def _sqlite_connection(db_path: str):
     """Open SQLite connection with WAL mode enabled for better concurrency."""
@@ -27,28 +36,73 @@ async def _sqlite_connection(db_path: str):
         await db.execute("PRAGMA busy_timeout=5000")
         yield db
 
+
+@asynccontextmanager
+async def _mysql_connection(config):
+    """Open MySQL connection using config settings."""
+    if not AIOMYSQL_AVAILABLE:
+        raise ImportError("aiomysql is required for MySQL support. Install with: pip install aiomysql")
+
+    # Parse URI if provided, otherwise use individual settings
+    mysql_uri = config.mysql_uri or os.getenv("MYSQL_URI")
+
+    if mysql_uri:
+        # Parse mysql://user:password@host:port/database
+        from urllib.parse import urlparse
+        parsed = urlparse(mysql_uri)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 3306
+        user = parsed.username or "root"
+        password = parsed.password or ""
+        database = parsed.path.lstrip("/") or "orchestrator"
+    else:
+        host = config.mysql_host
+        port = config.mysql_port
+        user = config.mysql_user
+        password = config.mysql_password
+        database = config.mysql_database
+
+    conn = await aiomysql.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        db=database,
+        autocommit=True
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 # Get database configuration
 def _get_db_config():
     """Get database configuration from config."""
     from config import OrchestratorConfig
     config = OrchestratorConfig()
     checkpoint_mode = config.checkpoint_mode.lower()
-    
+
     if checkpoint_mode == "postgres":
         db_uri = config.postgres_uri or os.getenv("POSTGRES_URI")
         if not db_uri:
             raise ValueError("PostgreSQL mode requires POSTGRES_URI in config or environment")
         return "postgres", db_uri
+    elif checkpoint_mode == "mysql":
+        if not AIOMYSQL_AVAILABLE:
+            raise ImportError("aiomysql is required for MySQL support. Install with: pip install aiomysql")
+        # Return config object for MySQL (we need multiple settings)
+        return "mysql", config
     elif checkpoint_mode == "sqlite":
         db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
         return "sqlite", db_path
     else:
-        raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}")
+        raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}. Use 'sqlite', 'postgres', or 'mysql'")
 
 async def init_runs_table():
     """Create the runs table if it doesn't exist."""
     db_type, db_conn_info = _get_db_config()
-    
+
     if db_type == "postgres":
         async with await psycopg.AsyncConnection.connect(
             db_conn_info, autocommit=True, row_factory=dict_row
@@ -67,6 +121,24 @@ async def init_runs_table():
                 )
             """)
             logger.info("✅ Runs table initialized (PostgreSQL)")
+    elif db_type == "mysql":
+        async with _mysql_connection(db_conn_info) as conn:
+            async with conn.cursor() as cursor:
+                # MySQL uses LONGTEXT for large JSON blobs
+                await cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS runs (
+                        run_id VARCHAR(255) PRIMARY KEY,
+                        thread_id VARCHAR(255),
+                        objective TEXT,
+                        status VARCHAR(50),
+                        state_json LONGTEXT,
+                        created_at VARCHAR(50),
+                        updated_at VARCHAR(50),
+                        workspace_path TEXT,
+                        task_counts_json TEXT
+                    )
+                """)
+            logger.info("✅ Runs table initialized (MySQL)")
     else:  # sqlite
         async with _sqlite_connection(db_conn_info) as db:
             await db.execute("""
@@ -130,7 +202,7 @@ async def save_run_state(run_id: str, state: Dict[str, Any], status: str = "runn
                 db_conn_info, autocommit=True, row_factory=dict_row
             ) as conn:
                 await conn.execute("""
-                    INSERT INTO runs 
+                    INSERT INTO runs
                     (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (run_id) DO UPDATE SET
@@ -139,15 +211,29 @@ async def save_run_state(run_id: str, state: Dict[str, Any], status: str = "runn
                         updated_at = EXCLUDED.updated_at, workspace_path = EXCLUDED.workspace_path,
                         task_counts_json = EXCLUDED.task_counts_json
                 """, (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json))
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor() as cursor:
+                    # MySQL uses INSERT ... ON DUPLICATE KEY UPDATE
+                    await cursor.execute("""
+                        INSERT INTO runs
+                        (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            thread_id = VALUES(thread_id), objective = VALUES(objective),
+                            status = VALUES(status), state_json = VALUES(state_json),
+                            updated_at = VALUES(updated_at), workspace_path = VALUES(workspace_path),
+                            task_counts_json = VALUES(task_counts_json)
+                    """, (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json))
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 await db.execute("""
-                    INSERT OR REPLACE INTO runs 
+                    INSERT OR REPLACE INTO runs
                     (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json))
                 await db.commit()
-            
+
         logger.debug(f"💾 Saved run state: {run_id} (status: {status})")
     except Exception as e:
         logger.error(f"Failed to save run state: {e}")
@@ -156,7 +242,7 @@ async def load_run_state(run_id: str) -> Optional[Dict[str, Any]]:
     """Load a run's full state from the database."""
     try:
         db_type, db_conn_info = _get_db_config()
-        
+
         if db_type == "postgres":
             async with await psycopg.AsyncConnection.connect(
                 db_conn_info, autocommit=True, row_factory=dict_row
@@ -170,6 +256,18 @@ async def load_run_state(run_id: str) -> Optional[Dict[str, Any]]:
                     if row["workspace_path"]:
                         state["_workspace_path"] = row["workspace_path"]
                     return state
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        "SELECT state_json, workspace_path FROM runs WHERE run_id = %s", (run_id,)
+                    )
+                    row = await cursor.fetchone()
+                    if row and row["state_json"]:
+                        state = json.loads(row["state_json"])
+                        if row["workspace_path"]:
+                            state["_workspace_path"] = row["workspace_path"]
+                        return state
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute(
@@ -190,7 +288,7 @@ async def load_run_summary(run_id: str) -> Optional[Dict[str, Any]]:
     """Load run summary (without full state) for list display."""
     try:
         db_type, db_conn_info = _get_db_config()
-        
+
         if db_type == "postgres":
             async with await psycopg.AsyncConnection.connect(
                 db_conn_info, autocommit=True, row_factory=dict_row
@@ -209,6 +307,23 @@ async def load_run_summary(run_id: str) -> Optional[Dict[str, Any]]:
                         "task_counts": json.loads(row["task_counts_json"]) if row["task_counts_json"] else {},
                         "tags": []
                     }
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute("""
+                        SELECT run_id, thread_id, objective, status, created_at, updated_at, workspace_path, task_counts_json
+                        FROM runs WHERE run_id = %s
+                    """, (run_id,))
+                    row = await cursor.fetchone()
+                    if row:
+                        return {
+                            "run_id": row["run_id"], "thread_id": row["thread_id"],
+                            "objective": row["objective"], "status": row["status"],
+                            "created_at": row["created_at"], "updated_at": row["updated_at"],
+                            "workspace_path": row["workspace_path"],
+                            "task_counts": json.loads(row["task_counts_json"]) if row["task_counts_json"] else {},
+                            "tags": []
+                        }
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute("""
@@ -232,7 +347,7 @@ async def list_all_runs() -> List[Dict[str, Any]]:
     """List all runs (summaries only, not full state)."""
     try:
         db_type, db_conn_info = _get_db_config()
-        
+
         if db_type == "postgres":
             async with await psycopg.AsyncConnection.connect(
                 db_conn_info, autocommit=True, row_factory=dict_row
@@ -250,6 +365,22 @@ async def list_all_runs() -> List[Dict[str, Any]]:
                     "task_counts": json.loads(row["task_counts_json"]) if row["task_counts_json"] else {},
                     "tags": []
                 } for row in rows]
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute("""
+                        SELECT run_id, thread_id, objective, status, created_at, updated_at, workspace_path, task_counts_json
+                        FROM runs ORDER BY created_at DESC
+                    """)
+                    rows = await cursor.fetchall()
+                    return [{
+                        "run_id": row["run_id"], "thread_id": row["thread_id"],
+                        "objective": row["objective"], "status": row["status"],
+                        "created_at": row["created_at"], "updated_at": row["updated_at"],
+                        "workspace_path": row["workspace_path"],
+                        "task_counts": json.loads(row["task_counts_json"]) if row["task_counts_json"] else {},
+                        "tags": []
+                    } for row in rows]
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute("""
@@ -271,12 +402,16 @@ async def delete_run(run_id: str) -> bool:
     """Delete a run from the database."""
     try:
         db_type, db_conn_info = _get_db_config()
-        
+
         if db_type == "postgres":
             async with await psycopg.AsyncConnection.connect(
                 db_conn_info, autocommit=True, row_factory=dict_row
             ) as conn:
                 await conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 await db.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
@@ -286,12 +421,13 @@ async def delete_run(run_id: str) -> bool:
         logger.error(f"Failed to delete run: {e}")
         return False
 
+
 async def update_run_status(run_id: str, status: str):
     """Quick update of just the run status."""
     try:
         db_type, db_conn_info = _get_db_config()
         updated_at = datetime.now().isoformat()
-        
+
         if db_type == "postgres":
             async with await psycopg.AsyncConnection.connect(
                 db_conn_info, autocommit=True, row_factory=dict_row
@@ -300,6 +436,13 @@ async def update_run_status(run_id: str, status: str):
                     "UPDATE runs SET status = %s, updated_at = %s WHERE run_id = %s",
                     (status, updated_at, run_id)
                 )
+        elif db_type == "mysql":
+            async with _mysql_connection(db_conn_info) as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute(
+                        "UPDATE runs SET status = %s, updated_at = %s WHERE run_id = %s",
+                        (status, updated_at, run_id)
+                    )
         else:  # sqlite
             async with _sqlite_connection(db_conn_info) as db:
                 await db.execute(
