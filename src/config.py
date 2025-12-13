@@ -111,10 +111,20 @@ class OrchestratorConfig:
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
-    checkpoint_mode: str = "sqlite"  # "sqlite", "postgres", or "memory"
-    
+    checkpoint_mode: str = "sqlite"  # "sqlite", "postgres", "mysql", or "memory"
+
     # PostgreSQL connection (only used if checkpoint_mode="postgres")
     postgres_uri: Optional[str] = None  # Falls back to POSTGRES_URI env var
+
+    # MySQL connection (only used if checkpoint_mode="mysql")
+    # Format: mysql://user:password@host:port/database
+    # Or individual settings below
+    mysql_uri: Optional[str] = None  # Falls back to MYSQL_URI env var
+    mysql_host: str = "localhost"
+    mysql_port: int = 3306
+    mysql_user: str = "root"
+    mysql_password: str = ""
+    mysql_database: str = "orchestrator"
     
     # Framework data paths (OUTSIDE agent workspaces to avoid gitignore conflicts)
     # Set to absolute path, e.g., "F:/coding/agent-framework/run-data"
