@@ -401,26 +401,46 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
             # Update task status based on QA verdict
             if qa_verdict and qa_verdict["passed"]:
                 logger.info(f"  [QA PASS]")
-                task["status"] = "pending_complete"  # Director will confirm
+                task["status"] = "pending_complete"  # Director will confirm (pending confirmation)
                 task["qa_verdict"] = qa_verdict
-                
-                # Merge to main
+
+                # Rebase on main, then merge (only after QA passes)
                 wt_manager = state.get("_wt_manager")
                 if wt_manager and not mock_mode:
+                    # Step 1: Rebase on main to handle concurrent edits
                     try:
-                        result = await wt_manager.merge_to_main(task_id)
-                        if result.success:
-                            logger.info(f"  [MERGED] Task {task_id} merged successfully")
-                        else:
-                            logger.error(f"  [MERGE CONFLICT]: {result.error_message}")
+                        logger.info(f"  [REBASE] Starting rebase for {task_id}...")
+                        rebase_result = await wt_manager.rebase_on_main(task_id)
+
+                        if not rebase_result.success:
+                            # Rebase failed (conflicts) - fail the task, Phoenix will retry
+                            logger.error(f"  [REBASE FAILED]: {rebase_result.error_message}")
                             task["status"] = "pending_failed"  # Director will confirm
                             task["qa_verdict"]["passed"] = False
-                            task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {result.error_message}"
+                            task["qa_verdict"]["overall_feedback"] += f"\n\nREBASE FAILED: {rebase_result.error_message}"
+                        else:
+                            logger.info(f"  [REBASE SUCCESS] Rebase completed successfully")
+
+                            # Step 2: Merge to main (should be clean since we just rebased)
+                            try:
+                                merge_result = await wt_manager.merge_to_main(task_id)
+                                if merge_result.success:
+                                    logger.info(f"  [MERGED] Task {task_id} merged successfully to main")
+                                else:
+                                    logger.error(f"  [MERGE FAILED]: {merge_result.error_message}")
+                                    task["status"] = "pending_failed"  # Director will confirm
+                                    task["qa_verdict"]["passed"] = False
+                                    task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE FAILED: {merge_result.error_message}"
+                            except Exception as e:
+                                logger.error(f"  [MERGE ERROR]: {e}")
+                                task["status"] = "pending_failed"  # Director will confirm
+                                task["qa_verdict"]["passed"] = False
+                                task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
                     except Exception as e:
-                        logger.error(f"  [MERGE ERROR]: {e}")
+                        logger.error(f"  [REBASE ERROR]: {e}")
                         task["status"] = "pending_failed"  # Director will confirm
                         task["qa_verdict"]["passed"] = False
-                        task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE ERROR: {e}"
+                        task["qa_verdict"]["overall_feedback"] += f"\n\nREBASE ERROR: {e}"
             else:
                 logger.error(f"  [QA FAIL]: {qa_verdict['overall_feedback'] if qa_verdict else 'Unknown error'}")
                 task["status"] = "pending_failed"  # Director will confirm
