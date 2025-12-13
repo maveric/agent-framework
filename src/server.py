@@ -176,17 +176,44 @@ api_state.manager = manager
 async def lifespan(app: FastAPI):
     # Startup - Initialize checkpointer
     try:
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-        import aiosqlite
-
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
-        logger.info(f"Initializing checkpointer with database: {db_path}")
-
-        # Create async connection and checkpointer
-        conn = await aiosqlite.connect(db_path)
-        api_state.global_checkpointer = AsyncSqliteSaver(conn)
-
-        logger.info("✅ AsyncSqliteSaver initialized successfully")
+        from config import OrchestratorConfig
+        config = OrchestratorConfig()
+        
+        checkpoint_mode = config.checkpoint_mode.lower()
+        logger.info(f"Initializing checkpointer (mode: {checkpoint_mode})")
+        
+        if checkpoint_mode == "postgres":
+            # PostgreSQL checkpointer
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            
+            # Get PostgreSQL URI from config or environment
+            db_uri = config.postgres_uri or os.getenv("POSTGRES_URI")
+            if not db_uri:
+                raise ValueError(
+                    "PostgreSQL mode requires POSTGRES_URI. "
+                    "Set config.postgres_uri or add POSTGRES_URI to .env"
+                )
+            
+            logger.info(f"Using PostgreSQL checkpointer")
+            api_state.global_checkpointer = AsyncPostgresSaver.from_conn_string(db_uri)
+            await api_state.global_checkpointer.setup()
+            logger.info("✅ AsyncPostgresSaver initialized successfully")
+            
+        elif checkpoint_mode == "sqlite":
+            # SQLite checkpointer (default)
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+            import aiosqlite
+            
+            db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "orchestrator.db")
+            logger.info(f"Using SQLite checkpointer: {db_path}")
+            
+            conn = await aiosqlite.connect(db_path)
+            api_state.global_checkpointer = AsyncSqliteSaver(conn)
+            logger.info("✅ AsyncSqliteSaver initialized successfully")
+            
+        else:
+            raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}. Use 'sqlite' or 'postgres'")
+            
     except Exception as e:
         logger.error(f"❌ Failed to initialize checkpointer: {e}")
         import traceback

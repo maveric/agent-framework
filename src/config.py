@@ -111,7 +111,10 @@ class OrchestratorConfig:
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
-    checkpoint_mode: str = "sqlite"  # "sqlite" or "memory"
+    checkpoint_mode: str = "sqlite"  # "sqlite", "postgres", or "memory"
+    
+    # PostgreSQL connection (only used if checkpoint_mode="postgres")
+    postgres_uri: Optional[str] = None  # Falls back to POSTGRES_URI env var
     
     # Framework data paths (OUTSIDE agent workspaces to avoid gitignore conflicts)
     # Set to absolute path, e.g., "F:/coding/agent-framework/run-data"
