@@ -138,6 +138,7 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
         Platform - {PLATFORM}
         CRITICAL - SHELL COMMAND SYNTAX:
         {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
+        Python and npm are both located in the venv. Do NOT use system Python or npm.
     """
     env = os.environ.copy()
     if cwd:
