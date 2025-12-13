@@ -82,30 +82,30 @@ You are pouring the concrete foundation. You OWN the project scaffolding.
     else:
         role_instructions = f"""
 **🪑 ROLE: FEATURE ARCHITECT** (Component: {component_name})
-You are adding a room to an existing house.
+You are adding a room to an existing house. The foundation MUST be fully complete before you start.
 
 ❌ **FORBIDDEN - DO NOT DO THESE**:
 - Do NOT create "Setup", "Init", "Install", or "Scaffold" tasks
 - Do NOT touch package.json, requirements.txt, or any config files
 - Do NOT install dependencies (foundation handles that)
+- Do NOT create database connection logic (foundation handles that)
+- Do NOT setup routing/framework base (foundation handles that)
 
-🚀 **START FAST - WAIT ONLY FOR SCAFFOLDING**:
-- You do NOT need to wait for the whole foundation to complete
-- You DO need directories and dependencies to exist
-- Once scaffolding is done, you can work IN PARALLEL with other foundation tasks
+✅ **ASSUME** (foundation is FULLY complete):
+- Project is fully scaffolded and configured
+- All dependencies are installed
+- Database connection exists and works
+- Router/framework is initialized
+- You can focus 100% on your feature logic
 
-✅ **ASSUME** (after scaffolding):
-- Project directories exist (src/, components/, etc.)
-- package.json / requirements.txt exist with deps installed
-- You can write code immediately - don't wait for DB/Auth to be fully configured
-
-🚨 **DEPENDENCY REQUIREMENT**:
-Your FIRST task MUST query for scaffolding (NOT full foundation):
+🚨 **CRITICAL DEPENDENCY REQUIREMENT**:
+Your FIRST task MUST query for COMPLETE foundation:
 ```json
-"dependency_queries": ["Project scaffolding and dependency installation is complete"]
+"dependency_queries": ["Foundation layer is fully complete"]
 ```
 
-This waits only for directories/deps - NOT for DB, Auth, or other infra tasks.
+This ensures ALL foundation work is done before your feature starts.
+Feature planners run IN PARALLEL with each other, but ALL wait for foundation.
 
 **Your job**: Build the {component_name} feature ONLY - models, routes, UI, tests for THIS feature.
 """
@@ -253,8 +253,8 @@ Generate your plan now.
             suggested_tasks=[]
         )
 
-    # SOFT VALIDATION: Warn if feature planners don't have dependency_queries
-    # This is a warning, not a failure - some edge cases may be valid
+    # HARD VALIDATION: Feature planners MUST have dependency_queries to wait for foundation
+    # This is CRITICAL - features must wait for ALL foundation work to complete
     if not is_foundation:
         tasks_with_dep_queries = [
             t for t in result.suggested_tasks
@@ -262,9 +262,26 @@ Generate your plan now.
         ]
         
         if len(tasks_with_dep_queries) == 0:
-            logger.warning(f"⚠️ FEATURE planner {task.id} has NO dependency_queries!")
-            logger.warning(f"   Feature tasks may run before scaffolding is complete.")
-            logger.warning(f"   Consider adding: dependency_queries: ['Project scaffolding is complete']")
+            logger.error(f"❌ FEATURE planner {task.id} has NO dependency_queries!")
+            logger.error(f"   Feature planners MUST wait for foundation to complete.")
+            return WorkerResult(
+                status="failed",
+                result_path=result.result_path if result else "",
+                aar=AAR(
+                    summary=f"FAILED: Feature planner created {len(result.suggested_tasks)} tasks but NONE have dependency_queries. "
+                            f"Feature planners MUST include 'dependency_queries': [\"Foundation layer is fully complete\"] "
+                            f"on at least one task to wait for foundation.",
+                    approach="N/A",
+                    challenges=[
+                        "Did not include dependency_queries on any task",
+                        "Feature tasks would run before foundation completes",
+                        "Must add: dependency_queries: [\"Foundation layer is fully complete\"]"
+                    ],
+                    decisions_made=[],
+                    files_modified=result.aar.files_modified if result and result.aar else []
+                ),
+                suggested_tasks=[]
+            )
         else:
             logger.info(f"Feature planner has {len(tasks_with_dep_queries)} task(s) with dependency_queries ✓")
 

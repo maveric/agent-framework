@@ -139,13 +139,13 @@ MATCHING RULES:
 - If NO task satisfies the query, return "MISSING" as the matched_task_title
 - Rate your confidence: "high" (clearly matches), "medium" (probable match), "low" (weak match)
 
-🚨 **SPECIAL "SCAFFOLDING" RULE** 🚨:
-If a query asks for "Project scaffolding", "initialization", "dependency installation", or similar:
-1. Look at the **foundation** component
-2. Find the task that performs: npm install, pip install, create-react-app, folder creation
-3. This is usually the **FIRST** task in the foundation plan
-4. Link to THAT task, NOT the final foundation task
-5. This allows features to start IMMEDIATELY after scaffolding, IN PARALLEL with other foundation tasks
+🚨 **SPECIAL "FOUNDATION COMPLETE" RULE** 🚨:
+If a query asks for "Foundation complete", "foundation layer is fully complete", "infrastructure ready", or similar:
+1. Look at the **foundation** component (or "infrastructure")
+2. Find the **LAST** task in the foundation plan (the one with no dependents within foundation)
+3. This is usually a final setup/validation task
+4. Link to THAT task so features wait for ALL foundation work
+5. Features run IN PARALLEL with each other, but ALL wait for foundation to finish
 
 CRITICAL:
 - You are doing MATCHING ONLY, not creating new tasks
