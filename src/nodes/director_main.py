@@ -215,20 +215,75 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                         logger.info("  QA Failure: Test execution failed. Spawning fix task")
                         logger.info(f"  Feedback: {feedback[:100]}...")
 
+                        # Build detailed failure context for the fix task
+                        detailed_context = []
+                        
+                        # 1. QA verdict and feedback
+                        detailed_context.append("## QA FAILURE VERDICT")
+                        detailed_context.append(f"**Status:** {task.qa_verdict.overall_feedback if task.qa_verdict else 'Unknown'}")
+                        
+                        # 2. What specific criteria failed
+                        if task.acceptance_criteria:
+                            detailed_context.append("\n## ACCEPTANCE CRITERIA (what was being tested)")
+                            for i, criteria in enumerate(task.acceptance_criteria, 1):
+                                detailed_context.append(f"{i}. {criteria}")
+                        
+                        # 3. AAR details if available (what the test worker actually did)
+                        if task.aar:
+                            if task.aar.summary:
+                                detailed_context.append(f"\n## TEST WORKER SUMMARY")
+                                detailed_context.append(task.aar.summary)
+                            if task.aar.challenges:
+                                detailed_context.append("\n## CHALLENGES ENCOUNTERED")
+                                for challenge in task.aar.challenges:
+                                    detailed_context.append(f"- {challenge}")
+                            if task.aar.files_modified:
+                                detailed_context.append("\n## FILES INVOLVED")
+                                for f in task.aar.files_modified:
+                                    detailed_context.append(f"- {f}")
+                        
+                        # 4. Get test results if stored in task result
+                        raw_task = next((t for t in tasks if t["id"] == task.id), None)
+                        if raw_task:
+                            test_results = raw_task.get("test_results", "")
+                            if test_results:
+                                detailed_context.append("\n## ACTUAL TEST OUTPUT (from test execution)")
+                                detailed_context.append(f"```\n{test_results[:2000]}\n```")  # Limit length
+                            
+                            # Also check result_path for test file location
+                            result_path = raw_task.get("result_path", "")
+                            if result_path:
+                                detailed_context.append(f"\n**Test results file:** `{result_path}`")
+
+                        full_description = "\n".join(detailed_context)
+
                         # Create a new BUILD task to fix the issues
                         fix_task_id = f"task_{uuid.uuid4().hex[:8]}"
                         fix_task = Task(
                             id=fix_task_id,
-                            title=f"Fix {task.component} (QA feedback)",
+                            title=f"Fix {task.component} Issues (QA Failed)",
                             component=task.component,
                             phase=TaskPhase.BUILD,
                             status=TaskStatus.PLANNED,
                             assigned_worker_profile=WorkerProfile.CODER,
-                            description=f"Fix issues in {task.component} reported by QA.\n\nQA FEEDBACK (MUST ADDRESS):\n{feedback}",
+                            description=f"""🚨 **FIX REQUIRED** - Tests failed for {task.component}
+
+Read the failure details below carefully and fix the issues.
+
+{full_description}
+
+---
+
+## YOUR TASK
+1. Read the failure details above
+2. Identify which code is broken or missing
+3. Implement the fix
+4. Verify your fix addresses all the issues mentioned
+""",
                             acceptance_criteria=[
-                                "Address all QA feedback points",
-                                "Ensure code compiles/runs",
-                                "Verify fix before re-testing"
+                                "All issues mentioned in QA feedback are addressed",
+                                "Code compiles/runs without errors",
+                                "The fix enables the test criteria to pass"
                             ],
                             depends_on=task.depends_on.copy(),
                             created_at=datetime.now(),
