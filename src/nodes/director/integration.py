@@ -139,6 +139,14 @@ MATCHING RULES:
 - If NO task satisfies the query, return "MISSING" as the matched_task_title
 - Rate your confidence: "high" (clearly matches), "medium" (probable match), "low" (weak match)
 
+🚨 **SPECIAL "SCAFFOLDING" RULE** 🚨:
+If a query asks for "Project scaffolding", "initialization", "dependency installation", or similar:
+1. Look at the **foundation** component
+2. Find the task that performs: npm install, pip install, create-react-app, folder creation
+3. This is usually the **FIRST** task in the foundation plan
+4. Link to THAT task, NOT the final foundation task
+5. This allows features to start IMMEDIATELY after scaffolding, IN PARALLEL with other foundation tasks
+
 CRITICAL:
 - You are doing MATCHING ONLY, not creating new tasks
 - If a query can't be satisfied, mark it MISSING (this will be flagged before execution)

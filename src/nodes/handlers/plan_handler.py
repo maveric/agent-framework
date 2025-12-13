@@ -82,28 +82,30 @@ You are pouring the concrete foundation. You OWN the project scaffolding.
     else:
         role_instructions = f"""
 **🪑 ROLE: FEATURE ARCHITECT** (Component: {component_name})
-You are adding a room to an existing house. The foundation is already poured.
+You are adding a room to an existing house.
 
 ❌ **FORBIDDEN - DO NOT DO THESE**:
 - Do NOT create "Setup", "Init", "Install", or "Scaffold" tasks
 - Do NOT touch package.json, requirements.txt, or any config files
 - Do NOT install dependencies (foundation handles that)
-- Do NOT create database connection logic (it already exists)
-- Do NOT setup routing/framework base (it's already done)
 
-✅ **ASSUME** (these are already done by foundation):
-- The project is running and configured
-- Database connection exists and works
-- Router/framework is initialized
-- All dependencies are installed
+🚀 **START FAST - WAIT ONLY FOR SCAFFOLDING**:
+- You do NOT need to wait for the whole foundation to complete
+- You DO need directories and dependencies to exist
+- Once scaffolding is done, you can work IN PARALLEL with other foundation tasks
 
-🚨 **CRITICAL REQUIREMENT**:
-Your FIRST task MUST include this dependency_query:
+✅ **ASSUME** (after scaffolding):
+- Project directories exist (src/, components/, etc.)
+- package.json / requirements.txt exist with deps installed
+- You can write code immediately - don't wait for DB/Auth to be fully configured
+
+🚨 **DEPENDENCY REQUIREMENT**:
+Your FIRST task MUST query for scaffolding (NOT full foundation):
 ```json
-"dependency_queries": ["Project foundation and base configuration is complete"]
+"dependency_queries": ["Project scaffolding and dependency installation is complete"]
 ```
 
-This ensures your tasks wait for foundation to finish before starting.
+This waits only for directories/deps - NOT for DB, Auth, or other infra tasks.
 
 **Your job**: Build the {component_name} feature ONLY - models, routes, UI, tests for THIS feature.
 """
@@ -251,5 +253,21 @@ Generate your plan now.
             suggested_tasks=[]
         )
 
+    # SOFT VALIDATION: Warn if feature planners don't have dependency_queries
+    # This is a warning, not a failure - some edge cases may be valid
+    if not is_foundation:
+        tasks_with_dep_queries = [
+            t for t in result.suggested_tasks
+            if hasattr(t, 'dependency_queries') and t.dependency_queries and len(t.dependency_queries) > 0
+        ]
+        
+        if len(tasks_with_dep_queries) == 0:
+            logger.warning(f"⚠️ FEATURE planner {task.id} has NO dependency_queries!")
+            logger.warning(f"   Feature tasks may run before scaffolding is complete.")
+            logger.warning(f"   Consider adding: dependency_queries: ['Project scaffolding is complete']")
+        else:
+            logger.info(f"Feature planner has {len(tasks_with_dep_queries)} task(s) with dependency_queries ✓")
+
     logger.info(f"Planner created {len(result.suggested_tasks)} tasks ({len(test_tasks)} test tasks)")
     return result
+
