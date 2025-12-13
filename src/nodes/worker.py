@@ -24,7 +24,8 @@ from .handlers import (
     _plan_handler,
     _test_handler,
     _research_handler,
-    _write_handler
+    _write_handler,
+    _merge_handler
 )
 
 logger = logging.getLogger(__name__)
@@ -174,5 +175,6 @@ def _get_handler(profile: WorkerProfile) -> Callable:
         WorkerProfile.TESTER: _test_handler,
         WorkerProfile.RESEARCHER: _research_handler,
         WorkerProfile.WRITER: _write_handler,
+        WorkerProfile.MERGER: _merge_handler,
     }
     return handlers.get(profile, _code_handler)

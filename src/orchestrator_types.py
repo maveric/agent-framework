@@ -51,6 +51,7 @@ class WorkerProfile(str, Enum):
     TESTER = "test_worker"
     RESEARCHER = "research_worker"
     WRITER = "writer_worker"
+    MERGER = "merge_worker"  # Resolves git merge/rebase conflicts
 
 
 class GuardianVerdict(str, Enum):
@@ -915,13 +916,14 @@ DEFAULT_MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "director": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "strategist": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "guardian": ModelConfig(provider="anthropic", model="claude-haiku-3-5-20241022", max_tokens=1024),
-    
+
     # Worker types
     "planner_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "code_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "test_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "research_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
     "writer_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),
+    "merge_worker": ModelConfig(provider="anthropic", model="claude-sonnet-4-20250514"),  # Conflict resolution
 }
 
 
