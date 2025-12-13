@@ -194,9 +194,9 @@ Use the 3-step evaluation process above."""
                     logger.info(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...")
                     continue
                 else:
-                    # Final attempt failed, include raw output
+                    # Final attempt failed, include raw output (keep enough for fix task context)
                     logger.error(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts")
-                    feedback = f"Unable to parse LLM response after {MAX_RETRIES} attempts. Raw output:\n{content[:500]}..."
+                    feedback = f"Unable to parse LLM response after {MAX_RETRIES} attempts. Raw output:\n{content[:2000]}"
                     return {
                         "passed": False,
                         "feedback": feedback,
