@@ -274,11 +274,20 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                     activity_occurred = True
                     for key, value in strategist_result.items():
                         if key == "tasks":
-                            # Update the specific task
+                            # Update existing tasks OR add new tasks (like merge tasks!)
+                            existing_ids = {t.get("id") for t in state["tasks"]}
                             for rt in value:
-                                for t in state["tasks"]:
-                                    if t.get("id") == rt.get("id"):
-                                        t.update(rt)
+                                task_id = rt.get("id")
+                                if task_id in existing_ids:
+                                    # Update existing task
+                                    for t in state["tasks"]:
+                                        if t.get("id") == task_id:
+                                            t.update(rt)
+                                            break
+                                else:
+                                    # NEW task (e.g., merge task) - append to state!
+                                    logger.info(f"  [NEW TASK] Strategist added new task: {task_id}")
+                                    state["tasks"].append(rt)
                         elif key == "task_memories":
                             # DEBUG: Log before and after to track memory loss
                             for tid, msgs in value.items():
