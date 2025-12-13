@@ -10,8 +10,8 @@ import ReactFlow, {
 } from 'reactflow';
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
-import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, RefreshCw, Link, X } from 'lucide-react';
-import { addTaskDependency } from '../api/client';
+import { Activity, CheckCircle, Clock, AlertCircle, PauseCircle, StopCircle, RefreshCw, Link, X, Unlink } from 'lucide-react';
+import { addTaskDependency, removeTaskDependency } from '../api/client';
 
 // Reuse Task interface (or import it if we move it to a shared types file)
 interface Task {
@@ -202,11 +202,11 @@ const getLayoutedElements = (tasks: Task[], linkingFrom: string | null, linkMode
     return { nodes, edges };
 };
 
-// Confirmation Dialog Component
 function ConfirmDialog({
     isOpen,
     sourceTask,
     targetTask,
+    isExistingLink,
     onConfirm,
     onCancel,
     isSubmitting
@@ -214,6 +214,7 @@ function ConfirmDialog({
     isOpen: boolean;
     sourceTask: Task | null;
     targetTask: Task | null;
+    isExistingLink: boolean;
     onConfirm: () => void;
     onCancel: () => void;
     isSubmitting: boolean;
@@ -226,12 +227,25 @@ function ConfirmDialog({
     return (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md mx-4 shadow-xl">
-                <h3 className="text-lg font-semibold text-white mb-4">Add Dependency</h3>
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                    {isExistingLink ? (
+                        <><Unlink size={20} className="text-red-400" /> Remove Dependency</>
+                    ) : (
+                        <><Link size={20} className="text-cyan-400" /> Add Dependency</>
+                    )}
+                </h3>
                 <p className="text-slate-300 mb-6">
-                    Make <span className="text-cyan-400 font-medium">"{targetTitle}"</span> depend on <span className="text-green-400 font-medium">"{sourceTitle}"</span>?
+                    {isExistingLink ? (
+                        <>Remove the dependency from <span className="text-cyan-400 font-medium">"{targetTitle}"</span> to <span className="text-green-400 font-medium">"{sourceTitle}"</span>?</>
+                    ) : (
+                        <>Make <span className="text-cyan-400 font-medium">"{targetTitle}"</span> depend on <span className="text-green-400 font-medium">"{sourceTitle}"</span>?</>
+                    )}
                 </p>
                 <p className="text-sm text-slate-500 mb-6">
-                    This means "{targetTitle}" will wait for "{sourceTitle}" to complete before it can start.
+                    {isExistingLink
+                        ? `"${targetTitle}" will no longer wait for "${sourceTitle}" to complete.`
+                        : `"${targetTitle}" will wait for "${sourceTitle}" to complete before it can start.`
+                    }
                 </p>
                 <div className="flex gap-3 justify-end">
                     <button
@@ -243,9 +257,15 @@ function ConfirmDialog({
                     <button
                         onClick={onConfirm}
                         disabled={isSubmitting}
-                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className={`px-4 py-2 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isExistingLink
+                            ? 'bg-red-600 hover:bg-red-500'
+                            : 'bg-cyan-600 hover:bg-cyan-500'
+                            }`}
                     >
-                        {isSubmitting ? 'Adding...' : 'Add Dependency'}
+                        {isSubmitting
+                            ? (isExistingLink ? 'Removing...' : 'Adding...')
+                            : (isExistingLink ? 'Remove Dependency' : 'Add Dependency')
+                        }
                     </button>
                 </div>
             </div>
@@ -305,20 +325,28 @@ export function TaskGraph({ tasks, onTaskClick, runId }: TaskGraphProps) {
     const handleConfirmLink = useCallback(async () => {
         if (!pendingLink || !runId) return;
 
+        // Check if link already exists (for toggle behavior)
+        const targetTask = tasks.find(t => t.id === pendingLink.to);
+        const isExisting = targetTask?.depends_on?.includes(pendingLink.from) ?? false;
+
         setIsSubmitting(true);
         try {
-            await addTaskDependency(runId, pendingLink.to, pendingLink.from);
+            if (isExisting) {
+                await removeTaskDependency(runId, pendingLink.to, pendingLink.from);
+            } else {
+                await addTaskDependency(runId, pendingLink.to, pendingLink.from);
+            }
             // Reset state
             setPendingLink(null);
             setLinkingFrom(null);
             // Stay in link mode for more links
         } catch (error) {
-            console.error('Failed to add dependency:', error);
-            alert('Failed to add dependency: ' + (error as Error).message);
+            console.error('Failed to modify dependency:', error);
+            alert('Failed to modify dependency: ' + (error as Error).message);
         } finally {
             setIsSubmitting(false);
         }
-    }, [pendingLink, runId]);
+    }, [pendingLink, runId, tasks]);
 
     const handleCancelLink = useCallback(() => {
         setPendingLink(null);
@@ -449,6 +477,7 @@ export function TaskGraph({ tasks, onTaskClick, runId }: TaskGraphProps) {
                 isOpen={!!pendingLink}
                 sourceTask={sourceTask}
                 targetTask={targetTask}
+                isExistingLink={targetTask?.depends_on?.includes(pendingLink?.from ?? '') ?? false}
                 onConfirm={handleConfirmLink}
                 onCancel={handleCancelLink}
                 isSubmitting={isSubmitting}
