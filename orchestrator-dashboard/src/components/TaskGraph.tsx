@@ -64,6 +64,7 @@ const TaskNode = ({ data }: { data: Task & { isLinkSource?: boolean; linkModeAct
         test_worker: 'bg-amber-900/30 text-amber-300 border-amber-800/50',
         research_worker: 'bg-violet-900/30 text-violet-300 border-violet-800/50',
         writer_worker: 'bg-rose-900/30 text-rose-300 border-rose-800/50',
+        merge_worker: 'bg-cyan-900/30 text-cyan-300 border-cyan-800/50',
     };
 
     const title = data.title || data.description.split('\n')[0]; // Fallback for backwards compatibility

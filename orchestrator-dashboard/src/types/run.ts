@@ -67,4 +67,5 @@ export const workerColors: Record<string, string> = {
     'qa_engineer': 'bg-green-900/20 text-green-400 border-green-800/50',
     'product_manager': 'bg-orange-900/20 text-orange-400 border-orange-800/50',
     'architect': 'bg-indigo-900/20 text-indigo-400 border-indigo-800/50',
+    'merge_worker': 'bg-cyan-900/20 text-cyan-400 border-cyan-800/50',
 };

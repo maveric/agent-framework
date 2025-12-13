@@ -229,6 +229,7 @@ export function InterruptModal({ runId, interruptData, onResolve, onClose }: Int
                                         <option value="test_worker">Tester</option>
                                         <option value="research_worker">Researcher</option>
                                         <option value="writer_worker">Writer</option>
+                                        <option value="merge_worker">Merge Agent</option>
                                     </select>
                                 </div>
 
