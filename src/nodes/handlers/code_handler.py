@@ -83,15 +83,22 @@ CRITICAL INSTRUCTIONS:
 2. BEFORE coding, check agents-work/plans/ folder for any relevant plans.
 3. Read any plan files to understand the intended design and architecture.
 4. Use `list_directory` and `read_file` to explore the codebase FIRST.
-5. **CHECK IF ALREADY IMPLEMENTED (BEFORE YOU START WORK)**:
+5. **🚨 ALWAYS CHECK IF FILE EXISTS BEFORE CREATING 🚨**:
+   - **BEFORE calling write_file, ALWAYS call file_exists first!**
+   - If file exists: READ it, then EXTEND/MODIFY it (never recreate!)
+   - If file doesn't exist: Create it with write_file
+   - **Phoenix retries get a fresh worktree with ALL previously merged files**
+   - Creating a file that already exists will cause add/add merge conflicts
+   - **CRITICAL**: This is the #1 cause of Phoenix retry failures - ALWAYS check first!
+6. **CHECK IF ALREADY IMPLEMENTED (BEFORE YOU START WORK)**:
    - If a PREVIOUS task already completed your assigned work, use `report_existing_implementation`
    - This tool is ONLY for pre-existing code that you FOUND, NOT code you just created
    - **CRITICAL**: If YOU wrote files in THIS session, DO NOT call this tool - your work needs to be committed!
    - Only use this to avoid duplicate work when another agent already finished the task
-6. If the feature does NOT exist, use `write_file` to create or modify files.
-7. DO NOT output code in the chat. Only use the tools.
-8. You are working in a real file system. Your changes are persistent.
-9. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
+7. If the feature does NOT exist, use `write_file` to create or modify files.
+8. DO NOT output code in the chat. Only use the tools.
+9. You are working in a real file system. Your changes are persistent.
+10. Keep your chat responses extremely concise (e.g., "Reading file...", "Writing index.html...").
 
 Remember: agents-work/ has plans and test results. Your code goes in the project root.
 
