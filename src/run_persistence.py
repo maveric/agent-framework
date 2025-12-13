@@ -17,6 +17,16 @@ from orchestrator_types import serialize_messages
 
 logger = logging.getLogger(__name__)
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def _sqlite_connection(db_path: str):
+    """Open SQLite connection with WAL mode enabled for better concurrency."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
+        yield db
+
 # Get database configuration
 def _get_db_config():
     """Get database configuration from config."""
@@ -58,7 +68,7 @@ async def init_runs_table():
             """)
             logger.info("✅ Runs table initialized (PostgreSQL)")
     else:  # sqlite
-        async with aiosqlite.connect(db_conn_info) as db:
+        async with _sqlite_connection(db_conn_info) as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
@@ -73,7 +83,7 @@ async def init_runs_table():
                 )
             """)
             await db.commit()
-            logger.info("✅ Runs table initialized (SQLite)")
+            logger.info("✅ Runs table initialized (SQLite + WAL mode)")
 
 
 async def save_run_state(run_id: str, state: Dict[str, Any], status: str = "running"):
@@ -130,7 +140,7 @@ async def save_run_state(run_id: str, state: Dict[str, Any], status: str = "runn
                         task_counts_json = EXCLUDED.task_counts_json
                 """, (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json))
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 await db.execute("""
                     INSERT OR REPLACE INTO runs 
                     (run_id, thread_id, objective, status, state_json, created_at, updated_at, workspace_path, task_counts_json)
@@ -161,7 +171,7 @@ async def load_run_state(run_id: str) -> Optional[Dict[str, Any]]:
                         state["_workspace_path"] = row["workspace_path"]
                     return state
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute(
                     "SELECT state_json, workspace_path FROM runs WHERE run_id = ?", (run_id,)
                 )
@@ -200,7 +210,7 @@ async def load_run_summary(run_id: str) -> Optional[Dict[str, Any]]:
                         "tags": []
                     }
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute("""
                     SELECT run_id, thread_id, objective, status, created_at, updated_at, workspace_path, task_counts_json
                     FROM runs WHERE run_id = ?
@@ -241,7 +251,7 @@ async def list_all_runs() -> List[Dict[str, Any]]:
                     "tags": []
                 } for row in rows]
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 cursor = await db.execute("""
                     SELECT run_id, thread_id, objective, status, created_at, updated_at, workspace_path, task_counts_json
                     FROM runs ORDER BY created_at DESC
@@ -268,7 +278,7 @@ async def delete_run(run_id: str) -> bool:
             ) as conn:
                 await conn.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 await db.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
                 await db.commit()
         return True
@@ -291,7 +301,7 @@ async def update_run_status(run_id: str, status: str):
                     (status, updated_at, run_id)
                 )
         else:  # sqlite
-            async with aiosqlite.connect(db_conn_info) as db:
+            async with _sqlite_connection(db_conn_info) as db:
                 await db.execute(
                     "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
                     (status, updated_at, run_id)

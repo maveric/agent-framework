@@ -175,6 +175,8 @@ api_state.manager = manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup - Initialize checkpointer
+    postgres_checkpointer_cm = None  # Track context manager for cleanup
+    
     try:
         from config import OrchestratorConfig
         config = OrchestratorConfig()
@@ -195,7 +197,13 @@ async def lifespan(app: FastAPI):
                 )
             
             logger.info(f"Using PostgreSQL checkpointer")
-            api_state.global_checkpointer = AsyncPostgresSaver.from_conn_string(db_uri)
+            
+            # AsyncPostgresSaver.from_conn_string returns a context manager
+            # We need to enter it and keep the connection alive for the app lifespan
+            postgres_checkpointer_cm = AsyncPostgresSaver.from_conn_string(db_uri)
+            api_state.global_checkpointer = await postgres_checkpointer_cm.__aenter__()
+            
+            # Setup tables (idempotent - safe to call every time)
             await api_state.global_checkpointer.setup()
             logger.info("✅ AsyncPostgresSaver initialized successfully")
             
@@ -208,8 +216,16 @@ async def lifespan(app: FastAPI):
             logger.info(f"Using SQLite checkpointer: {db_path}")
             
             conn = await aiosqlite.connect(db_path)
+            
+            # Enable WAL mode for better concurrent access
+            # - Multiple readers + 1 writer simultaneously  
+            # - Writers don't block readers
+            # - Crash-safe with atomic checkpoints
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")  # Wait 5s if DB locked
+            
             api_state.global_checkpointer = AsyncSqliteSaver(conn)
-            logger.info("✅ AsyncSqliteSaver initialized successfully")
+            logger.info("✅ AsyncSqliteSaver initialized (WAL mode)")
             
         else:
             raise ValueError(f"Unknown checkpoint_mode: {checkpoint_mode}. Use 'sqlite' or 'postgres'")
@@ -265,10 +281,18 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Orchestrator Server")
     shutdown_handler()
     
-    # Close DB connection
+    # Close PostgreSQL context manager if it was opened
+    if postgres_checkpointer_cm is not None:
+        try:
+            await postgres_checkpointer_cm.__aexit__(None, None, None)
+            logger.info("PostgreSQL checkpointer connection closed")
+        except Exception as e:
+            logger.error(f"Error closing PostgreSQL checkpointer: {e}")
+    
+    # Close SQLite connection if it was opened  
     if 'conn' in locals():
         await conn.close()
-        logger.info("Database connection closed")
+        logger.info("SQLite database connection closed")
 
 app = FastAPI(title="Agent Orchestrator API", lifespan=lifespan)
 
