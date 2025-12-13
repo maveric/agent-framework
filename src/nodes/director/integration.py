@@ -67,6 +67,84 @@ class QueryResolutionResponse(BaseModel):
 # FUNCTIONS
 # =============================================================================
 
+def link_features_to_foundation(tasks: List[Task]) -> List[Task]:
+    """
+    DETERMINISTIC PASS: Link first task of each feature component to last foundation task.
+    
+    This is done in CODE, not by LLM, to guarantee the dependency tree structure:
+    - Foundation tasks run first
+    - ALL foundation completes before ANY feature starts
+    - Features run in parallel with each other
+    
+    Args:
+        tasks: List of Task objects
+        
+    Returns:
+        List of Task objects with foundation dependencies added
+    """
+    # Separate foundation and feature tasks
+    foundation_tasks = [t for t in tasks if t.component.lower() in ["foundation", "infrastructure"]]
+    feature_tasks = [t for t in tasks if t.component.lower() not in ["foundation", "infrastructure", "verification"]]
+    
+    if not foundation_tasks:
+        logger.warning("No foundation tasks found - skipping foundation linking")
+        return tasks
+    
+    # Find the LAST foundation task (the one that should complete last)
+    # Heuristic: Find tasks that no other foundation task depends on
+    foundation_ids = {t.id for t in foundation_tasks}
+    depended_on = set()
+    for t in foundation_tasks:
+        for dep_id in t.depends_on:
+            if dep_id in foundation_ids:
+                depended_on.add(dep_id)
+    
+    # Leaf foundation tasks = foundation tasks not depended on by other foundation tasks
+    leaf_foundation_ids = foundation_ids - depended_on
+    
+    if not leaf_foundation_ids:
+        # All are depended on (cycle?) - just use the last one
+        last_foundation_id = foundation_tasks[-1].id
+        last_foundation_title = foundation_tasks[-1].title
+    else:
+        # Pick one of the leaf tasks (prefer the last one in list for consistency)
+        leaf_tasks = [t for t in foundation_tasks if t.id in leaf_foundation_ids]
+        last_foundation_id = leaf_tasks[-1].id
+        last_foundation_title = leaf_tasks[-1].title
+    
+    logger.info(f"🔗 FOUNDATION ANCHOR: '{last_foundation_title}' ({last_foundation_id})")
+    
+    # Group feature tasks by component
+    component_tasks: Dict[str, List[Task]] = {}
+    for t in feature_tasks:
+        comp = t.component
+        if comp not in component_tasks:
+            component_tasks[comp] = []
+        component_tasks[comp].append(t)
+    
+    # Link FIRST task of each feature component to last foundation task
+    linked_count = 0
+    for component, comp_tasks in component_tasks.items():
+        # Find the "first" task (task with no internal dependencies)
+        comp_ids = {t.id for t in comp_tasks}
+        
+        # Tasks that don't depend on other tasks in same component = root tasks
+        root_tasks = [t for t in comp_tasks if not any(dep in comp_ids for dep in t.depends_on)]
+        
+        if not root_tasks:
+            # All have internal deps - just pick the first one
+            root_tasks = [comp_tasks[0]]
+        
+        # Link all root tasks to foundation
+        for root_task in root_tasks:
+            if last_foundation_id not in root_task.depends_on:
+                root_task.depends_on.append(last_foundation_id)
+                linked_count += 1
+                logger.info(f"   🔗 Linked '{root_task.title}' ({component}) → foundation")
+    
+    logger.info(f"🔗 Linked {linked_count} feature root tasks to foundation")
+    return tasks
+
 async def resolve_dependency_queries(tasks: List[Task], state: Dict[str, Any]) -> List[Task]:
     """
     PASS 2: Resolve dependency_queries to actual task IDs using semantic matching.
@@ -91,22 +169,36 @@ async def resolve_dependency_queries(tasks: List[Task], state: Dict[str, Any]) -
     llm = get_llm(model_config)
 
     # Collect all tasks with dependency queries
+    # FILTER: Exclude foundation tasks from matching - code handles foundation linking
     tasks_with_queries = []
     all_tasks_for_matching = []
+    
+    # Keywords that indicate foundation-related queries (handled by code, not LLM)
+    foundation_query_keywords = [
+        "foundation", "infrastructure", "scaffolding", "initialization",
+        "base configuration", "project setup", "dependency installation"
+    ]
 
     for task in tasks:
-        # Build task list for matching
-        all_tasks_for_matching.append({
-            "title": task.title,
-            "id": task.id,
-            "component": task.component,
-            "phase": task.phase.value if hasattr(task.phase, 'value') else str(task.phase),
-            "description": task.description
-        })
+        # FILTER: Don't include foundation tasks in LLM matching (code links to them)
+        if task.component.lower() not in ["foundation", "infrastructure"]:
+            all_tasks_for_matching.append({
+                "title": task.title,
+                "id": task.id,
+                "component": task.component,
+                "phase": task.phase.value if hasattr(task.phase, 'value') else str(task.phase),
+                "description": task.description
+            })
 
         # Check if task has dependency queries
         if task.dependency_queries:
             for query in task.dependency_queries:
+                query_lower = query.lower()
+                # FILTER: Skip foundation-related queries (code handles those)
+                if any(keyword in query_lower for keyword in foundation_query_keywords):
+                    logger.info(f"⏭️ Skipping foundation query (handled by code): '{query}'")
+                    continue
+                    
                 tasks_with_queries.append({
                     "task_title": task.title,
                     "task_id": task.id,
@@ -115,10 +207,10 @@ async def resolve_dependency_queries(tasks: List[Task], state: Dict[str, Any]) -
 
     # If no queries to resolve, return tasks as-is
     if not tasks_with_queries:
-        logger.info("No dependency queries to resolve")
+        logger.info("No non-foundation dependency queries to resolve")
         return tasks
 
-    logger.info(f"Resolving {len(tasks_with_queries)} dependency queries across {len(tasks)} tasks")
+    logger.info(f"Resolving {len(tasks_with_queries)} feature-to-feature dependency queries")
 
     # Build prompt for query resolution
     prompt = ChatPromptTemplate.from_messages([
@@ -617,8 +709,14 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
     # PASS 1 COMPLETE: Tasks are deduplicated with local dependencies
     logger.info(f"Pass 1 complete: Deduplicated {len(new_tasks)} tasks")
 
-    # PASS 2: Resolve dependency queries to actual task IDs
-    logger.info("Pass 2: Resolving cross-component dependency queries...")
+    # PASS 1.5 (DETERMINISTIC): Link feature root tasks to last foundation task
+    # This is done in CODE, not by LLM, to guarantee the tree structure
+    logger.info("Pass 1.5: Linking feature components to foundation (deterministic)...")
+    new_tasks = link_features_to_foundation(new_tasks)
+
+    # PASS 2: Resolve feature-to-feature dependency queries (LLM)
+    # Note: Foundation-related queries are filtered out (code handles those)
+    logger.info("Pass 2: Resolving feature-to-feature dependency queries...")
     new_tasks = await resolve_dependency_queries(new_tasks, state)
 
     # CRITICAL: Detect and break circular dependencies

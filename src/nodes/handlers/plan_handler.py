@@ -82,7 +82,7 @@ You are pouring the concrete foundation. You OWN the project scaffolding.
     else:
         role_instructions = f"""
 **🪑 ROLE: FEATURE ARCHITECT** (Component: {component_name})
-You are adding a room to an existing house. The foundation MUST be fully complete before you start.
+You are adding a room to an existing house. The system automatically ensures foundation completes before your feature starts.
 
 ❌ **FORBIDDEN - DO NOT DO THESE**:
 - Do NOT create "Setup", "Init", "Install", or "Scaffold" tasks
@@ -91,21 +91,23 @@ You are adding a room to an existing house. The foundation MUST be fully complet
 - Do NOT create database connection logic (foundation handles that)
 - Do NOT setup routing/framework base (foundation handles that)
 
-✅ **ASSUME** (foundation is FULLY complete):
+✅ **ASSUME** (foundation is FULLY complete before your tasks run):
 - Project is fully scaffolded and configured
 - All dependencies are installed
 - Database connection exists and works
 - Router/framework is initialized
 - You can focus 100% on your feature logic
 
-🚨 **CRITICAL DEPENDENCY REQUIREMENT**:
-Your FIRST task MUST query for COMPLETE foundation:
-```json
-"dependency_queries": ["Foundation layer is fully complete"]
-```
+🔗 **FOUNDATION LINKING IS AUTOMATIC**:
+- The system automatically links your first task to wait for foundation
+- You do NOT need to add dependency_queries for foundation
+- Focus on feature-to-feature dependencies if your feature needs another feature
 
-This ensures ALL foundation work is done before your feature starts.
-Feature planners run IN PARALLEL with each other, but ALL wait for foundation.
+**CROSS-FEATURE DEPENDENCIES** (if needed):
+If your feature depends on ANOTHER feature (not foundation), add dependency_queries:
+```json
+"dependency_queries": ["User authentication API is complete"]
+```
 
 **Your job**: Build the {component_name} feature ONLY - models, routes, UI, tests for THIS feature.
 """
@@ -253,8 +255,8 @@ Generate your plan now.
             suggested_tasks=[]
         )
 
-    # HARD VALIDATION: Feature planners MUST have dependency_queries to wait for foundation
-    # This is CRITICAL - features must wait for ALL foundation work to complete
+    # INFO: Note if feature planners have any cross-feature dependency_queries
+    # Foundation linking is now handled automatically in code (integration.py)
     if not is_foundation:
         tasks_with_dep_queries = [
             t for t in result.suggested_tasks
@@ -262,28 +264,9 @@ Generate your plan now.
         ]
         
         if len(tasks_with_dep_queries) == 0:
-            logger.error(f"❌ FEATURE planner {task.id} has NO dependency_queries!")
-            logger.error(f"   Feature planners MUST wait for foundation to complete.")
-            return WorkerResult(
-                status="failed",
-                result_path=result.result_path if result else "",
-                aar=AAR(
-                    summary=f"FAILED: Feature planner created {len(result.suggested_tasks)} tasks but NONE have dependency_queries. "
-                            f"Feature planners MUST include 'dependency_queries': [\"Foundation layer is fully complete\"] "
-                            f"on at least one task to wait for foundation.",
-                    approach="N/A",
-                    challenges=[
-                        "Did not include dependency_queries on any task",
-                        "Feature tasks would run before foundation completes",
-                        "Must add: dependency_queries: [\"Foundation layer is fully complete\"]"
-                    ],
-                    decisions_made=[],
-                    files_modified=result.aar.files_modified if result and result.aar else []
-                ),
-                suggested_tasks=[]
-            )
+            logger.info(f"ℹ️ Feature planner {task.id} has no cross-feature dependency_queries (foundation linking is automatic)")
         else:
-            logger.info(f"Feature planner has {len(tasks_with_dep_queries)} task(s) with dependency_queries ✓")
+            logger.info(f"Feature planner has {len(tasks_with_dep_queries)} task(s) with cross-feature dependency_queries")
 
     logger.info(f"Planner created {len(result.suggested_tasks)} tasks ({len(test_tasks)} test tasks)")
     return result
