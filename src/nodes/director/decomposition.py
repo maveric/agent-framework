@@ -190,40 +190,44 @@ async def decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[
         ("system", """You are a Lead Architect creating a design specification.
 
 CRITICAL INSTRUCTIONS:
-1. Analyze the objective and determine the necessary components (e.g., Backend, Frontend, Database, Testing)
-2. Create a comprehensive design specification that will guide all workers
-3. You have leeway to make architectural decisions that best serve the objective
-4. Focus on MVP - deliver the core functionality requested, avoid unnecessary extras
-5. **ALWAYS include dependency isolation** to prevent package pollution across projects
-6. **CONSIDER EXISTING PROJECT STRUCTURE** - if files already exist, build upon them rather than recreating
+1. Analyze the objective and determine the necessary components (Backend, Frontend, Database, Testing).
+2. **DESIGN FOR PARALLELISM**: Structure the application so that features are loosely coupled. Avoid monolithic files (e.g., instead of one huge `routes.py`, suggest `routes/auth.py`, `routes/tasks.py`).
+3. Focus on MVP - deliver the core functionality requested.
+4. **CONSIDER EXISTING PROJECT STRUCTURE** - If files exist, explicitly state how to integrate with them. Do not reinvent the wheel.
+5. **DEPENDENCY ISOLATION**: MANDATORY.
 
 {project_context}
 
 OUTPUT:
 Write a design specification in markdown format with these sections:
-- **Overview**: Brief project summary
-- **Components**: List each component (Backend, Frontend, etc.)
-- **Existing Code Analysis**: If project files exist, describe what's already there and what needs work
-- **Dependency Isolation**: MANDATORY instructions for isolated environments
-  * Python: Use `python -m venv .venv` and activate it before installing packages
-  * Node.js: Use `npm install` (creates local node_modules)
-  * Other: Specify equivalent isolation mechanism
-- **API Routes** (if applicable): Methods, paths, request/response formats
-- **Data Models** (if applicable): Schemas, database tables, field types
-- **File Structure**: Where files should be created
-- **Technology Stack**: What frameworks/libraries to use
-- **.gitignore Requirements**: MANDATORY - must include: .venv/, venv/, node_modules/, __pycache__/, *.pyc, .env
 
-  * **CRITICAL**: Make sure the design spec includes a .gitignore that excludes:
-    - .venv/ or venv/
-    - node_modules/
-    - __pycache__/
-    - *.pyc
-    - *.db (if using SQLite for development)
-    - Any other generated files
-  * This prevents worktree pollution and keeps git operations fast
+- **Overview**: Brief project summary.
 
-Be specific enough that workers can implement without ambiguity."""),
+- **Scaffolding & Setup**: 
+  * Define the commands to initialize the project (e.g., `npm create vite`, `python -m venv`).
+  * List MAJOR dependencies (FastAPI, React, Tailwind, SQLAlchemy, etc.).
+  * Define the **Exact File Structure** (CRITICAL: Define the folder hierarchy strictly to prevent agents from creating conflicting paths).
+
+- **Testing Strategy**:
+  * Define tools (Pytest, Playwright, Jest).
+  * Define where tests should live (e.g., `backend/tests/` or `src/components/__tests__/`).
+
+- **Feature Specifications (Vertical Slices)**:
+  * Break the app down by FEATURE (e.g., "User Auth", "Todo Management", "Settings").
+  * For EACH feature, define:
+    * **Data Models**: The specific tables/schemas needed.
+    * **API Routes**: The endpoints required (Method, Path, Request/Response).
+    * **UI Components**: The frontend views/components needed.
+  * *Grouping requirements by feature helps workers build vertically without blocking each other.*
+
+- **.gitignore Requirements**: 
+  * MUST include: .venv/, venv/, node_modules/, __pycache__/, *.pyc, .env, *.db, dist/, build/, coverage/
+  * Explicitly state that `agents-work/` is the workspace directory.
+
+- **Implementation Guidelines**:
+  * Specific coding standards or patterns to use.
+
+Be specific enough that multiple workers can implement different features simultaneously without conflict."""),
         ("user", "Objective: {objective}")
     ])
 

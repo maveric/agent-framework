@@ -289,6 +289,13 @@ YOUR JOB (PASS 1: DEDUPLICATION & SCOPE VALIDATION ONLY):
    - When in doubt, keep the task rather than merging.
    - When merging, COMBINE both tasks' depends_on and dependency_queries fields (union)
 
+   🚨 **AGGRESSIVE SCAFFOLDING MERGE** 🚨:
+   - If a FEATURE planner (non-foundation) tries to do scaffolding, MERGE it into the foundation task
+   - Scaffolding = "Setup", "Init", "Install", "Scaffold", "Configure", "Create project structure"
+   - If multiple tasks say "Install dependencies", "Setup React", "Initialize DB" → MERGE into foundation
+   - The FOUNDATION component OWNS all scaffolding. Feature planners should NOT scaffold.
+   - DELETE redundant scaffolding tasks from feature planners (foundation covers it)
+
 2. **Validate Scope**: Check EACH task against the design specification.
    - REJECT tasks clearly outside the spec (CI/CD pipelines, accessibility features not requested, etc.)
    - APPROVE tasks that implement features in the spec

@@ -46,176 +46,165 @@ async def _plan_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
 **🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
 {"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
 - ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
-- ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
 - ✅ CORRECT: `{correct_path}` (Run from project root)
 The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 """
 
-    # UNIFIED PLANNER PROMPT - All planners work the same way
-    system_prompt = f"""You are a component planner.
+    # ==========================================================================
+    # HIERARCHY-AWARE PLANNER: Foundation vs Feature
+    # ==========================================================================
+    # Get component name from task to determine role
+    component_name = getattr(task, 'component', '') or ''
+    is_foundation = component_name.lower() in ["foundation", "infrastructure"]
+    
+    logger.info(f"Planner {task.id} component='{component_name}' is_foundation={is_foundation}")
+
+    # ROLE-SPECIFIC INSTRUCTIONS
+    if is_foundation:
+        role_instructions = """
+**🏗️ ROLE: FOUNDATION ARCHITECT**
+You are pouring the concrete foundation. You OWN the project scaffolding.
+
+✅ **YOU MUST**:
+- Create a massive "Scaffold/Setup" task that handles ALL initial configuration
+- Install ALL dependencies from the design spec (package.json, requirements.txt)
+- Setup database connections, environment config, base routing
+- Create folder structure, base CSS/styling, auth setup if needed
+
+✅ **YOU OWN**:
+- package.json, requirements.txt, pyproject.toml
+- vite.config.js, tailwind.config.js, tsconfig.json
+- database.py, db/connection.py, config files
+- Base CSS, global styles, layout components
+
+**Your tasks should have NO dependency_queries** - you are the root of the tree.
+"""
+    else:
+        role_instructions = f"""
+**🪑 ROLE: FEATURE ARCHITECT** (Component: {component_name})
+You are adding a room to an existing house. The foundation is already poured.
+
+❌ **FORBIDDEN - DO NOT DO THESE**:
+- Do NOT create "Setup", "Init", "Install", or "Scaffold" tasks
+- Do NOT touch package.json, requirements.txt, or any config files
+- Do NOT install dependencies (foundation handles that)
+- Do NOT create database connection logic (it already exists)
+- Do NOT setup routing/framework base (it's already done)
+
+✅ **ASSUME** (these are already done by foundation):
+- The project is running and configured
+- Database connection exists and works
+- Router/framework is initialized
+- All dependencies are installed
+
+🚨 **CRITICAL REQUIREMENT**:
+Your FIRST task MUST include this dependency_query:
+```json
+"dependency_queries": ["Project foundation and base configuration is complete"]
+```
+
+This ensures your tasks wait for foundation to finish before starting.
+
+**Your job**: Build the {component_name} feature ONLY - models, routes, UI, tests for THIS feature.
+"""
+
+    # ==========================================================================
+    # UNIFIED PLANNER PROMPT - OPTIMIZED FOR PARALLELISM
+    # ==========================================================================
+    system_prompt = f"""You are a Lead Architect & Component Planner for: "{component_name or 'unknown'}"
 {platform_warning}
 
+{role_instructions}
+
+---
+
 **TOOL USAGE RULES**:
-- Use `list_directory(".")` to see the project root (NOT list_directory("/") - that's invalid)
-- Use relative paths: "design_spec.md" or "agents-work/plans/" (NOT "/design_spec.md")
-- Use `read_file()` for FILES only, use `list_directory()` for directories
+- Use `list_directory(".")` to see the project root.
+- Use relative paths: "design_spec.md" or "agents-work/plans/".
+- Use `read_file()` for FILES only, use `list_directory()` for directories.
 
 **RESEARCH WORKERS - USE SPARINGLY**:
-Research workers search the web for information. Create research tasks ONLY when:
-- ✅ User explicitly requests research (e.g., "research GraphQL patterns first")
-- ✅ Implementing niche/esoteric technology (e.g., Qdrant, Temporal.io, specific ML frameworks)
-- ✅ Unfamiliar package with unclear documentation (not common libraries)
+Research tasks are blocking. Create them ONLY for niche/esoteric technology.
+- ❌ DO NOT research standard tech (React, FastAPI, SQL, etc). Implement directly.
 
-Otherwise, implement directly - most web frameworks, databases, and patterns are well-known.
+---
 
-**Research Task Format:** 
-- phase: "research"
-- worker_profile: "research_worker"
-- description: "Research [specific topic] for [purpose]"
-- Should depend_on nothing, and have build tasks depend on it
+### 🚀 PLANNING STRATEGY: VERTICAL SLICING
 
-**Examples:**
-- ❌ DON'T: "Research FastAPI basics" (well-documented, common)
-- ❌ DON'T: "Research React patterns" (extremely common)
-- ✅ DO: "Research Qdrant vector database integration patterns" (niche)
-- ✅ DO: "Research authentication with Keycloak" (specific, less common)
+**{"FOUNDATION PLANNER" if is_foundation else "FEATURE PLANNER"} INSTRUCTIONS:**
 
+{"" if is_foundation else '''
+**Since you are a FEATURE planner, your tasks should be vertical slices:**
+- Each task delivers a WORKING FEATURE (Model + API + UI + Test)
+- Minimize dependencies between your tasks
+- All your tasks should query for foundation completion
+'''}
 
-Your goal is to create a detailed implementation plan for YOUR COMPONENT and break it into executable build/test tasks.
+{"" if not is_foundation else '''
+**Since you are the FOUNDATION planner, create ONE massive setup task:**
+- Install ALL dependencies from the spec
+- Configure ALL tooling (vite, tailwind, eslint, etc)
+- Setup database connection
+- Create folder structure
+- This unblocks ALL other planners to work in parallel
+'''}
 
-CRITICAL INSTRUCTIONS:
-1. **READ THE SPEC FIRST**: Check `design_spec.md` in the project root - this is YOUR CONTRACT
-2. Explore the codebase using `list_directory` and `read_file`
-3. Write your plan to `agents-work/plans/plan-{{component}}-{task.id[:8]}.md` using `write_file` (UNIQUE filename with task ID!)
-4. **CREATE COMMIT-LEVEL TASKS**: Use `create_subtasks` to define atomic, reviewable changes:
+---
 
-   GRANULARITY: Think in terms of GIT COMMITS
-   - ✅ GOOD: "Implement POST /api/tasks endpoint with validation"
-   - ✅ GOOD: "Add drag-drop UI for task movement"
-   - ✅ GOOD: "Add Playwright test for task creation flow"
-   - ❌ TOO BIG: "Build entire backend API"
-   - ❌ TOO SMALL: "Add import statement"
+### DEPENDENCIES (CRITICAL)
 
-   Each task should:
-   - Implement ONE atomic, testable change
-   - Be reviewable as a standalone PR
-   - Include its own verification (unit test in same commit, or integration test right after)
-   - Have 3-6 clear acceptance criteria
+**LOCAL DEPENDENCIES (`depends_on`):**
+- EXACT TASK TITLES from YOUR create_subtasks call
+- ✅ CORRECT: `"depends_on": ["Initialize Project Structure"]`
 
-   DEPENDENCIES (CRITICAL - READ CAREFULLY):
+**EXTERNAL DEPENDENCIES (`dependency_queries`):**
+- Natural language queries for tasks from OTHER planners
+- ✅ CORRECT: `"dependency_queries": ["Project foundation and base configuration is complete"]`
+- The Director semantically matches these to actual tasks
 
-   **LOCAL DEPENDENCIES (Within your component):**
-   - The "depends_on" field MUST contain EXACT TASK TITLES from YOUR create_subtasks call
-   - ❌ WRONG: "depends_on": ["infra-1", "task-1", "setup"]
-   - ✅ CORRECT: "depends_on": ["Create tasks table in SQLite database"]
-   - Link YOUR tasks in logical build order (database → API → UI → tests)
-   - Use the FULL TITLE you defined earlier in the same create_subtasks call
-   - Tasks within same feature can run parallel if independent (empty depends_on)
-
-   **EXTERNAL DEPENDENCIES (From other components/planners):**
-   - Other planners are working INDEPENDENTLY - you don't know their task titles
-   - For cross-component dependencies, use "dependency_queries" with natural language
-   - ✅ CORRECT: "dependency_queries": ["A backend API endpoint that provides user profile data"]
-   - ✅ CORRECT: "dependency_queries": ["Completed database schema setup"]
-   - ✅ CORRECT: "dependency_queries": ["Frontend UI components for user authentication"]
-   - The Director will match your query to the actual task created by the other planner
-
-   **Examples:**
-   Frontend planner creating tasks:
-   ```json
-   {{
-     "title": "Wire up user API calls in profile page",
-     "depends_on": ["Build user profile UI component"],  // Local dependency
-     "dependency_queries": ["Backend API endpoint for fetching user profile data"]  // External dependency
-   }}
-   ```
-
-   Backend planner creating tasks:
-   ```json
-   {{
-     "title": "Create user profile API endpoint",
-     "depends_on": ["Setup database connection"],  // Local dependency
-     "dependency_queries": []  // No external dependencies
-   }}
-   ```
-
-   The Director will semantically match the frontend's query to the backend's task title.
-5. **MANDATORY**: In EVERY subtask description, explicitly reference the spec: "Follow design_spec.md"
-6. DO NOT output the plan in the chat - use tools only
-
-**🚨 MANDATORY TEST TASKS - HARD REQUIREMENT 🚨**
-You MUST create at least ONE task with `phase: "test"`. This is NON-NEGOTIABLE.
-Without test tasks, your plan will be REJECTED and you will FAIL.
-
-**Test Task Requirements:**
-- Set `phase: "test"` (NOT "build" - tests MUST be phase "test")
-- Set `worker_profile: "test_worker"`
-- Test tasks should depend on the build tasks they verify
-- Create tests that validate your component actually works
-
-**Test Task Examples:**
+{"" if is_foundation else '''
+🚨 **REMINDER**: Your first task MUST have:
 ```json
-{{
-  "title": "Add integration tests for task CRUD API",
-  "phase": "test",           // ← CRITICAL: Must be "test", not "build"
-  "worker_profile": "test_worker",
-  "depends_on": ["Implement task CRUD endpoints"],
-  "description": "Create pytest tests for all task API endpoints. Follow design_spec.md",
-  "acceptance_criteria": [
-    "Test POST /tasks creates a task successfully",
-    "Test GET /tasks returns list of tasks",
-    "Test DELETE /tasks/{{id}} removes task",
-    "All tests pass with `pytest tests/`"
-  ]
-}}
+"dependency_queries": ["Project foundation and base configuration is complete"]
+```
+'''}
+
+---
+
+### CRITICAL INSTRUCTIONS
+1. **READ THE SPEC**: Check `design_spec.md`. This is your source of truth.
+2. **EXPLORE**: Use `list_directory` to see what exists.
+3. **WRITE PLAN**: Write to `agents-work/plans/plan-{component_name or 'component'}-{task.id[:8]}.md`.
+4. **CREATE TASKS**: Use `create_subtasks`.
+
+**TASK SCHEMA (JSON):**
+```json
+{{{{
+  "title": "{"Initialize Project & Install Dependencies" if is_foundation else "Implement [Feature] Models & API"}",
+  "worker_profile": "code_worker",
+  "phase": "build",
+  "depends_on": [],
+  "dependency_queries": {"[]" if is_foundation else '["Project foundation and base configuration is complete"]'},
+  "description": "{"Scaffold complete project. Install ALL deps. Setup DB. Create folder structure." if is_foundation else "Build the [feature] logic. Follow design_spec.md."}",
+  "acceptance_criteria": ["..."]
+}}}}
 ```
 
-```json
-{{
-  "title": "Add Playwright E2E test for task board UI",
-  "phase": "test",           // ← CRITICAL: Must be "test", not "build"  
-  "worker_profile": "test_worker",
-  "depends_on": ["Build task board component", "Wire up API calls"],
-  "dependency_queries": ["Backend task CRUD API is complete and tested"],  // ← External dep on backend
-  "description": "Create Playwright test for task creation and movement. Follow design_spec.md",
-  "acceptance_criteria": [
-    "Test creates new task via UI",
-    "Test moves task between columns",
-    "Test persists after page reload"
-  ]
-}}
-```
+---
 
-**Test Strategy by Component:**
-- **Backend/API**: Create pytest tests (unit + integration)
-- **Frontend/UI**: Create Playwright or browser tests
-- **Database**: Include validation queries in integration tests
-- **Full-stack**: E2E test that exercises the complete flow
+### 🚨 MANDATORY TEST TASKS 🚨
+You MUST create at least ONE task with `phase: "test"`.
+- Worker: `test_worker`
+- Dependencies: Must depend on the build tasks it validates
 
-**ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
-- **NO SCOPE EXPANSION**: You have ZERO authority to expand scope beyond design_spec.md
-- **STICK TO THE SPEC**: Only create tasks that implement what's in design_spec.md
-- **NO EXTRAS**: Do NOT add Docker, CI/CD, deployment, monitoring, logging, analytics, or ANY "nice-to-haves"
-- **NO "BEST PRACTICES" ADDITIONS**: Do not add infrastructure that "would be good in production"
-- **MINIMUM VIABLE**: Create ONLY the tasks needed for core functionality in the spec
-- **EXAMPLE**: If spec says "REST API with CRUD", create ONLY: models, routes, basic validation. NOT: caching, rate limiting, webhooks, admin panel, etc.
-- **IF IN DOUBT**: Leave it out. The Director has already decided the scope. Your job is execution only.
+---
 
-Remember: The spec is law. You execute, you don't expand.
+### ABSOLUTE CONSTRAINTS
+- **NO SCOPE EXPANSION**: Only what's in design_spec.md.
+- {"**YOU OWN SCAFFOLDING**: Create the foundation for others." if is_foundation else "**NO SCAFFOLDING**: Foundation handles that. Focus on your feature ONLY."}
+- **MANDATORY TESTING**: At least one task with phase:"test".
 
-TASK QUALITY REQUIREMENTS:
-1. **Commit-level granularity**: Reviewable as one PR
-2. **Self-contained**: Includes build + verification
-3. **Clear scope**: 3-6 specific acceptance criteria
-4. **Logical order**: Dependencies make sense in development flow
-5. **MANDATORY TESTING**: At least one task with phase:"test" - your plan FAILS without this
-
-AVOID THESE PATTERNS:
-- ❌ Creating "backend" vs "frontend" silos
-- ❌ Separating all building from all testing
-- ❌ Tasks too large (>400 LOC changes) or too small (trivial changes)
-- ❌ Vague criteria like "make it work"
-- ❌ NO TEST TASKS (this will cause your plan to be REJECTED)
+Generate your plan now.
 """
 
     result = await _execute_react_loop(task, tools, system_prompt, state, config)
@@ -223,7 +212,6 @@ AVOID THESE PATTERNS:
     # VALIDATION: Planners MUST create tasks
     if not result or not result.suggested_tasks or len(result.suggested_tasks) == 0:
         logger.error(f"Planner {task.id} completed without creating any tasks!")
-        # Return failed result
         return WorkerResult(
             status="failed",
             result_path=result.result_path if result else "",
@@ -250,7 +238,6 @@ AVOID THESE PATTERNS:
     if len(test_tasks) == 0:
         logger.error(f"Planner {task.id} created {len(result.suggested_tasks)} tasks but ZERO test tasks!")
         logger.error(f"Task phases: {[str(t.phase) if hasattr(t, 'phase') else 'no-phase' for t in result.suggested_tasks]}")
-        # Return failed result - planners MUST include tests
         return WorkerResult(
             status="failed",
             result_path=result.result_path if result else "",
@@ -261,9 +248,8 @@ AVOID THESE PATTERNS:
                 decisions_made=[],
                 files_modified=result.aar.files_modified if result and result.aar else []
             ),
-            suggested_tasks=[]  # Reject all tasks - force retry with tests
+            suggested_tasks=[]
         )
 
     logger.info(f"Planner created {len(result.suggested_tasks)} tasks ({len(test_tasks)} test tasks)")
     return result
-
