@@ -124,46 +124,7 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
                 )
                 if commit_hash:
                     logger.info(f"  Committed: {commit_hash[:8]}")
-
-                    # Merge to main immediately for now to allow subsequent tasks to see changes
-                    # In a full flow, this might be gated by QA, but for linear dependencies we need it.
-                    try:
-                        logger.info(f"  [DEBUG] Calling merge_to_main for {task_id}...")
-                        merge_result = await wt_manager.merge_to_main(task_id)
-                        if merge_result.success:
-                            logger.info(f"  Merged to main")
-                        else:
-                            # Merge failed - this should trigger Phoenix retry
-                            logger.error(f"  ❌ Merge failed: {merge_result.error_message}")
-                            # Override the result to failed status
-                            result = WorkerResult(
-                                status="failed",
-                                result_path=result.result_path,
-                                aar=AAR(
-                                    summary=f"Merge failed: {merge_result.error_message[:200]}",
-                                    approach=result.aar.approach if result.aar else "unknown",
-                                    challenges=[merge_result.error_message] if result.aar else [],
-                                    decisions_made=result.aar.decisions_made if result.aar else [],
-                                    files_modified=result.aar.files_modified if result.aar else []
-                                ),
-                                messages=result.messages if hasattr(result, 'messages') else []
-                            )
-                    except Exception as e:
-                        logger.error(f"  ❌ Merge exception: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        # Override to failed
-                        result = WorkerResult(
-                            status="failed",
-                            result_path="",
-                            aar=AAR(
-                                summary=f"Merge exception: {str(e)[:200]}",
-                                approach="failed",
-                                challenges=[str(e)],
-                                decisions_made=[],
-                                files_modified=[]
-                            )
-                        )
+                    # Merge will happen in strategist node after QA passes
 
             except Exception as e:
                 logger.warning(f"  Warning: Failed to commit: {e}")

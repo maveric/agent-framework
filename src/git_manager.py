@@ -135,7 +135,99 @@ class AsyncWorktreeManager:
             raise RuntimeError(f"Git command failed: {' '.join(cmd)}\n{stderr_str}")
 
         return process.returncode, stdout_str, stderr_str
-    
+
+    async def _ensure_clean_git_state(self, worktree_path: Path) -> None:
+        """
+        Ensure git is in a clean state before operations.
+        Aborts any abandoned rebase or merge operations.
+
+        Args:
+            worktree_path: Path to the worktree to check
+        """
+        # Check for abandoned rebase
+        rebase_dir = worktree_path / ".git" / "rebase-merge"
+        rebase_apply_dir = worktree_path / ".git" / "rebase-apply"
+
+        if rebase_dir.exists() or rebase_apply_dir.exists():
+            logger.warning(f"  🧹 Cleaning abandoned rebase in {worktree_path.name}")
+            await self._run_git(["rebase", "--abort"], cwd=worktree_path, check=False)
+
+        # Check for abandoned merge
+        merge_head = worktree_path / ".git" / "MERGE_HEAD"
+
+        if merge_head.exists():
+            logger.warning(f"  🧹 Cleaning abandoned merge in {worktree_path.name}")
+            await self._run_git(["merge", "--abort"], cwd=worktree_path, check=False)
+
+    async def rebase_on_main(self, task_id: str) -> MergeResult:
+        """
+        Rebase a task's worktree on main before merging.
+
+        This handles concurrent edits by replaying task changes on top of latest main.
+        Fails fast on conflicts - Phoenix will retry with fresh state.
+
+        Args:
+            task_id: Task whose worktree to rebase
+
+        Returns:
+            MergeResult indicating success or conflict
+        """
+        info = self.worktrees.get(task_id)
+        if not info:
+            return MergeResult(
+                success=False,
+                task_id=task_id,
+                error_message=f"No worktree for task: {task_id}"
+            )
+
+        wt_path = info.worktree_path
+
+        # Clean any dirty git state first
+        await self._ensure_clean_git_state(wt_path)
+
+        # Fetch latest main into the worktree
+        logger.info(f"  📥 Fetching latest {self.main_branch} for rebase...")
+        await self._run_git(
+            ["fetch", ".", f"{self.main_branch}:{self.main_branch}"],
+            cwd=wt_path,
+            check=False
+        )
+
+        # Rebase task branch onto main
+        logger.info(f"  🔄 Rebasing {info.branch_name} onto {self.main_branch}...")
+        returncode, stdout, stderr = await self._run_git(
+            ["rebase", self.main_branch],
+            cwd=wt_path,
+            check=False
+        )
+
+        if returncode != 0:
+            # Rebase failed - likely conflicts
+            # Abort the rebase to leave worktree in clean state
+            logger.error(f"  ❌ Rebase failed for {task_id} - conflicts detected")
+            await self._run_git(["rebase", "--abort"], cwd=wt_path, check=False)
+
+            # Parse conflicts if possible
+            conflict_files = []
+            if "CONFLICT" in stdout or "CONFLICT" in stderr:
+                import re
+                conflict_pattern = r"CONFLICT.*?:\s+(?:Merge conflict in|add/add):\s+(.+)"
+                conflicts = re.findall(conflict_pattern, stdout + stderr)
+                conflict_files = list(set(conflicts))
+
+            error_msg = f"Rebase conflicts detected. Files: {', '.join(conflict_files) if conflict_files else 'unknown'}\n{stdout}\n{stderr}"
+
+            return MergeResult(
+                success=False,
+                task_id=task_id,
+                conflict=True,
+                conflicting_files=conflict_files,
+                error_message=error_msg
+            )
+
+        logger.info(f"  ✅ Rebase successful - {task_id} synced with {self.main_branch}")
+        return MergeResult(success=True, task_id=task_id)
+
     async def create_worktree(
         self,
         task_id: str,
@@ -273,41 +365,9 @@ class AsyncWorktreeManager:
         
         if returncode == 0:
             return ""  # No changes
-        
-        # CRITICAL: Rebase on main BEFORE committing to get latest changes
-        # This surfaces conflicts early when agent still has context
-        logger.info(f"  📥 Rebasing worktree on {self.main_branch} before commit...")
-        
-        # Fetch latest main (in case it's changed since worktree was created)
-        await self._run_git(["fetch", ".", f"{self.main_branch}:{self.main_branch}"], cwd=wt_path, check=False)
-        
-        # Stash our staged changes temporarily
-        await self._run_git(["stash", "--include-untracked"], cwd=wt_path, check=False)
-        
-        # Rebase on main
-        rebase_code, rebase_out, rebase_err = await self._run_git(
-            ["rebase", self.main_branch],
-            cwd=wt_path,
-            check=False
-        )
-        
-        # Pop stash to restore our changes
-        await self._run_git(["stash", "pop"], cwd=wt_path, check=False)
-        
-        # Re-stage files after rebase
-        if files:
-            for f in files:
-                await self._run_git(["add", f], cwd=wt_path)
-        else:
-            await self._run_git(["add", "-A"], cwd=wt_path)
-        
-        if rebase_code != 0:
-            logger.warning(f"  ⚠️ Rebase had issues (may have conflicts): {rebase_out} {rebase_err}")
-            # Continue anyway - conflicts will appear in the commit/merge
-        else:
-            logger.info(f"  ✅ Rebase successful - worktree synced with {self.main_branch}")
-        
-        # Commit
+
+        # Commit directly to task branch
+        # Rebase will happen later in strategist before merge (after QA passes)
         await self._run_git(["commit", "-m", message], cwd=wt_path)
         
         # Get commit hash
