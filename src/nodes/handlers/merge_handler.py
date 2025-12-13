@@ -44,6 +44,10 @@ async def _merge_handler(task: Task, state: Dict[str, Any], config: Dict[str, An
 You are handling a rebase conflict that occurred when trying to integrate changes from a task branch onto main.
 The previous worker completed their task successfully, but when rebasing their branch onto the latest main, conflicts were detected.
 
+**CRITICAL MINDSET:**
+Your goal is NOT to "pick a winner" - it's to CREATE A MERGED VERSION that includes functionality from BOTH branches.
+Think of yourself as combining two recipes into one dish that has all the flavors.
+
 **CRITICAL: THE REBASE WORKFLOW**
 
 The original rebase was ABORTED to leave the worktree clean. You MUST follow this exact workflow:
@@ -70,43 +74,93 @@ Conflict markers look like:
 >>>>>>> commit_message
 ```
 
-**STEP 3: Resolve Each Conflict**
+**STEP 3: UNDERSTAND Before Resolving**
+Before writing ANY merged code:
+1. Read BOTH versions carefully 
+2. Ask: What was main trying to accomplish?
+3. Ask: What was the task branch trying to accomplish?
+4. Ask: How can I include BOTH features in the merged result?
+
+To see the ORIGINAL file versions (helpful context):
+```bash
+git show main:<filename>              # Main's full version
+git show REBASE_HEAD:<filename>       # Task branch's full version
+```
+
+**STEP 4: Resolve Each Conflict**
 For each conflicting file:
 1. Read the file with `read_file` to see conflict markers
-2. Understand what both versions intended
-3. Write the MERGED version using `write_file` (remove ALL conflict markers)
+2. UNDERSTAND what both versions intended (use git show if needed)
+3. Write the MERGED version using `write_file`:
+   - Include functionality from BOTH branches
+   - Remove ALL conflict markers (<<<, ===, >>>)
+   - Ensure the code is syntactically valid
 4. Stage with: `git add <filename>`
 
-**STEP 4: Continue the Rebase**
+**STEP 5: Continue the Rebase**
 After resolving ALL conflicts:
 ```bash
 git rebase --continue
 ```
 
-If more conflicts appear, repeat Steps 2-4.
-If the rebase completes, you're done!
+If more conflicts appear, repeat Steps 3-4.
+If the rebase completes, move to verification!
 
-**STEP 5: Verify**
+**STEP 6: VERIFY THE MERGE (REQUIRED)**
+After rebase completes:
 ```bash
-git status                # Should show "nothing to commit"
-git log --oneline -n 5    # Should show your commits rebased on main
+# Check the merged code compiles/runs
+python -m py_compile <file>.py  # For Python files
+# OR run the project's test command if you know it
+
+# Verify both features are present
+git log --oneline -n 5    # Should show commits from both branches
 ```
 
 **CONFLICT RESOLUTION STRATEGIES:**
 
 1. **Content Conflicts (same lines modified):**
    - Read both versions carefully
-   - Merge logically - often you can keep BOTH changes
-   - Example: Main added logging, Task added error handling → Keep both
+   - Merge logically - almost always you can keep BOTH changes
+   - Example: Main added logging, Task added error handling → Keep BOTH:
+   ```python
+   # WRONG - picking one
+   def func():
+       logging.info("Called")  # Only main's change
+   
+   # RIGHT - merging both
+   def func():
+       logging.info("Called")  # Main's change
+       try:                     # Task's change
+           ...
+       except Exception as e:
+           logging.error(e)
+   ```
 
 2. **Add/Add Conflicts (both created same file):**
-   - Compare both versions
-   - Merge the contents intelligently
-   - Don't just pick one - combine them
+   - Compare both versions COMPLETELY
+   - Identify what's UNIQUE to each version
+   - Create a merged file with ALL unique content from both
+   - Don't just pick one - COMBINE them
 
-3. **When in Doubt:**
-   - Prefer the task branch changes (the new feature)
-   - But ensure main's changes aren't lost if they're important
+3. **Import Conflicts:**
+   - Usually you can include ALL imports from both versions
+   - Remove duplicates
+
+4. **Function/Class Conflicts:**
+   - If both added different functions → include BOTH functions
+   - If both modified same function → merge the logic carefully
+
+**WHEN IN DOUBT:**
+- If you can't figure out how to combine them, include BOTH versions but comment out the conflict with:
+  ```python
+  # TODO: Merge conflict - review needed
+  # Version from main:
+  # <main's code>
+  # Version from task:
+  <task's code>  # Active version
+  ```
+- Log this in your AAR so humans can review
 
 **COMMANDS REFERENCE:**
 - `git rebase main` - Start/continue rebase onto main
@@ -116,12 +170,13 @@ git log --oneline -n 5    # Should show your commits rebased on main
 - `git diff` - See conflict markers
 - `git add <file>` - Stage resolved file
 - `git show main:<file>` - See main's version (before conflict)
-- `git show HEAD:<file>` - See current HEAD version
+- `git show REBASE_HEAD:<file>` - See task branch version
 
 **IMPORTANT:**
 - You MUST remove ALL `<<<<<<<`, `=======`, and `>>>>>>>` markers
 - After `git add`, the file should have clean, working code
-- Test the code if possible before continuing rebase
+- The merged code should include functionality from BOTH branches
+- If you can't verify the code runs, note it in your AAR
 """
 
     return await _execute_react_loop(task, tools, system_prompt, state, config)
