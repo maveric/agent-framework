@@ -440,7 +440,8 @@ async def _execute_react_loop(
 
     # Generate AAR
     # If explicitly completed, use that for the summary
-    summary = str(last_message.content)[:200] if isinstance(last_message, AIMessage) else "Task completed"
+    # NOTE: Do NOT truncate - fixer workers need full details when tests fail
+    summary = str(last_message.content) if isinstance(last_message, AIMessage) else "Task completed"
     if explicitly_completed:
         summary = f"ALREADY IMPLEMENTED: {completion_details.get('implementation_summary', '')}"
 
