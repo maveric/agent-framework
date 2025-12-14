@@ -108,6 +108,7 @@ class OrchestratorConfig:
     enable_guardian: bool = False  # Drift detection
     enable_git_worktrees: bool = False  # Git isolation per task
     enable_webhooks: bool = False
+    enable_transitive_reduction: bool = False  # Graph optimization (testing - may remove needed deps)
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"

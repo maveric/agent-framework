@@ -840,11 +840,15 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
         logger.warning(f"FIXED {cycles_broken} circular dependency(ies) in task graph!")
         await broadcast_progress(state, f"⚠️ Fixed {cycles_broken} circular dependencies", "integration")
 
-    # PASS 3: Transitive reduction - remove redundant edges
+    # PASS 3: Transitive reduction - remove redundant edges (OPTIONAL)
     # If A → B → C exists, then A → C is redundant (cleaner graph, same execution order)
-    logger.info("Pass 3: Transitive reduction (removing redundant edges)...")
-    await broadcast_progress(state, "Optimizing dependency graph...", "integration")
-    new_tasks = transitive_reduction(new_tasks)
+    if orch_config.enable_transitive_reduction:
+        logger.info("Pass 3: Transitive reduction (removing redundant edges)...")
+        await broadcast_progress(state, "Optimizing dependency graph...", "integration")
+        new_tasks = transitive_reduction(new_tasks)
+    else:
+        logger.info("Pass 3: Transitive reduction SKIPPED (disabled in config)")
+        await broadcast_progress(state, "Skipping transitive reduction (disabled)", "integration")
 
     logger.info(f"Integration complete: {len(new_tasks)} tasks with resolved dependencies")
     await broadcast_progress(state, f"✓ Integration complete: {len(new_tasks)} tasks ready", "integration")
