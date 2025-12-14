@@ -337,19 +337,7 @@ export function RunDetails() {
                                 ))}
                                 {run.tasks.length === 0 && (
                                     <div className="text-center py-8 bg-slate-800/50 rounded-lg border border-slate-700 border-dashed col-span-full">
-                                        {statusMessage ? (
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-center gap-2">
-                                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                                                    <span className="text-slate-300">{statusMessage}</span>
-                                                </div>
-                                                {statusPhase === 'init' && (
-                                                    <div className="text-xs text-slate-500">Setting up workspace environment...</div>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="text-slate-500">No tasks generated yet</div>
-                                        )}
+                                        <div className="text-slate-500">No tasks generated yet</div>
                                     </div>
                                 )}
                             </div>
