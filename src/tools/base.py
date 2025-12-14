@@ -260,6 +260,10 @@ List files and directories at a path.
 - `path` (string, optional): Directory path. Default: "." (current)
 - `recursive` (bool, optional): Include subdirectories. Default: false
 - `pattern` (string, optional): Glob pattern filter. Default: "*"
+- `max_depth` (int, optional): Maximum recursion depth. Default: 3
+- `max_results` (int, optional): Maximum results. Default: 500
+
+**Auto-excluded directories:** node_modules, venv, .venv, __pycache__, .git, dist, build, site-packages
 
 **Returns:** List of file/directory names with metadata
 
@@ -330,14 +334,16 @@ FILESYSTEM_TOOLS: List[ToolDefinition] = [
     ToolDefinition(
         name="list_directory",
         category=ToolCategory.FILESYSTEM,
-        description="List files and directories",
-        detailed_docs="List files and directories at a given path.",
+        description="List files and directories (auto-excludes node_modules, venv)",
+        detailed_docs="List files and directories. Auto-excludes large dirs like node_modules, venv. Limited depth and results.",
         parameters=[
             ToolParameter(name="path", type="string", description="Directory path", required=False, default="."),
             ToolParameter(name="recursive", type="bool", description="Include subdirectories", required=False, default=False),
             ToolParameter(name="pattern", type="string", description="Glob pattern filter", required=False, default="*"),
+            ToolParameter(name="max_depth", type="int", description="Max recursion depth", required=False, default=3),
+            ToolParameter(name="max_results", type="int", description="Max results to return", required=False, default=500),
         ],
-        returns="List of file/directory names with metadata",
+        returns="List of file/directory names (truncated at 500)",
         examples=['list_directory(path="src", recursive=True, pattern="*.py")'],
     ),
     ToolDefinition(

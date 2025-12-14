@@ -165,7 +165,9 @@ async def list_directory_async(
     path: str = ".", 
     recursive: bool = False, 
     pattern: str = "*", 
-    root: Optional[Path] = None
+    root: Optional[Path] = None,
+    max_depth: int = 3,
+    max_results: int = 500
 ) -> List[str]:
     """
     List files and directories asynchronously.
@@ -175,6 +177,8 @@ async def list_directory_async(
         recursive: Include subdirectories (default: False)
         pattern: Glob pattern (default: "*")
         root: Optional workspace root override
+        max_depth: Maximum recursion depth (default: 3, prevents deep venv/node_modules)
+        max_results: Maximum number of results to return (default: 500)
         
     Returns:
         List of file paths
@@ -189,19 +193,53 @@ async def list_directory_async(
     if not target_path.exists():
         return [f"Directory not found: {path}"]
     
-    # Glob is CPU-bound, run in thread
-    def _do_glob():
-        import glob
+    # Directories to always exclude (token killers)
+    EXCLUDED_DIRS = {
+        'node_modules', 'venv', '.venv', '__pycache__', '.git', '.svn',
+        'dist', 'build', '.tox', '.pytest_cache', '.mypy_cache',
+        'site-packages', '.eggs', '*.egg-info', 'coverage', '.coverage',
+        '.idea', '.vscode', 'htmlcov'
+    }
+    
+    # Walk directory with depth limit and exclusions
+    def _do_walk():
+        import fnmatch
         results = []
-        abs_pattern = str(target_path / "**" / pattern) if recursive else str(target_path / pattern)
-        for p in glob.glob(abs_pattern, recursive=recursive):
-            rel_path = os.path.relpath(p, workspace_root)
-            rel_path = rel_path.replace("\\", "/")
-            if rel_path != ".":
-                results.append(rel_path)
+        base_depth = len(target_path.parts)
+        
+        for root_dir, dirs, files in os.walk(target_path):
+            root_path = Path(root_dir)
+            current_depth = len(root_path.parts) - base_depth
+            
+            # Depth limit
+            if current_depth >= max_depth:
+                dirs[:] = []  # Don't recurse deeper
+                continue
+            
+            # Exclude problematic directories (modifies dirs in-place)
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and 
+                       not any(fnmatch.fnmatch(d, ex) for ex in EXCLUDED_DIRS if '*' in ex)]
+            
+            # If not recursive, clear dirs to stop after first level
+            if not recursive:
+                dirs[:] = []
+            
+            # Match files and dirs against pattern
+            for name in files + dirs:
+                if fnmatch.fnmatch(name, pattern):
+                    full_path = root_path / name
+                    rel_path = os.path.relpath(full_path, workspace_root)
+                    rel_path = rel_path.replace("\\", "/")
+                    results.append(rel_path)
+                    
+                    # Limit results to prevent token explosion
+                    if len(results) >= max_results:
+                        results.append(f"... (truncated at {max_results} results, use pattern to filter)")
+                        return results
+        
         return sorted(results) if results else ["Directory is empty."]
     
-    return await asyncio.to_thread(_do_glob)
+    return await asyncio.to_thread(_do_walk)
 
 
 async def file_exists_async(path: str, root: Optional[Path] = None) -> bool:
