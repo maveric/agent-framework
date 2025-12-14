@@ -3,7 +3,9 @@ Tool binding and wrapper functions for worker agents.
 """
 
 import logging
-from typing import List, Callable, Dict, Any
+import os
+from typing import List, Callable, Dict, Any, Set
+from pathlib import Path
 
 from langchain_core.tools import StructuredTool
 
@@ -12,16 +14,46 @@ from orchestrator_types import WorkerProfile
 logger = logging.getLogger(__name__)
 
 
-def _create_read_file_wrapper(tool, worktree_path):
+def _create_read_file_wrapper(tool, worktree_path, files_read: Set[str]):
+    """Create read_file wrapper that tracks which files have been read."""
     async def read_file_wrapper(path: str, encoding: str = "utf-8"):
         """Read the contents of a file."""
+        # Normalize path for tracking
+        normalized = path.replace("\\", "/").lower().strip("/")
+        files_read.add(normalized)
+        logger.debug(f"  [READ TRACKER] Added '{normalized}' to files_read ({len(files_read)} total)")
         return await tool(path, encoding, root=worktree_path)
     return read_file_wrapper
 
 
-def _create_write_file_wrapper(tool, worktree_path):
+def _create_write_file_wrapper(tool, worktree_path, files_read: Set[str]):
+    """Create write_file wrapper that enforces read-before-write for existing files."""
     async def write_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
-        """Write content to a file."""
+        """Write content to a file. MUST read existing files first!"""
+        # Normalize path for tracking
+        normalized = path.replace("\\", "/").lower().strip("/")
+        
+        # Check if file exists in worktree
+        full_path = Path(worktree_path) / path.lstrip("/\\")
+        
+        if full_path.exists() and normalized not in files_read:
+            # File exists but was NOT read first - reject!
+            logger.warning(f"  [WRITE GUARD] ❌ BLOCKED write to '{path}' - file exists but was not read first!")
+            return (
+                f"❌ WRITE BLOCKED: The file '{path}' already exists but you haven't read it.\n\n"
+                f"REQUIRED ACTION:\n"
+                f"1. Call read_file('{path}') first to see the current contents\n"
+                f"2. Then call write_file with your changes\n\n"
+                f"This prevents overwriting changes made by other workers or your previous session.\n"
+                f"Files already read this session: {list(files_read)[:10]}{'...' if len(files_read) > 10 else ''}"
+            )
+        
+        # Either file doesn't exist, or it was read - allow write
+        if full_path.exists():
+            logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (was read first)")
+        else:
+            logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (new file)")
+        
         return await tool(path, content, encoding, root=worktree_path)
     return write_file_wrapper
 
@@ -99,6 +131,9 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
 
     logger.debug(f"Binding tools to path: {worktree_path}")
 
+    # Track which files have been read this session (for read-before-write enforcement)
+    files_read: Set[str] = set()
+    
     bound_tools = []
     for tool in tools:
         # Check if tool accepts 'root' argument (filesystem tools)
@@ -111,12 +146,12 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
             # Use factory functions to avoid closure loop variable capture issues
             # NOTE: Pass coroutine= directly - LangChain infers schema from the async function signature
             if tool.__name__ in ["read_file", "read_file_async"]:
-                wrapper = _create_read_file_wrapper(tool, worktree_path)
+                wrapper = _create_read_file_wrapper(tool, worktree_path, files_read)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="read_file", description="Read the contents of a file.", handle_tool_error=True))
 
             elif tool.__name__ in ["write_file", "write_file_async"]:
-                wrapper = _create_write_file_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="write_file", description="Write content to a file.", handle_tool_error=True))
+                wrapper = _create_write_file_wrapper(tool, worktree_path, files_read)
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="write_file", description="Write content to a file. MUST read existing files first!", handle_tool_error=True))
 
             elif tool.__name__ in ["append_file", "append_file_async"]:
                 wrapper = _create_append_file_wrapper(tool, worktree_path)
