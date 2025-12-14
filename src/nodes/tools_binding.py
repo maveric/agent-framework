@@ -49,12 +49,19 @@ def _create_write_file_wrapper(tool, worktree_path, files_read: Set[str]):
             )
         
         # Either file doesn't exist, or it was read - allow write
-        if full_path.exists():
-            logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (was read first)")
-        else:
+        is_new_file = not full_path.exists()
+        if is_new_file:
             logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (new file)")
+        else:
+            logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (was read first)")
         
-        return await tool(path, content, encoding, root=worktree_path)
+        result = await tool(path, content, encoding, root=worktree_path)
+        
+        # After successful write, add to files_read so future writes are allowed
+        # This prevents: write new file → need to read it → write again
+        files_read.add(normalized)
+        
+        return result
     return write_file_wrapper
 
 
