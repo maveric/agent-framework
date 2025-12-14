@@ -427,40 +427,51 @@ class AsyncWorktreeManager:
                 raise ValueError(f"No worktree for task: {task_id}")
         
             # Check for uncommitted changes in the worktree
+            # Only care about modified/staged files, NOT untracked (??) files
             _, stdout, _ = await self._run_git(
                 ["status", "--porcelain"],
                 cwd=info.worktree_path,
                 check=False
             )
         
+            # Filter out untracked files (lines starting with "??")
             if stdout.strip():
-                error_msg = f"Uncommitted changes in worktree:\n{stdout}"
-                logger.error(f"❌ MERGE BLOCKED: {error_msg}")
-                return MergeResult(
-                    success=False,
-                    task_id=task_id,
-                    conflict=False,
-                    error_message=error_msg
-                )
+                changes = [line for line in stdout.strip().split('\n') 
+                          if line and not line.startswith('??')]
+                if changes:
+                    error_msg = f"Uncommitted changes in worktree:\n" + '\n'.join(changes)
+                    logger.error(f"❌ MERGE BLOCKED: {error_msg}")
+                    return MergeResult(
+                        success=False,
+                        task_id=task_id,
+                        conflict=False,
+                        error_message=error_msg
+                    )
         
             # Switch to main
             await self._run_git(["checkout", self.main_branch])
         
             # Check for uncommitted changes in main repo
+            # Only care about modified/staged files, NOT untracked (??) files
             _, stdout, _ = await self._run_git(
                 ["status", "--porcelain"],
                 check=False
             )
         
+            # Filter out untracked files (lines starting with "??")
+            # Untracked files don't cause merge conflicts
             if stdout.strip():
-                error_msg = f"Uncommitted changes in main repo:\n{stdout}"
-                logger.error(f"❌ MERGE BLOCKED: {error_msg}")
-                return MergeResult(
-                    success=False,
-                    task_id=task_id,
-                    conflict=False,
-                    error_message=error_msg
-                )
+                changes = [line for line in stdout.strip().split('\n') 
+                          if line and not line.startswith('??')]
+                if changes:
+                    error_msg = f"Uncommitted changes in main repo:\n" + '\n'.join(changes)
+                    logger.error(f"❌ MERGE BLOCKED: {error_msg}")
+                    return MergeResult(
+                        success=False,
+                        task_id=task_id,
+                        conflict=False,
+                        error_message=error_msg
+                    )
         
             # Attempt merge
             returncode, stdout, stderr = await self._run_git(
