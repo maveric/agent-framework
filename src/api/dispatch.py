@@ -747,10 +747,10 @@ async def run_orchestrator(run_id: str, thread_id: str, objective: str, spec: di
     workspace_path = Path(workspace).resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
 
-    # Setup file logging for this run
-    # This mimics main.py's logging behavior
-    log_dir = workspace_path / "logs"
-    log_dir.mkdir(exist_ok=True)
+    # Setup file logging for this run - use config path to keep logs out of workspace
+    from config import OrchestratorConfig
+    orch_config = OrchestratorConfig()
+    log_dir = orch_config.get_run_logs_path(run_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"run_{timestamp}.log"
 

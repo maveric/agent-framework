@@ -316,17 +316,20 @@ Be specific enough that multiple workers can implement different features simult
     - *Writing:* Chapters or Sections (e.g., "Chapter 1-3", "Chapter 4-6")
     - *Marketing:* Channels (e.g., "Social Media Content", "Email Campaign")
     - **Rule:** These should NOT depend on each other if possible. They only depend on "foundation".
+    - **Each workstream should include its OWN tests** - don't create a separate testing component.
 
-    3. **Identify Verification (The "Quality" Component):**
-    - How do we validate the result?
-    - Name it "verification".
+    3. **NO SEPARATE VERIFICATION COMPONENT:**
+    - Testing is BUILT INTO each workstream (unit tests, integration tests).
+    - Foundation verification is SIMPLE: packages installed, folders exist, server starts.
+    - Do NOT create a dedicated "validation" or "testing" workstream.
+    - E2E/Playwright tests belong in the LAST feature workstream, not separately.
 
     **OUTPUT SCHEMA:**
     Create planner tasks.
-    - `component`: "foundation" | [workstream-slug] | "verification"
+    - `component`: "foundation" | [workstream-slug]
     - `description`: CLEARLY define boundaries.
-    - For "foundation": "ESTABLISH the environment/context for others."
-    - For "workstreams": "ASSUME foundation is done. Execute specific scope."
+    - For "foundation": "ESTABLISH the environment/context. Verification = packages install, dev server starts."
+    - For "workstreams": "ASSUME foundation is done. Build feature + its tests."
     """),
         ("user", "Objective: {objective}\nSpec Summary: {spec_summary}")
     ])

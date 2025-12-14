@@ -73,9 +73,19 @@ You are pouring the concrete foundation. You OWN the project scaffolding.
 
 ✅ **YOU OWN**:
 - package.json, requirements.txt, pyproject.toml
-- vite.config.js, tailwind.config.js, tsconfig.json
+- vite.config.js, tailwind.config.js, tsconfig.json  
 - database.py, db/connection.py, config files
 - Base CSS, global styles, layout components
+
+🧪 **FOUNDATION TESTS = SIMPLE SMOKE TESTS ONLY**:
+Your test task should ONLY verify:
+- Dependencies installed successfully (npm install / pip install worked)
+- Dev server starts without crashing
+- Database connection works (if applicable)
+- Basic folders exist
+
+DO NOT test features, APIs, or UI. NO Playwright. NO pytest for routes.
+Feature planners handle their own feature tests.
 
 **Your tasks should have NO dependency_queries** - you are the root of the tree.
 """

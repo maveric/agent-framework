@@ -111,7 +111,7 @@ class OrchestratorConfig:
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
-    checkpoint_mode: str = "sqlite"  # "sqlite", "postgres", "mysql", or "memory"
+    checkpoint_mode: str = "mysql"  # "sqlite", "postgres", "mysql", or "memory"
 
     # PostgreSQL connection (only used if checkpoint_mode="postgres")
     postgres_uri: Optional[str] = None  # Falls back to POSTGRES_URI env var
@@ -161,3 +161,8 @@ class OrchestratorConfig:
         """Get LLM logs path for a run."""
         return self.get_run_data_path(run_id) / "llm_logs"
 
+    def get_run_logs_path(self, run_id: str) -> "Path":
+        """Get general run logs path (console output, etc.)."""
+        logs_path = self.get_run_data_path(run_id) / "logs"
+        logs_path.mkdir(parents=True, exist_ok=True)
+        return logs_path
