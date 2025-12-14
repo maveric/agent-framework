@@ -38,8 +38,17 @@ def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
     """Ensure path is within workspace."""
     workspace_root = _get_workspace_root(root).resolve()
     try:
-        normalized_path = path.lstrip('/\\')
-        target = (workspace_root / normalized_path).resolve()
+        path_obj = Path(path)
+        
+        # Handle absolute paths (e.g., F:\coding\agent-workspaces\...)
+        # On Windows, paths like "F:\..." are absolute
+        # On Unix, paths like "/home/..." are absolute
+        if path_obj.is_absolute():
+            target = path_obj.resolve()
+        else:
+            # Relative path - join with workspace root
+            normalized_path = path.lstrip('/\\')
+            target = (workspace_root / normalized_path).resolve()
         
         # Robust comparison handling case sensitivity
         root_str = str(workspace_root)
