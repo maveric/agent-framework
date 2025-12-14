@@ -51,13 +51,14 @@ The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 """
 
     # ==========================================================================
-    # HIERARCHY-AWARE PLANNER: Foundation vs Feature
+    # HIERARCHY-AWARE PLANNER: Foundation vs Feature vs Testing
     # ==========================================================================
     # Get component name from task to determine role
     component_name = getattr(task, 'component', '') or ''
     is_foundation = component_name.lower() in ["foundation", "infrastructure"]
+    is_testing = component_name.lower() in ["verification", "validation", "testing", "test", "e2e", "e2e-playwright", "playwright", "qa"]
     
-    logger.info(f"Planner {task.id} component='{component_name}' is_foundation={is_foundation}")
+    logger.info(f"Planner {task.id} component='{component_name}' is_foundation={is_foundation} is_testing={is_testing}")
 
     # ROLE-SPECIFIC INSTRUCTIONS
     if is_foundation:
@@ -88,6 +89,29 @@ DO NOT test features, APIs, or UI. NO Playwright. NO pytest for routes.
 Feature planners handle their own feature tests.
 
 **Your tasks should have NO dependency_queries** - you are the root of the tree.
+"""
+    elif is_testing:
+        role_instructions = f"""
+**🧪 ROLE: TESTING/VERIFICATION ARCHITECT** (Component: {component_name})
+You run AFTER all features are complete. You validate the entire system works together.
+
+⚠️ **CRITICAL: YOUR FIRST TASK MUST HAVE**:
+```json
+"dependency_queries": ["All feature implementations are complete and working"]
+```
+This tells the system to wait for ALL features before running your tests.
+
+✅ **YOU MUST**:
+- Run E2E tests that exercise the full application
+- Verify all features work together
+- Test cross-feature integrations
+
+❌ **DO NOT**:
+- Create setup/scaffold tasks (foundation handles that)
+- Install dependencies (foundation handles that)
+- Assume you run right after foundation - you run LAST
+
+**Your job**: Write comprehensive tests that validate the COMPLETE application works.
 """
     else:
         role_instructions = f"""
