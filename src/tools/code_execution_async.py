@@ -78,13 +78,17 @@ async def run_python_async(code: str, timeout: int = 30, cwd: str = None, worksp
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            # Kill the entire process group
+            # Kill the subprocess tree safely
             if platform.system() == 'Windows':
-                import signal
+                # CRITICAL: Do NOT use CTRL_BREAK_EVENT - it kills the parent console too!
+                # Use taskkill /T to kill process tree, or just process.kill()
+                import subprocess as sp
                 try:
-                    process.send_signal(signal.CTRL_BREAK_EVENT)
-                except (ProcessLookupError, OSError, PermissionError):
-                    # Process may have already exited or we don't have permission
+                    # taskkill /T kills the process AND its children
+                    # /F = force, /T = tree (children), /PID = process ID
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], 
+                           capture_output=True, timeout=5)
+                except Exception:
                     pass
                 try:
                     process.kill()
@@ -174,13 +178,17 @@ async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> s
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            # Kill the entire process group
+            # Kill the subprocess tree safely
             if platform.system() == 'Windows':
-                import signal
+                # CRITICAL: Do NOT use CTRL_BREAK_EVENT - it kills the parent console too!
+                # Use taskkill /T to kill process tree, or just process.kill()
+                import subprocess as sp
                 try:
-                    process.send_signal(signal.CTRL_BREAK_EVENT)
-                except (ProcessLookupError, OSError, PermissionError):
-                    # Process may have already exited or we don't have permission
+                    # taskkill /T kills the process AND its children
+                    # /F = force, /T = tree (children), /PID = process ID
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], 
+                           capture_output=True, timeout=5)
+                except Exception:
                     pass
                 try:
                     process.kill()
