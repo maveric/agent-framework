@@ -11,6 +11,7 @@ from orchestrator_types import Task, WorkerProfile, WorkerResult
 from tools import (
     read_file_async as read_file,
     write_file_async as write_file,
+    delete_file_async as delete_file,
     list_directory_async as list_directory,
     file_exists_async as file_exists,
     run_python_async as run_python,
@@ -26,7 +27,7 @@ async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     """Coding tasks (async)."""
     # Tools for code workers - includes execution for verification
     tools = [
-        read_file, write_file, list_directory, file_exists,
+        read_file, write_file, delete_file, list_directory, file_exists,
         run_python, run_shell, report_existing_implementation
     ]
 
