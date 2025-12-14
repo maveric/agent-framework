@@ -64,6 +64,69 @@ class QueryResolutionResponse(BaseModel):
 
 
 # =============================================================================
+# GRAPH OPTIMIZATION FUNCTIONS
+# =============================================================================
+
+def transitive_reduction(tasks: List[Task]) -> List[Task]:
+    """
+    Remove redundant edges from the dependency graph.
+    
+    If A → B → C exists, then A → C is redundant (A already waits for C via B).
+    This keeps the graph clean without changing execution order.
+    
+    Args:
+        tasks: List of Task objects with depends_on lists
+        
+    Returns:
+        Tasks with redundant dependencies removed
+    """
+    # Build adjacency dict: task_id -> set of direct dependencies
+    graph = {t.id: set(t.depends_on) for t in tasks}
+    
+    # Helper to find all reachable nodes from a start node (DFS)
+    def get_descendants(start_node: str) -> set:
+        descendants = set()
+        stack = [start_node]
+        while stack:
+            node = stack.pop()
+            if node in graph:
+                for child in graph[node]:
+                    if child not in descendants:
+                        descendants.add(child)
+                        stack.append(child)
+        return descendants
+    
+    # For each task, check if any of its dependencies are redundant
+    edges_removed = 0
+    for task in tasks:
+        if not task.depends_on:
+            continue
+            
+        # Check each direct dependency
+        deps_to_remove = set()
+        for dep in task.depends_on:
+            # Get everything reachable from this dependency
+            descendants = get_descendants(dep)
+            
+            # If any OTHER direct dependency is reachable from this one,
+            # then that other dependency is redundant (transitive)
+            for other_dep in task.depends_on:
+                if other_dep != dep and other_dep in descendants:
+                    deps_to_remove.add(other_dep)
+        
+        # Remove redundant dependencies
+        if deps_to_remove:
+            for dep in deps_to_remove:
+                task.depends_on.remove(dep)
+                edges_removed += 1
+    
+    if edges_removed > 0:
+        logger.info(f"  Transitive reduction removed {edges_removed} redundant edge(s)")
+    
+    return tasks
+
+
+# =============================================================================
 # FUNCTIONS
 # =============================================================================
 
@@ -709,6 +772,11 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
     cycles_broken = detect_and_break_cycles(new_tasks)
     if cycles_broken > 0:
         logger.warning(f"FIXED {cycles_broken} circular dependency(ies) in task graph!")
+
+    # PASS 3: Transitive reduction - remove redundant edges
+    # If A → B → C exists, then A → C is redundant (cleaner graph, same execution order)
+    logger.info("Pass 3: Transitive reduction (removing redundant edges)...")
+    new_tasks = transitive_reduction(new_tasks)
 
     logger.info(f"Integration complete: {len(new_tasks)} tasks with resolved dependencies")
     return new_tasks
