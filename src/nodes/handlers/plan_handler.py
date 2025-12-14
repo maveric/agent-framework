@@ -132,15 +132,21 @@ You are adding a room to an existing house. The system automatically ensures fou
 - Router/framework is initialized
 - You can focus 100% on your feature logic
 
-🔗 **FOUNDATION LINKING IS AUTOMATIC**:
-- The system automatically links your first task to wait for foundation
-- You do NOT need to add dependency_queries for foundation
-- Focus on feature-to-feature dependencies if your feature needs another feature
+🔗 **FOUNDATION LINKING**:
+- Your FIRST task is automatically linked to foundation (no query needed)
+- But if ANY other task needs something from outside your component, you MUST add dependency_queries
 
-**CROSS-FEATURE DEPENDENCIES** (if needed):
-If your feature depends on ANOTHER feature (not foundation), add dependency_queries:
+⚠️ **CROSS-FEATURE DEPENDENCIES ARE REQUIRED**:
+If ANY task in your component cannot proceed until something from ANOTHER component is done,
+you MUST add a dependency_query. This is NOT optional!
+
+Examples - USE dependency_queries when:
+- Your API needs the User model from another component: `"dependency_queries": ["User model is created"]`
+- Your UI needs an API from another feature: `"dependency_queries": ["Task API endpoints are complete"]`
+- Your tests need another feature working: `"dependency_queries": ["Authentication feature is complete"]`
+
 ```json
-"dependency_queries": ["User authentication API is complete"]
+"dependency_queries": ["User authentication API is complete", "Database models exist"]
 ```
 
 **Your job**: Build the {component_name} feature ONLY - models, routes, UI, tests for THIS feature.
