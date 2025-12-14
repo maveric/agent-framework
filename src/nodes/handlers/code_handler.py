@@ -141,6 +141,14 @@ finally:
 - ALWAYS `terminate()` and `wait()` to clean up
 - NEVER run server commands directly
 
+**🧹 VERIFY AND CLEAN UP:**
+After implementing your feature:
+1. **Verify it works** - Run a quick test to confirm your code functions correctly
+2. **Delete temporary test files** - If you created any scratch/test files (like `test_scratch.py`, `quick_test.py`, temp verification scripts), DELETE them before finishing
+3. **Keep the workspace clean** - Only leave production code and official test files (in `tests/` or similar)
+- Use `delete_file` tool to remove your temporary verification scripts
+- Don't leave debugging cruft behind for other agents to stumble over
+
 **ABSOLUTE SCOPE CONSTRAINTS - ZERO TOLERANCE:**
 - **NO SCOPE EXPANSION**: You have ZERO authority to add features not in your task description
 - **IMPLEMENT ONLY WHAT'S ASSIGNED**: Only write code for the specific feature/component in your task
