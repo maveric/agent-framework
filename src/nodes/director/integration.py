@@ -173,15 +173,35 @@ def link_features_to_foundation(tasks: List[Task]) -> List[Task]:
     - ALL foundation completes before ANY feature starts
     - Features run in parallel with each other
     
+    IMPORTANT: Does NOT link testing/e2e components - those depend on features, not foundation.
+    Testing components should have their own dependency_queries resolved by Pass 2.
+    
     Args:
         tasks: List of Task objects
         
     Returns:
         List of Task objects with foundation dependencies added
     """
+    # Components that are part of foundation/infrastructure
+    FOUNDATION_COMPONENTS = {"foundation", "infrastructure"}
+    
+    # Components that should NOT be auto-linked (they depend on features, not foundation)
+    # These should have their own dependency_queries like "all features complete"
+    TESTING_COMPONENTS = {"verification", "validation", "testing", "test", "e2e", "e2e-playwright", "playwright", "qa"}
+    
     # Separate foundation and feature tasks
-    foundation_tasks = [t for t in tasks if t.component.lower() in ["foundation", "infrastructure"]]
-    feature_tasks = [t for t in tasks if t.component.lower() not in ["foundation", "infrastructure", "verification"]]
+    foundation_tasks = [t for t in tasks if t.component.lower() in FOUNDATION_COMPONENTS]
+    
+    # Feature tasks = NOT foundation AND NOT testing
+    feature_tasks = [t for t in tasks if t.component.lower() not in FOUNDATION_COMPONENTS 
+                     and t.component.lower() not in TESTING_COMPONENTS]
+    
+    # Log what we're skipping
+    testing_tasks = [t for t in tasks if t.component.lower() in TESTING_COMPONENTS]
+    if testing_tasks:
+        logger.info(f"⏭️ Skipping {len(testing_tasks)} testing component(s) - they depend on features, not foundation")
+        for tt in testing_tasks:
+            logger.info(f"   ⏭️ '{tt.title}' ({tt.component}) - will use dependency_queries")
     
     if not foundation_tasks:
         logger.warning("No foundation tasks found - skipping foundation linking")
@@ -234,6 +254,14 @@ def link_features_to_foundation(tasks: List[Task]) -> List[Task]:
         
         # Link all root tasks to foundation
         for root_task in root_tasks:
+            # DON'T override if task already has dependency_queries (let Pass 2 resolve them)
+            task_dict = getattr(root_task, '_raw_dict', {})
+            has_external_deps = task_dict.get('dependency_queries', [])
+            
+            if has_external_deps:
+                logger.info(f"   ⏭️ Skipping '{root_task.title}' - has dependency_queries: {has_external_deps}")
+                continue
+            
             if last_foundation_id not in root_task.depends_on:
                 root_task.depends_on.append(last_foundation_id)
                 linked_count += 1
