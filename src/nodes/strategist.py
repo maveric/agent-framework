@@ -349,6 +349,9 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
     """
     Strategist: LLM-based QA evaluation of test results (async version).
     """
+    logger.info("=" * 60)
+    logger.info("STRATEGIST NODE: Entry")
+    
     tasks = state.get("tasks", [])
     updates = []
     mock_mode = state.get("mock_mode", False)
@@ -593,28 +596,42 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                     # Merge conflict after successful rebase - spawn merge agent
                                     logger.warning(f"  [MERGE CONFLICT] Spawning merge agent for {task_id}")
 
-                                    # Create merge task
-                                    merge_task = _create_merge_task(
-                                        original_task=task,
-                                        conflict_files=merge_result.conflicting_files,
-                                        error_message=merge_result.error_message
-                                    )
+                                    try:
+                                        logger.info("  [DEBUG] Creating merge task...")
+                                        # Create merge task
+                                        merge_task = _create_merge_task(
+                                            original_task=task,
+                                            conflict_files=merge_result.conflicting_files,
+                                            error_message=merge_result.error_message
+                                        )
+                                        logger.info(f"  [DEBUG] Merge task created: {merge_task['id']}")
 
-                                    # Rewire dependencies
-                                    all_tasks = state.get("tasks", [])
-                                    rewired = _rewire_dependencies_for_merge(
-                                        all_tasks, task_id, merge_task["id"]
-                                    )
-                                    logger.info(f"  [MERGE AGENT] Created {merge_task['id']}, rewired {rewired} dependents")
+                                        # Rewire dependencies
+                                        all_tasks = state.get("tasks", [])
+                                        logger.info(f"  [DEBUG] Rewiring dependencies for {len(all_tasks)} tasks...")
+                                        rewired = _rewire_dependencies_for_merge(
+                                            all_tasks, task_id, merge_task["id"]
+                                        )
+                                        logger.info(f"  [MERGE AGENT] Created {merge_task['id']}, rewired {rewired} dependents")
 
-                                    # Add merge task to updates
-                                    updates.append(merge_task)
+                                        # Add merge task to updates
+                                        updates.append(merge_task)
+                                        logger.info(f"  [DEBUG] Merge task appended to updates")
 
-                                    # Original task stays as pending_complete
-                                    task["qa_verdict"]["overall_feedback"] += (
-                                        f"\n\n[MERGE PENDING] Merge conflict detected. "
-                                        f"Merge agent {merge_task['id']} will resolve conflicts."
-                                    )
+                                        # Original task stays as pending_complete
+                                        task["qa_verdict"]["overall_feedback"] += (
+                                            f"\n\n[MERGE PENDING] Merge conflict detected. "
+                                            f"Merge agent {merge_task['id']} will resolve conflicts."
+                                        )
+                                        logger.info(f"  [DEBUG] Merge agent spawn complete")
+                                    except Exception as merge_error:
+                                        import traceback
+                                        logger.error(f"🚨 STRATEGIST: Failed to spawn merge agent: {merge_error}")
+                                        logger.error(f"   Traceback: {traceback.format_exc()}")
+                                        # Don't crash - mark task as failed instead
+                                        task["status"] = "pending_failed"
+                                        task["qa_verdict"]["passed"] = False
+                                        task["qa_verdict"]["overall_feedback"] += f"\n\nMERGE SPAWN FAILED: {merge_error}"
                                 elif merge_result.conflict and is_merge_task:
                                     # Merge task also has conflict - don't spawn another merge (Phoenix retry)
                                     logger.error(f"  [MERGE TASK CONFLICT] Merge task {task_id} also has conflicts - Phoenix retry")
@@ -661,15 +678,22 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
     # PENDING REORG: Show countdown after task completion
     pending_reorg = state.get("pending_reorg", False)
     if pending_reorg and updates:
-        # Count remaining active tasks
-        all_tasks_raw = state.get("tasks", [])
-        from orchestrator_types import _dict_to_task, TaskStatus
-        all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
-        # Count active tasks, excluding the ones we just updated
-        updated_ids = {u["id"] for u in updates}
-        remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
+        try:
+            # Count remaining active tasks
+            all_tasks_raw = state.get("tasks", [])
+            from orchestrator_types import _dict_to_task, TaskStatus
+            all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
+            # Count active tasks, excluding the ones we just updated
+            updated_ids = {u["id"] for u in updates}
+            remaining_active = [t for t in all_tasks if t.status == TaskStatus.ACTIVE and t.id not in updated_ids]
 
-        completed_id = updates[0]["id"][:8]
-        logger.info(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.")
+            completed_id = updates[0]["id"][:8]
+            logger.info(f"Director: task_{completed_id} finished. Reorg pending. Waiting on {len(remaining_active)} tasks to finish. No new tasks started.")
+        except Exception as e:
+            import traceback
+            logger.error(f"🚨 STRATEGIST: Error in pending_reorg section: {e}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            # Continue - this section is informational only
 
+    logger.info("STRATEGIST NODE: Returning normally")
     return {"tasks": updates, "task_memories": task_memories} if updates else {}

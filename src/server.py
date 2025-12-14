@@ -136,25 +136,33 @@ atexit.register(_atexit_handler)
 # Asyncio exception handler for unhandled task exceptions
 def _asyncio_exception_handler(loop, context):
     """Log unhandled exceptions in asyncio tasks."""
-    logger.error("🚨 ASYNCIO UNHANDLED EXCEPTION:")
+    logger.error("=" * 60)
+    logger.error("🚨 ASYNCIO UNHANDLED EXCEPTION - POSSIBLE CRASH CAUSE")
+    logger.error("=" * 60)
     logger.error(f"   Message: {context.get('message', 'Unknown')}")
 
     exception = context.get('exception')
     if exception:
         logger.error(f"   Exception type: {type(exception).__name__}")
         logger.error(f"   Exception: {exception}")
-        logger.error(f"   Traceback:")
-        logger.error(_traceback.format_exc())
+        logger.error(f"   Full Traceback:")
+        # Get the actual traceback from the exception, not format_exc() which shows current context
+        tb_lines = _traceback.format_exception(type(exception), exception, exception.__traceback__)
+        for line in tb_lines:
+            logger.error(f"   {line.rstrip()}")
 
     # Log the task that failed
     task = context.get('task')
     if task:
         logger.error(f"   Failed task: {task}")
+        logger.error(f"   Task name: {task.get_name() if hasattr(task, 'get_name') else 'unknown'}")
 
     # Log future if available
     future = context.get('future')
     if future:
         logger.error(f"   Failed future: {future}")
+    
+    logger.error("=" * 60)
 
 # Set asyncio exception handler (will be set on the event loop in lifespan)
 logger.info("✅ Crash detection handlers registered")
