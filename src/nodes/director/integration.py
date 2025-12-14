@@ -23,6 +23,40 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# PROGRESS BROADCAST HELPER
+# =============================================================================
+
+async def broadcast_progress(state: Dict[str, Any], message: str, phase: str = "integration"):
+    """
+    Broadcast a progress update to the frontend via WebSocket.
+    
+    Args:
+        state: Orchestrator state (must contain run_id)
+        message: Human-readable progress message
+        phase: Phase identifier (e.g., "integration", "decomposition")
+    """
+    try:
+        run_id = state.get("run_id")
+        if not run_id:
+            return
+        
+        # Import here to avoid circular imports
+        from api.state import manager
+        
+        if manager:
+            await manager.broadcast_to_run(run_id, {
+                "type": "status",
+                "payload": {
+                    "message": message,
+                    "phase": phase
+                }
+            })
+    except Exception as e:
+        # Don't fail the whole operation if broadcast fails
+        logger.debug(f"Failed to broadcast progress: {e}")
+
+
+# =============================================================================
 # PYDANTIC SCHEMAS
 # =============================================================================
 
@@ -757,26 +791,33 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
 
     # PASS 1 COMPLETE: Tasks are deduplicated with local dependencies
     logger.info(f"Pass 1 complete: Deduplicated {len(new_tasks)} tasks")
+    await broadcast_progress(state, f"✓ Deduplicated {len(new_tasks)} tasks from planners", "integration")
 
     # PASS 1.5 (DETERMINISTIC): Link feature root tasks to last foundation task
     # This is done in CODE, not by LLM, to guarantee the tree structure
     logger.info("Pass 1.5: Linking feature components to foundation (deterministic)...")
+    await broadcast_progress(state, "Linking feature components to foundation...", "integration")
     new_tasks = link_features_to_foundation(new_tasks)
 
     # PASS 2: Resolve feature-to-feature dependency queries (LLM)
     # Note: Foundation-related queries are filtered out (code handles those)
     logger.info("Pass 2: Resolving feature-to-feature dependency queries...")
+    await broadcast_progress(state, "Resolving cross-component dependencies (AI)...", "integration")
     new_tasks = await resolve_dependency_queries(new_tasks, state)
+    await broadcast_progress(state, "✓ Dependencies resolved", "integration")
 
     # CRITICAL: Detect and break circular dependencies
     cycles_broken = detect_and_break_cycles(new_tasks)
     if cycles_broken > 0:
         logger.warning(f"FIXED {cycles_broken} circular dependency(ies) in task graph!")
+        await broadcast_progress(state, f"⚠️ Fixed {cycles_broken} circular dependencies", "integration")
 
     # PASS 3: Transitive reduction - remove redundant edges
     # If A → B → C exists, then A → C is redundant (cleaner graph, same execution order)
     logger.info("Pass 3: Transitive reduction (removing redundant edges)...")
+    await broadcast_progress(state, "Optimizing dependency graph...", "integration")
     new_tasks = transitive_reduction(new_tasks)
 
     logger.info(f"Integration complete: {len(new_tasks)} tasks with resolved dependencies")
+    await broadcast_progress(state, f"✓ Integration complete: {len(new_tasks)} tasks ready", "integration")
     return new_tasks

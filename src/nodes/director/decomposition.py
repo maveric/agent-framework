@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from orchestrator_types import Task, TaskStatus, TaskPhase, WorkerProfile
 from llm_client import get_llm
+from .integration import broadcast_progress
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,7 @@ async def decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[
     project_context = ""
     if workspace_path:
         logger.info("Exploring existing project structure")
+        await broadcast_progress(state, "Exploring existing project structure...", "initialization")
 
         try:
             # List root directory
@@ -185,6 +187,7 @@ async def decompose_objective(objective: str, spec: Dict[str, Any], state: Dict[
 
     # STEP 1: Write design specification
     logger.info("Creating design specification")
+    await broadcast_progress(state, "Creating design specification (AI)...", "initialization")
 
     spec_prompt = ChatPromptTemplate.from_messages([
         ("system", """You are a Lead Architect creating a design specification.
@@ -268,6 +271,7 @@ Be specific enough that multiple workers can implement different features simult
             spec_path = Path(workspace_path) / "design_spec.md"
             spec_path.write_text(spec_content, encoding="utf-8")
             logger.info("Written: design_spec.md")
+            await broadcast_progress(state, "✓ Design specification created", "initialization")
 
             # Commit to main to avoid merge conflicts later
             wt_manager = state.get("_wt_manager")
@@ -286,66 +290,45 @@ Be specific enough that multiple workers can implement different features simult
 
     # STEP 2: Decompose into 1-5 component planner tasks
     logger.info("Creating component planner tasks")
+    await broadcast_progress(state, "Creating component planners (AI)...", "initialization")
 
     structured_llm = llm.with_structured_output(DecompositionResponse)
 
     decomp_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are the Director decomposing a project into FEATURE-LEVEL planners.
+        ("system", """You are the Lead Architect decomposing a complex objective into parallel execution streams.
 
-CRITICAL INSTRUCTIONS - FEATURE-BASED DECOMPOSITION:
+    OBJECTIVE: {objective}
 
-1. **FIRST: Check if infrastructure planner is needed**
-   - Does design spec require: Flask setup, database init, React config, etc?
-   - If YES: Create "Set up [project] infrastructure" planner as FIRST task
+    **CORE RESPONSIBILITY:**
+    Identify the "Foundation" (what must happen first) and the "Workstreams" (what can happen in parallel).
 
-2. **THEN: Create planners for user-facing features**
-   - Think "User can..." or "System provides..."
-   - Order logically: foundational features before dependent ones
-   - Example: "User can add items" before "User can delete items"
+    **DECOMPOSITION STRATEGY:**
+    1. **Identify the Foundation (The "Setup" Component):**
+    - Is there shared context, configuration, or environment setup required before work begins?
+    - *Coding Example:* "Project Scaffolding & Config"
+    - *Writing Example:* "Outline & Character Profiles"
+    - *Research Example:* "Literature Review & Methodology Definition"
+    - **Constraint:** Create EXACTLY ONE component for this if needed. Name it "foundation".
 
-3. **FINALLY: Create validation planner**
-   - "System validates with [test framework]"
-   - Always last
+    2. **Identify Parallel Workstreams (The "Execution" Components):**
+    - Break the main effort into independent, logical units.
+    - *Coding:* Vertical Features (e.g., "User Auth", "Payment Processing")
+    - *Writing:* Chapters or Sections (e.g., "Chapter 1-3", "Chapter 4-6")
+    - *Marketing:* Channels (e.g., "Social Media Content", "Email Campaign")
+    - **Rule:** These should NOT depend on each other if possible. They only depend on "foundation".
 
-FEATURE PLANNER EXAMPLES:
+    3. **Identify Verification (The "Quality" Component):**
+    - How do we validate the result?
+    - Name it "verification".
 
-✅ INFRASTRUCTURE (if needed, always FIRST):
-- Component: "infrastructure", Description: "Set up kanban application infrastructure"
-- Component: "infrastructure", Description: "Initialize React dashboard with routing"
-
-✅ USER FEATURES (in logical order):
-- Component: "add-items", Description: "User can add items to the system"
-- Component: "view-items", Description: "User can view items in organized layout"
-- Component: "modify-items", Description: "User can modify item properties"
-- Component: "delete-items", Description: "User can delete items"
-
-✅ VALIDATION (always LAST):
-- Component: "validation", Description: "System validates core functionality with Playwright"
-
-❌ NEVER DO THIS:
-- Component: "backend" (too technical, not feature-based)
-- Component: "frontend" (too technical, not feature-based)
-- Component: "testing" (testing is part of features)
-- Component: "database" (unless it's the infrastructure planner)
-
-RULES:
-- Create 1-7 planner tasks (infra + features + validation)
-- Each task should have phase="plan" and worker_profile="planner_worker"
-- Do NOT create build or test tasks - planners will create those
-- Component name should be the feature slug (e.g., "add-items", "infrastructure")
-- Features should be user-facing capabilities, NOT technical components
-
-OUTPUT:
-Create planner tasks following this schema. Order them: infrastructure -> features -> validation."""),
-        ("user", """Objective: {objective}
-
-Design Spec Summary:
-{spec_summary}
-
-Create feature-level planner tasks based on the design spec. Remember:
-- Infrastructure first (if needed)
-- User features in logical order
-- Validation last""")
+    **OUTPUT SCHEMA:**
+    Create planner tasks.
+    - `component`: "foundation" | [workstream-slug] | "verification"
+    - `description`: CLEARLY define boundaries.
+    - For "foundation": "ESTABLISH the environment/context for others."
+    - For "workstreams": "ASSUME foundation is done. Execute specific scope."
+    """),
+        ("user", "Objective: {objective}\nSpec Summary: {spec_summary}")
     ])
 
     try:
@@ -379,6 +362,7 @@ Create feature-level planner tasks based on the design spec. Remember:
             tasks.append(task)
 
         logger.info(f"Created {len(tasks)} planner task(s)")
+        await broadcast_progress(state, f"✓ Created {len(tasks)} component planners", "initialization")
         return tasks
 
     except Exception as e:
