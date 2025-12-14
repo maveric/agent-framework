@@ -128,6 +128,16 @@ export function RunDetails() {
                 if (message.payload.message) {
                     setStatusMessage(message.payload.message);
                     setStatusPhase(message.payload.phase || '');
+
+                    // Auto-clear "completed" messages after 3 seconds
+                    // These are messages starting with ✓ that indicate a step is done
+                    if (message.payload.message.startsWith('✓')) {
+                        setTimeout(() => {
+                            setStatusMessage(prev =>
+                                prev === message.payload.message ? '' : prev
+                            );
+                        }, 3000);
+                    }
                 }
             }
         });
@@ -288,6 +298,19 @@ export function RunDetails() {
                                 </button>
                             </div>
                         </div>
+
+                        {/* Status Bar - shows during initialization and integration */}
+                        {statusMessage && (
+                            <div className="flex items-center gap-3 px-4 py-3 bg-slate-800/70 border border-slate-700 rounded-lg">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500 flex-shrink-0"></div>
+                                <span className="text-slate-300 text-sm">{statusMessage}</span>
+                                {statusPhase && (
+                                    <span className="text-xs text-slate-500 bg-slate-700/50 px-2 py-0.5 rounded">
+                                        {statusPhase}
+                                    </span>
+                                )}
+                            </div>
+                        )}
 
                         {viewMode === 'graph' ? (
                             <div className="bg-slate-900 rounded-lg border border-slate-800 h-[1170px] overflow-hidden relative">
