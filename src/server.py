@@ -690,10 +690,19 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
+    import traceback
     
     # Allow configuration via environment variables
     host = _os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(_os.getenv("SERVER_PORT", "8085"))
     
-    logger.info(f"🚀 Starting server on {host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    try:
+        logger.info(f"🚀 Starting server on {host}:{port}")
+        uvicorn.run(app, host=host, port=port)
+    except Exception as e:
+        # Log to diagnostic file before dying
+        _write_diagnostic(f"🚨 UVICORN CRASHED: {type(e).__name__}: {e}")
+        _write_diagnostic(f"   Traceback: {traceback.format_exc()}")
+        logger.error(f"🚨 Server crashed: {e}")
+        logger.error(traceback.format_exc())
+        raise
