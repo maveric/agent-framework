@@ -233,10 +233,26 @@ def main():
 
     log(f"Server started with PID: {proc.pid}")
 
-    # Use selectors for non-blocking I/O on Windows and Unix
-    import selectors
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
+    # Windows doesn't support select() on file handles, only sockets
+    # Use a separate thread for reading stdout instead
+    import queue
+    output_queue = queue.Queue()
+
+    def _read_output():
+        """Read stdout in a separate thread to avoid blocking."""
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if line:
+                    output_queue.put(line.rstrip())
+                elif proc.poll() is not None:
+                    # Process died and no more output
+                    break
+        except Exception as e:
+            output_queue.put(f"[READ ERROR: {e}]")
+
+    reader_thread = threading.Thread(target=_read_output, daemon=True)
+    reader_thread.start()
 
     # Monitor loop
     last_heartbeat = time.time()
@@ -265,12 +281,13 @@ def main():
                     f.flush()
                     os.fsync(f.fileno())
 
-                # Capture any remaining output
-                remaining_output = proc.stdout.read() if proc.stdout else ""
-                if remaining_output:
-                    log("Final output:")
-                    for line in remaining_output.splitlines()[-50:]:  # Last 50 lines
-                        log(f"  {line}")
+                # Drain any remaining output from queue
+                while not output_queue.empty():
+                    try:
+                        line = output_queue.get_nowait()
+                        print(line, flush=True)
+                    except queue.Empty:
+                        break
 
                 # Check the diagnostic log
                 if DIAGNOSTIC_LOG.exists():
@@ -306,17 +323,14 @@ def main():
 
                 break
 
-            # Non-blocking read with timeout using selectors
-            # This prevents the monitor from hanging on readline()
-            ready = sel.select(timeout=0.1)  # 100ms timeout
-            if ready:
-                try:
-                    line = proc.stdout.readline()
-                    if line:
-                        print(line.rstrip(), flush=True)  # Echo to console
-                        lines_since_heartbeat += 1
-                except Exception as read_err:
-                    log(f"Warning: Error reading output: {read_err}")
+            # Read any available output from queue (non-blocking)
+            try:
+                while True:
+                    line = output_queue.get_nowait()
+                    print(line, flush=True)
+                    lines_since_heartbeat += 1
+            except queue.Empty:
+                pass  # No more output available
 
             # Periodic heartbeat with memory info
             if time.time() - last_heartbeat > heartbeat_interval:
@@ -327,6 +341,9 @@ def main():
                     log(f"HEARTBEAT: PID={proc.pid}, mem_error={mem.get('error', 'unknown')}, lines={lines_since_heartbeat}")
                 last_heartbeat = time.time()
                 lines_since_heartbeat = 0
+
+            # Small sleep to prevent busy loop
+            time.sleep(0.1)
 
     except KeyboardInterrupt:
         # Check if subprocess is still alive
@@ -378,7 +395,6 @@ def main():
 
     finally:
         _watchdog_running = False
-        sel.close()
         log("Monitor shutdown complete")
 
 
