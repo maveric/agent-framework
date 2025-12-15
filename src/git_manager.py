@@ -8,6 +8,7 @@ Async version of git worktree manager using asyncio subprocess.
 
 import asyncio
 import logging
+import platform
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -106,12 +107,18 @@ class AsyncWorktreeManager:
             timeout: Max seconds to wait (default 60s, prevents hangs)
         """
         cmd = ["git"] + args
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd or self.repo_path)
-        )
+
+        # Windows-specific: Use CREATE_NEW_PROCESS_GROUP to isolate subprocess
+        kwargs = {
+            'stdout': asyncio.subprocess.PIPE,
+            'stderr': asyncio.subprocess.PIPE,
+            'cwd': str(cwd or self.repo_path)
+        }
+        if platform.system() == 'Windows':
+            import subprocess
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        process = await asyncio.create_subprocess_exec(*cmd, **kwargs)
 
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -119,8 +126,15 @@ class AsyncWorktreeManager:
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            # Kill the hung process
+            # Kill the hung process safely
             logger.error(f"⏰ Git command timed out after {timeout}s: git {' '.join(args)}")
+            if platform.system() == 'Windows':
+                import subprocess as sp
+                try:
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           capture_output=True, timeout=5)
+                except Exception:
+                    pass
             try:
                 process.kill()
                 await process.wait()
@@ -519,12 +533,17 @@ async def initialize_git_repo_async(repo_path: Path) -> None:
     git_dir = repo_path / ".git"
 
     async def run_git(args: List[str], check: bool = True, timeout: float = 60.0):
-        process = await asyncio.create_subprocess_exec(
-            "git", *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(repo_path)
-        )
+        # Windows-specific: Use CREATE_NEW_PROCESS_GROUP to isolate subprocess
+        kwargs = {
+            'stdout': asyncio.subprocess.PIPE,
+            'stderr': asyncio.subprocess.PIPE,
+            'cwd': str(repo_path)
+        }
+        if platform.system() == 'Windows':
+            import subprocess
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        process = await asyncio.create_subprocess_exec("git", *args, **kwargs)
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
@@ -532,6 +551,13 @@ async def initialize_git_repo_async(repo_path: Path) -> None:
             )
         except asyncio.TimeoutError:
             logger.error(f"⏰ Git init command timed out: git {' '.join(args)}")
+            if platform.system() == 'Windows':
+                import subprocess as sp
+                try:
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           capture_output=True, timeout=5)
+                except Exception:
+                    pass
             try:
                 process.kill()
                 await process.wait()
