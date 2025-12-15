@@ -9,6 +9,7 @@ These utilities provide non-blocking alternatives to subprocess.run and file I/O
 
 import asyncio
 import sys
+import platform
 from typing import Optional, List, Tuple
 from pathlib import Path
 
@@ -38,19 +39,32 @@ async def run_subprocess(
         subprocess.CalledProcessError: If check=True and command fails
     """
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE if capture_output else None,
-            stderr=asyncio.subprocess.PIPE if capture_output else None,
-            cwd=cwd
-        )
-        
+        # Windows-specific: Use CREATE_NEW_PROCESS_GROUP to isolate subprocess
+        kwargs = {
+            'stdout': asyncio.subprocess.PIPE if capture_output else None,
+            'stderr': asyncio.subprocess.PIPE if capture_output else None,
+            'cwd': cwd
+        }
+        if platform.system() == 'Windows':
+            import subprocess
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        process = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
+            # Safe kill on timeout
+            if platform.system() == 'Windows':
+                import subprocess as sp
+                try:
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           capture_output=True, timeout=5)
+                except Exception:
+                    pass
             process.kill()
             await process.wait()
             raise asyncio.TimeoutError(f"Command timed out after {timeout}s: {' '.join(cmd)}")
@@ -91,19 +105,32 @@ async def run_shell_async(
         Tuple of (return_code, stdout, stderr)
     """
     try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE if capture_output else None,
-            stderr=asyncio.subprocess.PIPE if capture_output else None,
-            cwd=cwd
-        )
-        
+        # Windows-specific: Use CREATE_NEW_PROCESS_GROUP to isolate subprocess
+        kwargs = {
+            'stdout': asyncio.subprocess.PIPE if capture_output else None,
+            'stderr': asyncio.subprocess.PIPE if capture_output else None,
+            'cwd': cwd
+        }
+        if platform.system() == 'Windows':
+            import subprocess
+            kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        process = await asyncio.create_subprocess_shell(command, **kwargs)
+
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
                 timeout=timeout
             )
         except asyncio.TimeoutError:
+            # Safe kill on timeout
+            if platform.system() == 'Windows':
+                import subprocess as sp
+                try:
+                    sp.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           capture_output=True, timeout=5)
+                except Exception:
+                    pass
             process.kill()
             await process.wait()
             raise asyncio.TimeoutError(f"Command timed out after {timeout}s: {command}")
