@@ -7,6 +7,24 @@ FastAPI server for the orchestrator dashboard.
 """
 
 # =============================================================================
+# FAULTHANDLER - Enable VERY FIRST to catch segfaults in C extensions
+# This MUST be before any other imports that could load C code
+# =============================================================================
+import faulthandler
+import sys as _sys
+
+# Enable faulthandler to print traceback on segfault to stderr
+faulthandler.enable()
+
+# Also dump to a file that survives process death
+_FAULT_LOG = "crash_fault.log"
+try:
+    _fault_file = open(_FAULT_LOG, "w")
+    faulthandler.enable(file=_fault_file, all_threads=True)
+except:
+    pass  # File might be locked, that's OK
+
+# =============================================================================
 # EARLY DIAGNOSTIC - Write to file BEFORE anything else loads
 # This bypasses all Python infrastructure to detect process death
 # =============================================================================
