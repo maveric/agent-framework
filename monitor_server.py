@@ -230,6 +230,20 @@ def main():
             log("Server process terminated unexpectedly (triggered KeyboardInterrupt)")
             log(f"Exit code: {format_exit_code(proc.returncode)}")
             log("This is NOT a user Ctrl+C - the subprocess crashed first")
+    except Exception as e:
+        # Catch-all for any unexpected errors in the MONITOR ITSELF
+        import traceback
+        log("!" * 60)
+        log(f"MONITOR SCRIPT ERROR: {type(e).__name__}: {e}")
+        log("Monitor traceback:")
+        for line in traceback.format_exc().split('\n'):
+            log(f"  {line}")
+        log("!" * 60)
+        
+        # Still try to kill the subprocess if it's running
+        if proc and proc.poll() is None:
+            log("Killing server subprocess due to monitor error...")
+            proc.kill()
 
 
 if __name__ == "__main__":
