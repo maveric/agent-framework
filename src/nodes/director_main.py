@@ -566,19 +566,110 @@ Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
                 result["task_memories"] = {"director": director_messages}
             return result
 
-    # Check if all tasks are truly terminal (complete/abandoned only)
-    # waiting_human and awaiting_qa require action - NOT terminal!
-    all_terminal = all(
+    # ==========================================================================
+    # FINAL QA CHECK: Spawn integration test when all work tasks complete
+    # ==========================================================================
+    # Check if all WORK tasks are complete (not counting the final QA task itself)
+    FINAL_QA_COMPONENT = "__final_integration_qa__"
+    
+    work_tasks = [t for t in all_tasks if t.component != FINAL_QA_COMPONENT]
+    final_qa_tasks = [t for t in all_tasks if t.component == FINAL_QA_COMPONENT]
+    
+    all_work_complete = all(
         t.status in [TaskStatus.COMPLETE, TaskStatus.ABANDONED]
-        for t in all_tasks
-    )
+        for t in work_tasks
+    ) if work_tasks else False
+    
+    # If all work is done but no final QA exists, spawn one
+    if all_work_complete and work_tasks and not final_qa_tasks:
+        logger.info("=" * 60)
+        logger.info("🎯 FINAL QA: All work tasks complete - spawning integration test")
+        logger.info("=" * 60)
+        
+        # Collect all test file paths from completed build tasks
+        all_test_paths = set()
+        for task in work_tasks:
+            raw_task = next((t for t in tasks if t["id"] == task.id), None)
+            if raw_task:
+                test_paths = raw_task.get("test_file_paths", [])
+                if test_paths:
+                    all_test_paths.update(test_paths)
+        
+        test_paths_list = list(all_test_paths)
+        test_paths_str = "\n".join(f"- {p}" for p in test_paths_list) if test_paths_list else "- (discover all tests in project)"
+        
+        final_qa_task = Task(
+            id=f"task_{uuid.uuid4().hex[:8]}",
+            title="🎯 Final Integration Test - Verify All Features Work Together",
+            component=FINAL_QA_COMPONENT,
+            phase=TaskPhase.TEST,
+            status=TaskStatus.READY,  # Immediately ready since all work is done
+            assigned_worker_profile=WorkerProfile.TEST_ARCHITECT,
+            description=f"""## 🎯 FINAL INTEGRATION TEST
 
-    # Initialize result dict
-    result = {}
+This is the **mandatory final QA pass** before the run can be marked complete.
+All feature work has finished. Now verify EVERYTHING works together.
 
-    if all_terminal and all_tasks:
+### Your Task:
+1. **Discover all test files** in the project:
+   - Python: `**/test_*.py`, `**/*_test.py`
+   - JavaScript/TypeScript: `**/*.test.js`, `**/*.test.ts`, `**/*.spec.js`
+   - Or framework-specific patterns (pytest, jest, playwright, etc.)
+
+2. **Run ALL tests** and capture output
+
+3. **Report results**:
+   - If ALL tests pass → Mark task complete with full test output
+   - If ANY tests fail → Document exactly what failed and why
+
+### Known Test Files (if any):
+{test_paths_str}
+
+### Critical:
+- This is a VALIDATION task, not a fix task
+- If tests fail, your job is to REPORT the failures clearly
+- Do NOT attempt to fix code - that will be handled by Phoenix recovery
+""",
+            acceptance_criteria=[
+                "All discovered tests have been executed",
+                "Full test output is documented",
+                "Clear PASS/FAIL verdict with details"
+            ],
+            depends_on=[],  # No deps - all work is already complete
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        updates.append(task_to_dict(final_qa_task))
+        logger.info(f"  Created Final QA task: {final_qa_task.id}")
+        
+        # Don't mark complete yet - wait for final QA
+        result = {}
+    
+    # Check if final QA exists and is complete
+    elif final_qa_tasks:
+        final_qa = final_qa_tasks[0]
+        
+        if final_qa.status == TaskStatus.COMPLETE:
+            logger.info("=" * 60)
+            logger.info("✅ FINAL QA PASSED - Run is COMPLETE!")
+            logger.info("=" * 60)
+            result = {"strategy_status": "complete"}
+        elif final_qa.status == TaskStatus.FAILED:
+            # Final QA failed - Phoenix will handle retry/fixes
+            logger.warning("❌ FINAL QA FAILED - Phoenix recovery will retry")
+            result = {}
+        else:
+            # Final QA still running
+            result = {}
+    
+    # All tasks terminal (including final QA) - true completion
+    elif all(t.status in [TaskStatus.COMPLETE, TaskStatus.ABANDONED] for t in all_tasks) and all_tasks:
         logger.info("Director: All tasks in terminal states - marking run as COMPLETE")
-        result["strategy_status"] = "complete"
+        result = {"strategy_status": "complete"}
+    else:
+        # Initialize result dict
+        result = {}
 
     # Return updates and logs
     if updates:
