@@ -371,8 +371,28 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                 # DEADLOCK DETECTION: Check if any task statuses changed
                 current_statuses = {t["id"]: t.get("status") for t in all_tasks}
 
-                # Also check for "active" status tasks (might not be in task_queue due to race conditions)
+                # Check for "active" status tasks - BUT verify they're actually running!
+                # A task can be marked "active" in state but not in task_queue if:
+                # 1. Server restarted mid-task (restart_run should reset these, but may have missed)
+                # 2. Worker crashed without updating state
+                # 3. Race condition between state update and worker spawn
                 active_tasks = [t for t in all_tasks if t.get("status") == "active"]
+                
+                # CRITICAL FIX: Check if active tasks are ACTUALLY running in task_queue
+                # If not, they're zombies - reset them to 'ready' for re-dispatch
+                zombie_tasks_fixed = 0
+                for task in active_tasks:
+                    task_id = task.get("id")
+                    if not task_queue.is_running(task_id):
+                        logger.warning(f"  🧟 ZOMBIE DETECTED: Task {task_id[:12]} is 'active' but not in task_queue!")
+                        task["status"] = "ready"  # Reset to ready for re-dispatch
+                        zombie_tasks_fixed += 1
+                        activity_occurred = True  # Force another iteration
+                
+                if zombie_tasks_fixed > 0:
+                    logger.info(f"  🔄 Reset {zombie_tasks_fixed} zombie task(s) to 'ready'")
+                    # Recalculate active_tasks after fixing zombies
+                    active_tasks = [t for t in all_tasks if t.get("status") == "active"]
 
                 if current_statuses == last_task_statuses and not active_tasks:
                     iterations_without_progress += 1
