@@ -706,8 +706,35 @@ async def restart_run(run_id: str):
 
     logger.info(f"🔄 Restarting run {run_id}")
 
+    # Setup file logging for restarted run (matching run_orchestrator behavior)
+    file_handler = None
+    try:
+        log_dir = config.get_run_logs_path(run_id)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"restart_{timestamp}.log"
+        
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        root_logger = logging.getLogger()
+        root_logger.addHandler(file_handler)
+        logger.info(f"📝 Logging restarted run to: {log_file}")
+    except Exception as e:
+        logger.warning(f"Failed to setup file logging: {e}")
+
+    # Create wrapper that cleans up logging when done
+    async def run_with_logging():
+        try:
+            await continuous_dispatch_loop(run_id, state, run_config)
+        finally:
+            if file_handler:
+                root_logger = logging.getLogger()
+                root_logger.removeHandler(file_handler)
+                file_handler.close()
+                logger.info(f"📝 Closed restart log file")
+
     # Create new background task for the dispatch loop
-    task = asyncio.create_task(continuous_dispatch_loop(run_id, state, run_config))
+    task = asyncio.create_task(run_with_logging())
     running_tasks[run_id] = task
 
     # Cleanup when done
