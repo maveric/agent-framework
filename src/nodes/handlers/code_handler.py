@@ -1,11 +1,19 @@
 """
 Code handler for coding tasks.
+
+TDD Note: When task.test_file_paths is set, this handler operates in TDD mode:
+- Primary goal: Make the failing tests PASS (Green phase)
+- Tests are the contract - don't question them, implement to satisfy them
+- Run tests frequently to verify progress
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import platform
+import logging
 
 from orchestrator_types import Task, WorkerProfile, WorkerResult
+
+logger = logging.getLogger(__name__)
 
 # Import tools (ASYNC versions for non-blocking execution)
 from tools import (
@@ -47,6 +55,55 @@ async def _code_handler(task: Task, state: Dict[str, Any], config: Dict[str, Any
     else:
         venv_python = f"{workspace_path}/.venv/bin/python"
         venv_pip = f"{workspace_path}/.venv/bin/pip"
+
+    # TDD Mode: Check if task has test files to pass
+    test_file_paths: List[str] = getattr(task, 'test_file_paths', []) or []
+    interface_spec_path = getattr(task, 'interface_spec_path', None)
+    is_tdd_mode = len(test_file_paths) > 0
+
+    if is_tdd_mode:
+        logger.info(f"TDD Mode activated for task {task.id}. Tests to pass: {test_file_paths}")
+
+    # Build TDD section if applicable
+    tdd_section = ""
+    if is_tdd_mode:
+        test_files_str = "\n".join(f"  - {tf}" for tf in test_file_paths)
+        tdd_section = f"""
+## 🟢 TDD MODE: MAKE THESE TESTS PASS 🟢
+
+**THIS IS THE "GREEN" PHASE OF TDD**
+
+Your PRIMARY objective is to make these failing tests PASS:
+{test_files_str}
+
+### TDD Workflow
+1. **READ THE TESTS FIRST**: Understand what the tests expect
+2. **Read interface specs**: Check `{interface_spec_path or 'interfaces/api_spec.yaml'}` for contracts
+3. **IMPLEMENT**: Write the minimum code to make tests pass
+4. **RUN TESTS FREQUENTLY**: After each change, run tests to check progress
+5. **ITERATE**: Fix failures one at a time until all tests pass
+
+### Test Execution Command
+```bash
+{venv_python} -m pytest {' '.join(test_file_paths)} -v
+```
+
+### Critical Rules
+- **TESTS ARE THE CONTRACT**: Don't question or modify the tests - implement to satisfy them
+- **MINIMUM VIABLE IMPLEMENTATION**: Write just enough code to pass tests, no more
+- **RUN TESTS OFTEN**: Every few changes, run the tests to verify progress
+- **REPORT GREEN**: When all tests pass, you're done!
+
+### If Tests Are Wrong
+If you genuinely believe a test is incorrect (testing wrong behavior, impossible to satisfy):
+1. Document the issue in your completion notes
+2. Use `create_subtasks` to request test fix from Test Architect
+3. Do NOT modify the test files yourself
+
+---
+
+"""
+
     platform_warning = f"""
 **🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
 {"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
@@ -59,6 +116,8 @@ The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
 
     # Stronger system prompt to force file creation
     system_prompt = f"""You are a software engineer. Implement the requested feature.
+
+{tdd_section}
 
 ⚠️ CRITICAL: NEVER HTML-ESCAPE CODE ⚠️
 When calling write_file, you MUST pass raw, unescaped code EXACTLY as it should appear in the file.
