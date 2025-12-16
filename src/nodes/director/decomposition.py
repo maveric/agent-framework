@@ -69,6 +69,367 @@ class InterfaceSpec(BaseModel):
 
 
 # =============================================================================
+# INTERFACE GENERATION (TDD)
+# =============================================================================
+
+async def generate_interface_specs(
+    objective: str,
+    design_spec_content: str,
+    workspace_path: str,
+    state: Dict[str, Any]
+) -> Optional[str]:
+    """
+    Generate concrete interface specifications from the design spec.
+
+    This is the TDD "Contract" step - creating executable specifications
+    that Test Architects will use to write failing tests.
+
+    Args:
+        objective: High-level user objective
+        design_spec_content: The design_spec.md content
+        workspace_path: Path to write interface files
+        state: Current orchestrator state
+
+    Returns:
+        Path to the generated interface spec file, or None if failed
+    """
+    orch_config = state.get("orch_config")
+    if not orch_config:
+        from config import OrchestratorConfig
+        orch_config = OrchestratorConfig()
+
+    llm = get_llm(orch_config.director_model)
+    structured_llm = llm.with_structured_output(InterfaceSpec)
+
+    await broadcast_progress(state, "Generating interface specifications (TDD)...", "initialization")
+
+    interface_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a Contract Architect defining precise, testable interfaces.
+
+Your job is to extract CONCRETE, EXECUTABLE specifications from the design document.
+These specifications will be used by Test Architects to write failing tests BEFORE any code is written.
+
+**CRITICAL RULES:**
+1. Every endpoint must have explicit request/response schemas
+2. Every model must have explicit field types
+3. Be PRECISE - vague specs lead to test/implementation mismatches
+4. Use standard types: str, int, float, bool, List[X], Optional[X], Dict[str, X], datetime
+
+**OUTPUT REQUIREMENTS:**
+
+For each API endpoint, specify:
+- HTTP method (GET, POST, PUT, DELETE, PATCH)
+- Path (e.g., /api/users, /api/tasks/{task_id})
+- Request body as a Python dict or Pydantic-style schema string
+- Response body as a Python dict or Pydantic-style schema string
+- Brief description
+
+For each data model, specify:
+- Model name (PascalCase)
+- Field name to type mapping
+- Brief description
+
+Example endpoint:
+```
+method: POST
+path: /api/users
+request_body: {{"name": "str", "email": "str", "password": "str"}}
+response_body: {{"id": "int", "name": "str", "email": "str", "created_at": "datetime"}}
+description: Create a new user account
+```
+
+Example model:
+```
+name: User
+fields: {{"id": "int", "name": "str", "email": "str", "password_hash": "str", "created_at": "datetime"}}
+description: User account information
+```
+
+Analyze the design spec and extract ALL necessary interfaces."""),
+        ("user", """Objective: {objective}
+
+Design Specification:
+{design_spec}
+
+Extract all API endpoints and data models from this specification.""")
+    ])
+
+    try:
+        response = await structured_llm.ainvoke(
+            interface_prompt.format(
+                objective=objective,
+                design_spec=design_spec_content[:8000]  # Limit to avoid token overflow
+            )
+        )
+
+        # Create interfaces directory
+        interfaces_dir = Path(workspace_path) / "interfaces"
+        interfaces_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate api_spec.yaml (OpenAPI-style)
+        api_spec_content = _generate_openapi_spec(response)
+        api_spec_path = interfaces_dir / "api_spec.yaml"
+        api_spec_path.write_text(api_spec_content, encoding="utf-8")
+        logger.info(f"Written: interfaces/api_spec.yaml ({len(response.endpoints)} endpoints)")
+
+        # Generate models.py (Pydantic models)
+        models_content = _generate_pydantic_models(response)
+        models_path = interfaces_dir / "models.py"
+        models_path.write_text(models_content, encoding="utf-8")
+        logger.info(f"Written: interfaces/models.py ({len(response.models)} models)")
+
+        # Generate types.ts if frontend detected
+        if response.has_frontend:
+            types_content = _generate_typescript_types(response)
+            types_path = interfaces_dir / "types.ts"
+            types_path.write_text(types_content, encoding="utf-8")
+            logger.info(f"Written: interfaces/types.ts")
+
+        # Commit interface files
+        wt_manager = state.get("_wt_manager")
+        if wt_manager and not state.get("mock_mode", False):
+            try:
+                files_to_commit = ["interfaces/api_spec.yaml", "interfaces/models.py"]
+                if response.has_frontend:
+                    files_to_commit.append("interfaces/types.ts")
+                await wt_manager.commit_to_main(
+                    message="Director: Add TDD interface specifications",
+                    files=files_to_commit
+                )
+                logger.info("Committed: interface specifications")
+            except Exception as e:
+                logger.warning(f"Failed to commit interfaces: {e}")
+
+        await broadcast_progress(state, f"✓ Interface specs created ({len(response.endpoints)} endpoints, {len(response.models)} models)", "initialization")
+        return str(api_spec_path)
+
+    except Exception as e:
+        logger.error(f"Failed to generate interface specs: {e}")
+        await broadcast_progress(state, f"⚠ Interface generation failed: {e}", "initialization")
+        return None
+
+
+def _generate_openapi_spec(interface: InterfaceSpec) -> str:
+    """Generate OpenAPI-style YAML specification."""
+    lines = [
+        "# TDD Interface Specification",
+        "# Auto-generated by Director - DO NOT EDIT MANUALLY",
+        "# Test Architects use this to write failing tests",
+        "",
+        "openapi: '3.0.0'",
+        "info:",
+        "  title: API Specification",
+        "  version: '1.0.0'",
+        "  description: Auto-generated interface contract for TDD",
+        "",
+        "paths:"
+    ]
+
+    for endpoint in interface.endpoints:
+        method = endpoint.method.lower()
+        lines.append(f"  {endpoint.path}:")
+        lines.append(f"    {method}:")
+        lines.append(f"      summary: {endpoint.description}")
+        if endpoint.request_body:
+            lines.append("      requestBody:")
+            lines.append("        required: true")
+            lines.append("        content:")
+            lines.append("          application/json:")
+            lines.append(f"            schema: {endpoint.request_body}")
+        lines.append("      responses:")
+        lines.append("        '200':")
+        lines.append("          description: Success")
+        lines.append("          content:")
+        lines.append("            application/json:")
+        lines.append(f"              schema: {endpoint.response_body}")
+        lines.append("")
+
+    if interface.models:
+        lines.append("components:")
+        lines.append("  schemas:")
+        for model in interface.models:
+            lines.append(f"    {model.name}:")
+            lines.append(f"      description: {model.description}")
+            lines.append("      type: object")
+            lines.append("      properties:")
+            for field_name, field_type in model.fields.items():
+                openapi_type = _python_type_to_openapi(field_type)
+                lines.append(f"        {field_name}:")
+                lines.append(f"          type: {openapi_type}")
+
+    return "\n".join(lines)
+
+
+def _generate_pydantic_models(interface: InterfaceSpec) -> str:
+    """Generate Pydantic model definitions."""
+    lines = [
+        '"""',
+        'TDD Interface Models',
+        'Auto-generated by Director - DO NOT EDIT MANUALLY',
+        '',
+        'These models define the contract between components.',
+        'Test Architects use these to write failing tests.',
+        '"""',
+        '',
+        'from datetime import datetime',
+        'from typing import List, Optional, Dict, Any',
+        'from pydantic import BaseModel, Field',
+        '',
+        ''
+    ]
+
+    for model in interface.models:
+        lines.append(f"class {model.name}(BaseModel):")
+        lines.append(f'    """{model.description}"""')
+        if not model.fields:
+            lines.append("    pass")
+        else:
+            for field_name, field_type in model.fields.items():
+                pydantic_type = _normalize_python_type(field_type)
+                lines.append(f"    {field_name}: {pydantic_type}")
+        lines.append("")
+        lines.append("")
+
+    # Add request/response models for endpoints
+    lines.append("# Request/Response Models")
+    lines.append("")
+
+    for i, endpoint in enumerate(interface.endpoints):
+        # Create request model if there's a request body
+        if endpoint.request_body:
+            class_name = _endpoint_to_class_name(endpoint.path, endpoint.method, "Request")
+            lines.append(f"class {class_name}(BaseModel):")
+            lines.append(f'    """{endpoint.description} - Request"""')
+            lines.append(f"    # Schema: {endpoint.request_body}")
+            lines.append("    pass  # TODO: Expand from schema")
+            lines.append("")
+
+        # Create response model
+        class_name = _endpoint_to_class_name(endpoint.path, endpoint.method, "Response")
+        lines.append(f"class {class_name}(BaseModel):")
+        lines.append(f'    """{endpoint.description} - Response"""')
+        lines.append(f"    # Schema: {endpoint.response_body}")
+        lines.append("    pass  # TODO: Expand from schema")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _generate_typescript_types(interface: InterfaceSpec) -> str:
+    """Generate TypeScript type definitions."""
+    lines = [
+        "/**",
+        " * TDD Interface Types",
+        " * Auto-generated by Director - DO NOT EDIT MANUALLY",
+        " *",
+        " * These types define the contract between frontend and backend.",
+        " * Test Architects use these to write failing tests.",
+        " */",
+        "",
+    ]
+
+    for model in interface.models:
+        lines.append(f"/** {model.description} */")
+        lines.append(f"export interface {model.name} {{")
+        for field_name, field_type in model.fields.items():
+            ts_type = _python_type_to_typescript(field_type)
+            lines.append(f"  {field_name}: {ts_type};")
+        lines.append("}")
+        lines.append("")
+
+    # Add API endpoint types
+    lines.append("// API Endpoint Types")
+    lines.append("")
+
+    for endpoint in interface.endpoints:
+        class_name = _endpoint_to_class_name(endpoint.path, endpoint.method, "")
+        lines.append(f"/** {endpoint.method} {endpoint.path} - {endpoint.description} */")
+        if endpoint.request_body:
+            lines.append(f"export interface {class_name}Request {{")
+            lines.append(f"  // Schema: {endpoint.request_body}")
+            lines.append("}")
+        lines.append(f"export interface {class_name}Response {{")
+        lines.append(f"  // Schema: {endpoint.response_body}")
+        lines.append("}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _python_type_to_openapi(py_type: str) -> str:
+    """Convert Python type hint to OpenAPI type."""
+    type_map = {
+        "str": "string",
+        "int": "integer",
+        "float": "number",
+        "bool": "boolean",
+        "datetime": "string",  # format: date-time
+        "date": "string",      # format: date
+        "bytes": "string",     # format: byte
+    }
+    base_type = py_type.split("[")[0].lower()
+    if "list" in py_type.lower():
+        return "array"
+    if "dict" in py_type.lower():
+        return "object"
+    return type_map.get(base_type, "string")
+
+
+def _python_type_to_typescript(py_type: str) -> str:
+    """Convert Python type hint to TypeScript type."""
+    type_map = {
+        "str": "string",
+        "int": "number",
+        "float": "number",
+        "bool": "boolean",
+        "datetime": "string",  # ISO date string
+        "date": "string",
+        "bytes": "string",
+        "any": "any",
+    }
+
+    py_type_lower = py_type.lower()
+
+    if py_type_lower.startswith("list["):
+        inner = py_type[5:-1]
+        return f"{_python_type_to_typescript(inner)}[]"
+    if py_type_lower.startswith("optional["):
+        inner = py_type[9:-1]
+        return f"{_python_type_to_typescript(inner)} | null"
+    if py_type_lower.startswith("dict["):
+        return "Record<string, any>"
+
+    base_type = py_type.split("[")[0]
+    return type_map.get(base_type.lower(), "any")
+
+
+def _normalize_python_type(py_type: str) -> str:
+    """Normalize a Python type string for Pydantic."""
+    # Handle common variations
+    type_map = {
+        "string": "str",
+        "integer": "int",
+        "boolean": "bool",
+        "number": "float",
+    }
+
+    result = py_type
+    for old, new in type_map.items():
+        result = result.replace(old, new)
+
+    return result
+
+
+def _endpoint_to_class_name(path: str, method: str, suffix: str) -> str:
+    """Convert endpoint path and method to a class name."""
+    # /api/users/{user_id} -> ApiUsersUserId
+    parts = path.strip("/").replace("{", "").replace("}", "").split("/")
+    name_parts = [part.title() for part in parts if part]
+    method_part = method.title()
+    return f"{method_part}{''.join(name_parts)}{suffix}"
+
+
+# =============================================================================
 # FUNCTIONS
 # =============================================================================
 
@@ -316,6 +677,22 @@ Be specific enough that multiple workers can implement different features simult
         logger.warning(f"Failed to create spec: {e}")
         spec_content = f"# Design Spec\n\nObjective: {objective}\n\nPlease create a minimal viable implementation."
 
+    # STEP 1.5: Generate TDD Interface Specifications
+    # This is the "Contract" step - creating precise, testable interfaces
+    interface_spec_path = None
+    if workspace_path:
+        logger.info("Generating TDD interface specifications")
+        interface_spec_path = await generate_interface_specs(
+            objective=objective,
+            design_spec_content=spec_content,
+            workspace_path=workspace_path,
+            state=state
+        )
+        if interface_spec_path:
+            logger.info(f"Interface specs generated: {interface_spec_path}")
+        else:
+            logger.warning("Interface generation skipped or failed - TDD tests may lack precise contracts")
+
     # STEP 2: Decompose into 1-5 component planner tasks
     logger.info("Creating component planner tasks")
     await broadcast_progress(state, "Creating component planners (AI)...", "initialization")
@@ -377,6 +754,12 @@ Be specific enough that multiple workers can implement different features simult
             if t_def.phase.lower() != "plan":
                 logger.warning(f"Director tried to create {t_def.phase} task, converting to 'plan'")
 
+            # Build description with TDD interface reference if available
+            desc_parts = [t_def.description, "", "REFERENCE: design_spec.md for architecture details."]
+            if interface_spec_path:
+                desc_parts.append("TDD CONTRACTS: interfaces/api_spec.yaml and interfaces/models.py for precise specifications.")
+                desc_parts.append("IMPORTANT: Generate TEST tasks BEFORE BUILD tasks (Test-Driven Development).")
+
             task = Task(
                 id=f"task_{uuid.uuid4().hex[:8]}",
                 title=t_def.title,
@@ -384,9 +767,10 @@ Be specific enough that multiple workers can implement different features simult
                 phase=TaskPhase.PLAN,
                 status=TaskStatus.PLANNED,
                 assigned_worker_profile=WorkerProfile.PLANNER,
-                description=f"{t_def.description}\n\nREFERENCE: design_spec.md for architecture details.",
+                description="\n".join(desc_parts),
                 acceptance_criteria=t_def.acceptance_criteria,
                 depends_on=[],
+                interface_spec_path=interface_spec_path,  # TDD: Link to interface contracts
                 created_at=datetime.now(),
                 updated_at=datetime.now()
             )
@@ -399,6 +783,11 @@ Be specific enough that multiple workers can implement different features simult
     except Exception as e:
         logger.error(f"Decomposition error: {e}, using fallback")
         # Fallback: single planner for the entire project
+        fallback_desc = f"Plan implementation for: {objective}\n\nREFERENCE: design_spec.md for architecture details."
+        if interface_spec_path:
+            fallback_desc += "\nTDD CONTRACTS: interfaces/api_spec.yaml and interfaces/models.py for precise specifications."
+            fallback_desc += "\nIMPORTANT: Generate TEST tasks BEFORE BUILD tasks (Test-Driven Development)."
+
         return [Task(
             id=f"task_{uuid.uuid4().hex[:8]}",
             title=f"Plan implementation: {objective[:50]}",
@@ -406,9 +795,10 @@ Be specific enough that multiple workers can implement different features simult
             phase=TaskPhase.PLAN,
             status=TaskStatus.PLANNED,
             assigned_worker_profile=WorkerProfile.PLANNER,
-            description=f"Plan implementation for: {objective}\n\nREFERENCE: design_spec.md for architecture details.",
-            acceptance_criteria=["Create implementation plan", "Define build and test tasks"],
+            description=fallback_desc,
+            acceptance_criteria=["Create implementation plan", "Define test tasks before build tasks (TDD)"],
             depends_on=[],
+            interface_spec_path=interface_spec_path,  # TDD: Link to interface contracts
             created_at=datetime.now(),
             updated_at=datetime.now()
         )]
