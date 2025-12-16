@@ -1,9 +1,10 @@
 """
 Agent Orchestrator — Strategist Node
 ====================================
-Version 2.0 — November 2025
+Version 2.1 — December 2025
 
 QA evaluation node with LLM-based test result evaluation.
+Now includes TDD validation for Red/Green verification.
 """
 
 import logging
@@ -17,6 +18,187 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from orchestrator_types import TaskStatus, TaskPhase, WorkerProfile
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# TDD VALIDATION FUNCTIONS
+# =============================================================================
+
+async def _validate_tdd_red_phase(task: Dict[str, Any], workspace_path: str, config: Any) -> Dict[str, Any]:
+    """
+    Validate that a TEST phase task in TDD wrote tests that FAIL (Red phase).
+
+    Returns:
+        Dict with keys: passed (bool), feedback (str), is_red_verified (bool)
+    """
+    task_id = task["id"]
+    component = task.get("component", task_id)
+    test_spec_path = Path(workspace_path) / f"agents-work/test-specs/test-spec-{component}.md"
+
+    if not test_spec_path.exists():
+        return {
+            "passed": False,
+            "feedback": f"TDD RED VERIFICATION FAILED: Missing test specification file at agents-work/test-specs/test-spec-{component}.md",
+            "is_red_verified": False
+        }
+
+    try:
+        content = test_spec_path.read_text(encoding="utf-8")
+
+        # Check for RED verification section
+        content_lower = content.lower()
+
+        # Look for evidence that tests were run and failed
+        has_red_verification = "red verification" in content_lower or "tests must fail" in content_lower
+        has_failure_output = "failed" in content_lower or "error" in content_lower or "failure" in content_lower
+        has_test_command = "pytest" in content_lower or "jest" in content_lower or "npm test" in content_lower
+
+        # Check for anti-patterns (tests that pass when they shouldn't)
+        has_passing_warning = "unexpected passes" in content_lower or "tests pass" in content_lower
+
+        if has_red_verification and has_failure_output and has_test_command:
+            # Good - tests were run and failed as expected
+            return {
+                "passed": True,
+                "feedback": "TDD RED PHASE VERIFIED: Tests were written and confirmed to fail before implementation.",
+                "is_red_verified": True
+            }
+        elif not has_test_command:
+            return {
+                "passed": False,
+                "feedback": "TDD RED VERIFICATION INCOMPLETE: Test specification exists but no test execution command was documented.",
+                "is_red_verified": False
+            }
+        else:
+            return {
+                "passed": False,
+                "feedback": "TDD RED VERIFICATION INCOMPLETE: Could not confirm tests fail as expected. Ensure RED verification section shows actual test failures.",
+                "is_red_verified": False
+            }
+
+    except Exception as e:
+        return {
+            "passed": False,
+            "feedback": f"TDD RED VERIFICATION ERROR: Failed to read test specification: {e}",
+            "is_red_verified": False
+        }
+
+
+async def _validate_tdd_green_phase(task: Dict[str, Any], workspace_path: str, config: Any) -> Dict[str, Any]:
+    """
+    Validate that a BUILD phase task in TDD made all tests PASS (Green phase).
+
+    This is called when task.test_file_paths is set, indicating TDD mode.
+
+    Returns:
+        Dict with keys: passed (bool), feedback (str), tests_passing (bool)
+    """
+    test_file_paths = task.get("test_file_paths", [])
+
+    if not test_file_paths:
+        # Not a TDD task - skip green validation
+        return {
+            "passed": True,
+            "feedback": "Not a TDD task (no test_file_paths specified).",
+            "tests_passing": None
+        }
+
+    # Look for test results in standard locations
+    task_id = task["id"]
+    component = task.get("component", task_id)
+    test_results_path = Path(workspace_path) / f"agents-work/test-results/test-{component}.md"
+
+    # Also check AAR for test execution evidence
+    aar = task.get("aar", {})
+    aar_summary = aar.get("summary", "").lower()
+
+    # Evidence of test execution in AAR
+    tests_mentioned_in_aar = "test" in aar_summary and ("pass" in aar_summary or "green" in aar_summary)
+
+    if test_results_path.exists():
+        try:
+            content = test_results_path.read_text(encoding="utf-8")
+            content_lower = content.lower()
+
+            # Check for passing evidence
+            has_all_passed = "all tests passed" in content_lower or "100%" in content_lower or "0 failed" in content_lower
+            has_failures = "failed" in content_lower and "0 failed" not in content_lower
+
+            if has_all_passed and not has_failures:
+                return {
+                    "passed": True,
+                    "feedback": "TDD GREEN PHASE VERIFIED: All tests pass. Implementation satisfies the contract.",
+                    "tests_passing": True
+                }
+            elif has_failures:
+                return {
+                    "passed": False,
+                    "feedback": "TDD GREEN PHASE FAILED: Some tests still failing. Implementation incomplete.",
+                    "tests_passing": False
+                }
+            else:
+                return {
+                    "passed": False,
+                    "feedback": "TDD GREEN VERIFICATION UNCLEAR: Test results file exists but could not confirm all tests pass.",
+                    "tests_passing": None
+                }
+
+        except Exception as e:
+            return {
+                "passed": False,
+                "feedback": f"TDD GREEN VERIFICATION ERROR: Failed to read test results: {e}",
+                "tests_passing": None
+            }
+
+    elif tests_mentioned_in_aar:
+        # No explicit test results file, but AAR mentions tests passing
+        return {
+            "passed": True,
+            "feedback": "TDD GREEN PHASE: Test execution mentioned in AAR. Consider creating explicit test results file.",
+            "tests_passing": True
+        }
+
+    else:
+        # TDD mode but no test evidence
+        return {
+            "passed": False,
+            "feedback": f"TDD GREEN VERIFICATION FAILED: Task has test_file_paths but no test results found at agents-work/test-results/test-{component}.md",
+            "tests_passing": None
+        }
+
+
+def _check_test_triviality(test_content: str) -> Dict[str, Any]:
+    """
+    Check if tests appear trivial (anti-pattern detection).
+
+    Returns:
+        Dict with is_trivial (bool), warnings (List[str])
+    """
+    warnings = []
+    content_lower = test_content.lower()
+
+    # Anti-patterns to detect
+    trivial_patterns = [
+        ("assert true", "Found 'assert True' - tests should make meaningful assertions"),
+        ("assert 1 == 1", "Found '1 == 1' assertion - tests should validate actual behavior"),
+        ("pass  # todo", "Found 'pass # TODO' - tests are incomplete"),
+        ("# todo: implement", "Found TODO comments indicating incomplete tests"),
+    ]
+
+    for pattern, warning in trivial_patterns:
+        if pattern in content_lower:
+            warnings.append(warning)
+
+    # Check for empty test functions
+    import re
+    empty_test_pattern = r'def test_\w+\([^)]*\):\s*pass'
+    if re.search(empty_test_pattern, test_content):
+        warnings.append("Found empty test functions (def test_*(): pass)")
+
+    return {
+        "is_trivial": len(warnings) > 0,
+        "warnings": warnings
+    }
 
 
 def _create_merge_task(
@@ -452,19 +634,56 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
 
             # Check phase - only TEST tasks strictly require test result files
             task_phase = task.get("phase", "build") # Default to build if not set
-            
+            worker_profile = task.get("assigned_worker_profile", "")
+
+            # TDD: Check if this is a Test Architect task (RED phase validation)
+            is_test_architect = worker_profile == WorkerProfile.TEST_ARCHITECT.value or worker_profile == "test_architect"
+
             if task_phase == "test":
                 # STRICT QA for TEST tasks
-                if test_results_path and test_results_path.exists():
+                if is_test_architect:
+                    # TDD RED PHASE: Validate tests were written and FAIL as expected
+                    logger.info(f"  [TDD] Test Architect task - validating RED phase")
+                    tdd_result = await _validate_tdd_red_phase(task, workspace_path, config)
+
+                    if tdd_result["passed"]:
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": tdd_result["feedback"],
+                            "suggested_focus": ""
+                        }
+                        # Mark is_red_verified on the task
+                        task["is_red_verified"] = tdd_result.get("is_red_verified", False)
+                        logger.info(f"  [TDD RED PASS] Tests confirmed to fail before implementation")
+                    else:
+                        qa_verdict = {
+                            "passed": False,
+                            "overall_feedback": tdd_result["feedback"],
+                            "suggested_focus": "Ensure tests are written and fail as expected (RED state)"
+                        }
+                        logger.error(f"  [TDD RED FAIL] {tdd_result['feedback']}")
+
+                elif test_results_path and test_results_path.exists():
                     try:
                         test_content = test_results_path.read_text(encoding="utf-8")
-                        
+
+                        # TDD: Check for trivial tests (anti-pattern)
+                        triviality_check = _check_test_triviality(test_content)
+                        if triviality_check["is_trivial"]:
+                            logger.warning(f"  [TDD WARNING] Trivial tests detected: {triviality_check['warnings']}")
+
                         if not mock_mode:
                             # Use LLM to evaluate test results
                             qa_result = await _evaluate_test_results_with_llm(task, test_content, objective, config)
+
+                            # Add triviality warnings to feedback
+                            feedback = qa_result["feedback"]
+                            if triviality_check["is_trivial"]:
+                                feedback += f"\n\n⚠️ TRIVIALITY WARNING: {'; '.join(triviality_check['warnings'])}"
+
                             qa_verdict = {
                                 "passed": qa_result["passed"],
-                                "overall_feedback": qa_result["feedback"],
+                                "overall_feedback": feedback,
                                 "suggested_focus": ", ".join(qa_result["suggestions"])
                             }
                         else:
@@ -498,13 +717,37 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 # Check if task actually DID something
                 aar = task.get("aar", {})
                 files_modified = aar.get("files_modified", [])
-                
+
+                # TDD: Check if this is a GREEN phase task (has test_file_paths)
+                test_file_paths = task.get("test_file_paths", [])
+                is_tdd_build = len(test_file_paths) > 0 if test_file_paths else False
+
                 # Check for "explicit completion" (where agent said "already implemented")
                 is_explicitly_completed = False
                 if aar.get("summary", "").startswith("ALREADY IMPLEMENTED:"):
                      is_explicitly_completed = True
 
-                if files_modified or is_explicitly_completed:
+                # TDD GREEN PHASE: Validate all tests pass
+                if is_tdd_build:
+                    logger.info(f"  [TDD] Build task with tests - validating GREEN phase")
+                    tdd_result = await _validate_tdd_green_phase(task, workspace_path, config)
+
+                    if tdd_result["passed"]:
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": tdd_result["feedback"],
+                            "suggested_focus": ""
+                        }
+                        logger.info(f"  [TDD GREEN PASS] All tests now pass")
+                    else:
+                        qa_verdict = {
+                            "passed": False,
+                            "overall_feedback": tdd_result["feedback"],
+                            "suggested_focus": "Make all tests pass (GREEN state)"
+                        }
+                        logger.error(f"  [TDD GREEN FAIL] {tdd_result['feedback']}")
+
+                elif files_modified or is_explicitly_completed:
                     logger.info(f"  [QA PASS] Validated work for {task_phase} task {task_id}")
                     qa_verdict = {
                         "passed": True,
