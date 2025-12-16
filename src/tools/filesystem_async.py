@@ -34,9 +34,15 @@ def _get_workspace_root(root: Optional[Path] = None) -> Path:
     return WORKSPACE_ROOT
 
 
-def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
-    """Ensure path is within workspace."""
-    workspace_root = _get_workspace_root(root).resolve()
+def _is_safe_path(path: str, root: Optional[Path] = None, additional_roots: List[Path] = None) -> bool:
+    """
+    Ensure path is within workspace or allowed directories.
+    
+    Args:
+        path: Path to check
+        root: Primary workspace root (e.g., worktree)
+        additional_roots: Additional allowed paths (e.g., main workspace for .venv)
+    """
     try:
         path_obj = Path(path)
         
@@ -47,30 +53,46 @@ def _is_safe_path(path: str, root: Optional[Path] = None) -> bool:
             target = path_obj.resolve()
         else:
             # Relative path - join with workspace root
+            workspace_root = _get_workspace_root(root).resolve()
             normalized_path = path.lstrip('/\\')
             target = (workspace_root / normalized_path).resolve()
         
-        # Robust comparison handling case sensitivity
-        root_str = str(workspace_root)
+        # Build list of all valid roots
+        valid_roots = []
+        if root:
+            valid_roots.append(Path(root).resolve())
+        else:
+            valid_roots.append(WORKSPACE_ROOT.resolve())
+        
+        if additional_roots:
+            valid_roots.extend([Path(r).resolve() for r in additional_roots])
+        
         target_str = str(target)
         
         # On Windows, normalize case for comparison
         if platform.system() == "Windows":
-            root_str = root_str.lower()
             target_str = target_str.lower()
-            
-        is_safe = target_str.startswith(root_str)
         
-        if not is_safe:
-            print(f"  [SECURITY] Access denied: {target_str} is not in {root_str}", flush=True)
+        # Check if target is within ANY valid root
+        for valid_root in valid_roots:
+            root_str = str(valid_root)
+            if platform.system() == "Windows":
+                root_str = root_str.lower()
             
-        return is_safe
+            if target_str.startswith(root_str):
+                return True
+        
+        # Not in any valid root
+        print(f"  [SECURITY] Access denied: {target_str} is not in any valid workspace", flush=True)
+        print(f"  [SECURITY] Valid roots: {[str(r) for r in valid_roots]}", flush=True)
+        return False
+        
     except Exception as e:
         print(f"  [SECURITY] Path check error: {e}", flush=True)
         return False
 
 
-async def read_file_async(path: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+async def read_file_async(path: str, encoding: str = "utf-8", root: Optional[Path] = None, additional_roots: List[Path] = None) -> str:
     """
     Read the contents of a file asynchronously.
     
@@ -78,11 +100,12 @@ async def read_file_async(path: str, encoding: str = "utf-8", root: Optional[Pat
         path: Relative path to the file
         encoding: File encoding (default: utf-8)
         root: Optional workspace root override
+        additional_roots: Additional allowed paths (e.g., main workspace for .venv)
     
     Returns:
         File contents as string
     """
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
     normalized_path = path.lstrip('/\\')
@@ -102,7 +125,7 @@ async def read_file_async(path: str, encoding: str = "utf-8", root: Optional[Pat
         return await asyncio.to_thread(_read_file_sync, target_path, encoding)
 
 
-async def write_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+async def write_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None, additional_roots: List[Path] = None) -> str:
     """
     Write content to a file asynchronously. Creates parent directories if needed.
     
@@ -111,6 +134,7 @@ async def write_file_async(path: str, content: str, encoding: str = "utf-8", roo
         content: Content to write
         encoding: File encoding (default: utf-8)
         root: Optional workspace root override
+        additional_roots: Additional allowed paths (e.g., main workspace)
         
     Returns:
         Success message with byte count
@@ -121,7 +145,7 @@ async def write_file_async(path: str, content: str, encoding: str = "utf-8", roo
     if content is None:
         raise ValueError("ERROR: 'content' parameter is required!")
     
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
     normalized_path = path.lstrip('/\\')
@@ -139,7 +163,7 @@ async def write_file_async(path: str, content: str, encoding: str = "utf-8", roo
     return f"Successfully wrote {len(content)} bytes to {path}"
 
 
-async def append_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None) -> str:
+async def append_file_async(path: str, content: str, encoding: str = "utf-8", root: Optional[Path] = None, additional_roots: List[Path] = None) -> str:
     """
     Append content to an existing file asynchronously.
     
@@ -148,11 +172,12 @@ async def append_file_async(path: str, content: str, encoding: str = "utf-8", ro
         content: Content to append
         encoding: File encoding (default: utf-8)
         root: Optional workspace root override
+        additional_roots: Additional allowed paths
         
     Returns:
         Success message
     """
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
     normalized_path = path.lstrip('/\\')
@@ -176,7 +201,8 @@ async def list_directory_async(
     pattern: str = "*", 
     root: Optional[Path] = None,
     max_depth: int = 3,
-    max_results: int = 500
+    max_results: int = 500,
+    additional_roots: List[Path] = None
 ) -> List[str]:
     """
     List files and directories asynchronously.
@@ -188,11 +214,12 @@ async def list_directory_async(
         root: Optional workspace root override
         max_depth: Maximum recursion depth (default: 3, prevents deep venv/node_modules)
         max_results: Maximum number of results to return (default: 500)
+        additional_roots: Additional allowed paths
         
     Returns:
         List of file paths
     """
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
     normalized_path = path.lstrip('/\\')
@@ -251,18 +278,19 @@ async def list_directory_async(
     return await asyncio.to_thread(_do_walk)
 
 
-async def file_exists_async(path: str, root: Optional[Path] = None) -> bool:
+async def file_exists_async(path: str, root: Optional[Path] = None, additional_roots: List[Path] = None) -> bool:
     """
     Check if a file or directory exists asynchronously.
     
     Args:
         path: Path to check
         root: Optional workspace root override
+        additional_roots: Additional allowed paths
         
     Returns:
         True if exists
     """
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         return False
     
     target_path = _get_workspace_root(root) / path.lstrip('/\\')
@@ -273,7 +301,7 @@ async def file_exists_async(path: str, root: Optional[Path] = None) -> bool:
         return await asyncio.to_thread(target_path.exists)
 
 
-async def delete_file_async(path: str, confirm: bool, root: Optional[Path] = None) -> str:
+async def delete_file_async(path: str, confirm: bool, root: Optional[Path] = None, additional_roots: List[Path] = None) -> str:
     """
     Delete a file asynchronously.
     
@@ -281,6 +309,7 @@ async def delete_file_async(path: str, confirm: bool, root: Optional[Path] = Non
         path: Path to delete
         confirm: Must be True
         root: Optional workspace root override
+        additional_roots: Additional allowed paths
         
     Returns:
         Success message
@@ -288,7 +317,7 @@ async def delete_file_async(path: str, confirm: bool, root: Optional[Path] = Non
     if not confirm:
         raise ValueError("Deletion requires confirmation=True")
     
-    if not _is_safe_path(path, root):
+    if not _is_safe_path(path, root, additional_roots):
         raise ValueError(f"Access denied: {path} is outside workspace")
     
     normalized_path = path.lstrip('/\\')
