@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -38,6 +38,34 @@ class TaskDefinition(BaseModel):
 class DecompositionResponse(BaseModel):
     """LLM response for task decomposition."""
     tasks: List[TaskDefinition]
+
+
+# =============================================================================
+# TDD INTERFACE SCHEMAS
+# =============================================================================
+
+class APIEndpoint(BaseModel):
+    """Single API endpoint definition."""
+    method: str = Field(description="HTTP method (GET, POST, PUT, DELETE, PATCH)")
+    path: str = Field(description="URL path (e.g., /api/users)")
+    request_body: Optional[str] = Field(default=None, description="Request body schema as Python dict/Pydantic string")
+    response_body: str = Field(description="Response body schema as Python dict/Pydantic string")
+    description: str = Field(description="What this endpoint does")
+
+
+class DataModel(BaseModel):
+    """Data model/schema definition."""
+    name: str = Field(description="Model name (e.g., User, Task)")
+    fields: Dict[str, str] = Field(description="Field name to type mapping (e.g., {'id': 'int', 'name': 'str'})")
+    description: str = Field(description="What this model represents")
+
+
+class InterfaceSpec(BaseModel):
+    """Complete interface specification for TDD."""
+    endpoints: List[APIEndpoint] = Field(default_factory=list, description="API endpoints")
+    models: List[DataModel] = Field(default_factory=list, description="Data models/schemas")
+    has_frontend: bool = Field(default=False, description="Whether project has a frontend component")
+    frontend_components: List[str] = Field(default_factory=list, description="Key frontend components if applicable")
 
 
 # =============================================================================

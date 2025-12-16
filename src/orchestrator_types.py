@@ -38,20 +38,22 @@ class TaskStatus(str, Enum):
 
 
 class TaskPhase(str, Enum):
-    """Pipeline phase for a task."""
+    """Pipeline phase for a task (TDD-aware ordering)."""
     PLAN = "plan"           # Planning/design phase
-    BUILD = "build"         # Implementation/execution phase
-    TEST = "test"           # Testing/validation phase
+    INTERFACE = "interface" # Interface/contract definition phase (TDD: defines the contract)
+    TEST = "test"           # Test creation phase (TDD: write failing tests BEFORE implementation)
+    BUILD = "build"         # Implementation/execution phase (TDD: make tests pass)
 
 
 class WorkerProfile(str, Enum):
-    """Types of specialized workers."""
+    """Types of specialized workers (TDD-aware)."""
     PLANNER = "planner_worker"
     CODER = "code_worker"
-    TESTER = "test_worker"
+    TEST_ARCHITECT = "test_architect"  # TDD: Writes failing tests from interface specs
+    TESTER = "test_worker"             # Legacy: kept for backwards compatibility
     RESEARCHER = "research_worker"
     WRITER = "writer_worker"
-    MERGER = "merge_worker"  # Resolves git merge/rebase conflicts
+    MERGER = "merge_worker"            # Resolves git merge/rebase conflicts
 
 
 class GuardianVerdict(str, Enum):
@@ -386,7 +388,13 @@ class Task:
     # Git integration
     branch_name: Optional[str] = None      # Git branch for this task's worktree
     worktree_path: Optional[str] = None    # Path to worktree directory
-    
+
+    # TDD Integration (Test-Driven Development)
+    interface_spec_path: Optional[str] = None   # Path to interface spec this task implements/tests
+    test_file_paths: List[str] = field(default_factory=list)  # Paths to tests (BUILD tasks must pass these)
+    is_red_verified: bool = False               # For TEST tasks: verified tests fail before implementation
+    generates_interface_for: List[str] = field(default_factory=list)  # Task IDs that will use this interface
+
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -648,6 +656,12 @@ def task_to_dict(t: Task) -> Dict[str, Any]:
         "waiting_for_tasks": t.waiting_for_tasks,
         "branch_name": t.branch_name,
         "worktree_path": t.worktree_path,
+        # TDD fields
+        "interface_spec_path": t.interface_spec_path,
+        "test_file_paths": t.test_file_paths,
+        "is_red_verified": t.is_red_verified,
+        "generates_interface_for": t.generates_interface_for,
+        # Timestamps
         "created_at": t.created_at.isoformat(),
         "updated_at": t.updated_at.isoformat(),
         "started_at": t.started_at.isoformat() if t.started_at else None,
@@ -678,6 +692,12 @@ def _dict_to_task(data: Dict[str, Any]) -> Task:
         waiting_for_tasks=data.get("waiting_for_tasks", []),
         branch_name=data.get("branch_name"),
         worktree_path=data.get("worktree_path"),
+        # TDD fields (with backwards-compatible defaults)
+        interface_spec_path=data.get("interface_spec_path"),
+        test_file_paths=data.get("test_file_paths", []),
+        is_red_verified=data.get("is_red_verified", False),
+        generates_interface_for=data.get("generates_interface_for", []),
+        # Timestamps
         created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
         updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(),
         started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
