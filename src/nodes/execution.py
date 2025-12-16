@@ -305,7 +305,8 @@ async def _execute_react_loop(
                                 dependency_queries=st.get("dependency_queries", []),
                                 acceptance_criteria=st.get("acceptance_criteria", []),
                                 suggested_by_task=task.id,
-                                priority=st.get("priority", 5)
+                                priority=st.get("priority", 5),
+                                test_file_paths=st.get("test_file_paths", [])  # TDD: Tests this task must pass
                             ))
                         except Exception as e:
                             error_msg = f"Subtask '{st.get('title', 'Unknown')}' (#{idx+1}): {e}"

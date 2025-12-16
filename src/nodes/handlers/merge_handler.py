@@ -177,6 +177,32 @@ git log --oneline -n 5    # Should show commits from both branches
 - After `git add`, the file should have clean, working code
 - The merged code should include functionality from BOTH branches
 - If you can't verify the code runs, note it in your AAR
+
+**🚨 FORBIDDEN COMMANDS - WILL BREAK YOUR WORKTREE 🚨**
+The following commands will destroy your working environment and make all subsequent commands fail:
+
+- `git worktree remove` - NEVER run this! You would delete your own working directory
+- `git worktree add` with the current path - Same effect, breaks the shell CWD
+- `rm -rf .git` or `del /s .git` - Destroys git state
+- Any command that deletes the current directory
+
+**If you see `index.lock` errors:**
+```
+fatal: Unable to create '.git/.../index.lock': File exists.
+Another git process seems to be running in this repository
+```
+
+**DO NOT try to fix this by removing/recreating the worktree!**
+
+Instead:
+1. Wait a moment and retry the command (previous git process may finish)
+2. If the error persists, report it and request human intervention
+3. NEVER run `git worktree remove` - this is a system-level fix, not your job
+
+**If the rebase is hopelessly stuck:**
+- Use `git rebase --abort` to reset to a clean state
+- Report the issue in your AAR
+- Do NOT attempt worktree manipulation
 """
 
     return await _execute_react_loop(task, tools, system_prompt, state, config)

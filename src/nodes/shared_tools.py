@@ -20,7 +20,9 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
             - component: str (optional, use feature name instead of "backend"/"frontend")
             - depends_on: List[str] (Local dependencies - List of EXACT task TITLES from YOUR subtasks, NOT IDs!)
             - dependency_queries: List[str] (External dependencies - Natural language descriptions of tasks from OTHER planners)
-            - worker_profile: "code_worker" | "test_worker" (default based on phase)
+            - worker_profile: "code_worker" | "test_architect" (default based on phase)
+            - test_file_paths: List[str] (TDD: For BUILD tasks - paths to tests this task MUST pass)
+            - acceptance_criteria: List[str] (What must be true for task to be complete)
 
     CRITICAL - TWO TYPES OF DEPENDENCIES:
 

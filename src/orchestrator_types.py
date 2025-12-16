@@ -165,6 +165,7 @@ class SuggestedTask:
     suggested_by_task: str = ""   # Task ID that proposed this
     priority: int = 5             # Suggested priority (1-10)
     dependency_queries: List[str] = field(default_factory=list)  # Natural language descriptions of external dependencies
+    test_file_paths: List[str] = field(default_factory=list)  # TDD: Tests that BUILD tasks must pass
 
 
 @dataclass
@@ -819,7 +820,31 @@ def _suggested_task_to_dict(s: SuggestedTask) -> Dict[str, Any]:
         "acceptance_criteria": s.acceptance_criteria,
         "suggested_by_task": s.suggested_by_task,
         "priority": s.priority,
+        "test_file_paths": s.test_file_paths,  # TDD: Tests this task must pass
     }
+
+def _dict_to_suggested_task(data: Dict[str, Any]) -> SuggestedTask:
+    """Deserialize a dict to SuggestedTask."""
+    phase_value = data.get("phase", "build")
+    if isinstance(phase_value, str):
+        phase = TaskPhase(phase_value)
+    else:
+        phase = phase_value
+    
+    return SuggestedTask(
+        suggested_id=data.get("suggested_id", ""),
+        title=data.get("title", ""),
+        component=data.get("component", ""),
+        phase=phase,
+        description=data.get("description", ""),
+        rationale=data.get("rationale", ""),
+        depends_on=data.get("depends_on", []),
+        dependency_queries=data.get("dependency_queries", []),
+        acceptance_criteria=data.get("acceptance_criteria", []),
+        suggested_by_task=data.get("suggested_by_task", ""),
+        priority=data.get("priority", 5),
+        test_file_paths=data.get("test_file_paths", []),  # TDD: Tests this task must pass
+    )
 
 def dict_to_worker_result(data: Dict[str, Any]) -> WorkerResult:
     return WorkerResult(

@@ -91,6 +91,140 @@ class AsyncWorktreeManager:
             return self.worktree_base / f"{safe_id}_retry_{retry_num}"
         return self.worktree_base / safe_id
     
+    async def recover_worktrees(self, task_ids: List[str] = None) -> int:
+        """
+        Recover existing worktrees from disk after a restart.
+        
+        This scans the worktree_base directory for existing worktree directories
+        and registers them in the worktrees dict so operations can continue.
+        
+        Args:
+            task_ids: Optional list of task IDs to look for. If None, scans all.
+            
+        Returns:
+            Number of worktrees recovered
+        """
+        if not self.worktree_base.exists():
+            logger.info("No worktree_base directory found - nothing to recover")
+            return 0
+        
+        recovered = 0
+        
+        for wt_dir in self.worktree_base.iterdir():
+            if not wt_dir.is_dir():
+                continue
+            
+            # Extract task_id from directory name (format: task_XXXXXXXX or task_XXXXXXXX_retry_N)
+            dir_name = wt_dir.name
+            
+            # Check if this is a retry worktree
+            retry_num = 0
+            if "_retry_" in dir_name:
+                parts = dir_name.rsplit("_retry_", 1)
+                base_task_id = parts[0]
+                try:
+                    retry_num = int(parts[1])
+                except ValueError:
+                    base_task_id = dir_name
+            else:
+                base_task_id = dir_name
+            
+            # If specific task_ids provided, skip non-matching
+            if task_ids and base_task_id not in task_ids:
+                continue
+            
+            # Already registered?
+            if base_task_id in self.worktrees:
+                continue
+            
+            # Check if it looks like a valid git worktree
+            git_dir = wt_dir / ".git"
+            if not git_dir.exists():
+                logger.debug(f"Skipping {dir_name} - not a git worktree")
+                continue
+            
+            # Clean any stale lock files before git operations
+            await self._clean_stale_locks(wt_dir)
+            
+            # Determine branch name from the worktree
+            try:
+                _, head_ref, _ = await self._run_git(
+                    ["rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=wt_dir,
+                    check=False
+                )
+                branch_name = head_ref.strip() if head_ref else f"task/{base_task_id}"
+            except Exception:
+                branch_name = f"task/{base_task_id}"
+            
+            # Register the worktree
+            self.worktrees[base_task_id] = WorktreeInfo(
+                task_id=base_task_id,
+                worktree_path=wt_dir,
+                branch_name=branch_name,
+                retry_number=retry_num,
+                commits=[]  # We could recover commits but not critical
+            )
+            recovered += 1
+            logger.info(f"  🔄 Recovered worktree for task {base_task_id} at {wt_dir}")
+        
+        if recovered > 0:
+            logger.info(f"✅ Recovered {recovered} worktree(s) from disk")
+        
+        return recovered
+    
+    async def _clean_stale_locks(self, worktree_path: Path) -> int:
+        """
+        Clean stale git lock files from a worktree.
+        
+        Git lock files (.lock) are left behind when git processes crash or are killed.
+        These prevent subsequent git operations with "Another git process seems to be running".
+        
+        Args:
+            worktree_path: Path to the worktree to clean
+            
+        Returns:
+            Number of lock files removed
+        """
+        cleaned = 0
+        
+        # Check for index.lock in worktree .git file/directory
+        git_path = worktree_path / ".git"
+        
+        if git_path.is_file():
+            # Worktree .git is a file pointing to the real git dir
+            # Parse it to find the actual git directory
+            try:
+                content = git_path.read_text().strip()
+                if content.startswith("gitdir:"):
+                    real_git_dir = Path(content[7:].strip())
+                    if not real_git_dir.is_absolute():
+                        real_git_dir = worktree_path / real_git_dir
+                    
+                    # Clean locks in the real git dir
+                    index_lock = real_git_dir / "index.lock"
+                    if index_lock.exists():
+                        try:
+                            index_lock.unlink()
+                            logger.info(f"  🧹 Cleaned stale index.lock from {real_git_dir}")
+                            cleaned += 1
+                        except Exception as e:
+                            logger.warning(f"  Failed to remove {index_lock}: {e}")
+            except Exception as e:
+                logger.debug(f"  Could not parse .git file: {e}")
+        elif git_path.is_dir():
+            # Standard git directory (for main repo)
+            index_lock = git_path / "index.lock"
+            if index_lock.exists():
+                try:
+                    index_lock.unlink()
+                    logger.info(f"  🧹 Cleaned stale index.lock from {git_path}")
+                    cleaned += 1
+                except Exception as e:
+                    logger.warning(f"  Failed to remove {index_lock}: {e}")
+        
+        return cleaned
+    
     async def _run_git(
         self,
         args: List[str],
@@ -172,6 +306,75 @@ class AsyncWorktreeManager:
         if merge_head.exists():
             logger.warning(f"  🧹 Cleaning abandoned merge in {worktree_path.name}")
             await self._run_git(["merge", "--abort"], cwd=worktree_path, check=False)
+
+    def _ensure_gitignore_patterns(self, worktree_path: Path) -> None:
+        """
+        Ensure critical .gitignore patterns exist to prevent git add timeouts.
+        
+        Agents sometimes overwrite .gitignore and forget essential patterns.
+        This ensures patterns like node_modules/ and .venv/ are always present.
+        
+        Args:
+            worktree_path: Path to the worktree to check
+        """
+        # Critical patterns that MUST be in .gitignore to prevent timeouts
+        REQUIRED_PATTERNS = [
+            "# === PROTECTED PATTERNS (DO NOT REMOVE) ===",
+            "node_modules/",
+            ".venv/",
+            "venv/",
+            "__pycache__/",
+            "*.pyc",
+            ".env",
+            "dist/",
+            "build/",
+            ".next/",
+            "*.log",
+            "# === END PROTECTED PATTERNS ===",
+        ]
+        
+        gitignore_path = worktree_path / ".gitignore"
+        
+        try:
+            if gitignore_path.exists():
+                current_content = gitignore_path.read_text(encoding="utf-8")
+                current_lines = set(line.strip() for line in current_content.splitlines())
+                
+                # Check what's missing
+                missing_patterns = []
+                for pattern in REQUIRED_PATTERNS:
+                    if pattern not in current_lines and not pattern.startswith("#"):
+                        missing_patterns.append(pattern)
+                
+                # If anything is missing, append the protected section
+                if missing_patterns:
+                    logger.warning(f"🛡️ .gitignore missing critical patterns: {missing_patterns}")
+                    
+                    # Remove old protected section if exists and re-add
+                    lines = current_content.splitlines()
+                    new_lines = []
+                    in_protected = False
+                    for line in lines:
+                        if "PROTECTED PATTERNS" in line and "DO NOT REMOVE" in line:
+                            in_protected = True
+                            continue
+                        if "END PROTECTED PATTERNS" in line:
+                            in_protected = False
+                            continue
+                        if not in_protected:
+                            new_lines.append(line)
+                    
+                    # Add protected section at the end
+                    new_content = "\n".join(new_lines).rstrip() + "\n\n" + "\n".join(REQUIRED_PATTERNS) + "\n"
+                    gitignore_path.write_text(new_content, encoding="utf-8")
+                    logger.info(f"🛡️ .gitignore updated with protected patterns")
+            else:
+                # Create new .gitignore with required patterns
+                logger.warning(f"🛡️ Creating missing .gitignore with protected patterns")
+                gitignore_path.write_text("\n".join(REQUIRED_PATTERNS) + "\n", encoding="utf-8")
+                
+        except Exception as e:
+            logger.warning(f"Failed to ensure .gitignore patterns: {e}")
 
     async def rebase_on_main(self, task_id: str) -> MergeResult:
         """
@@ -368,6 +571,9 @@ class AsyncWorktreeManager:
             for f in files:
                 await self._run_git(["add", f], cwd=wt_path)
         else:
+            # CRITICAL: Ensure .gitignore has required patterns before staging all
+            # This prevents timeouts from accidentally trying to stage node_modules, .venv, etc.
+            self._ensure_gitignore_patterns(wt_path)
             await self._run_git(["add", "-A"], cwd=wt_path)
         
         # Check if there are changes to commit

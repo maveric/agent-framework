@@ -651,11 +651,19 @@ async def restart_run(run_id: str):
         workspace_path_obj = Path(workspace_path)
         worktree_base = Path(worktree_base_path)
         worktree_base.mkdir(parents=True, exist_ok=True)
-        state["_wt_manager"] = WorktreeManager(
+        wt_manager = WorktreeManager(
             repo_path=workspace_path_obj,
             worktree_base=worktree_base
         )
+        state["_wt_manager"] = wt_manager
         logger.info(f"   Restored _wt_manager at: {worktree_base}")
+        
+        # CRITICAL: Recover existing worktrees from disk
+        # This re-registers worktrees that were created before the restart
+        tasks = state.get("tasks", [])
+        task_ids = [t.get("id") for t in tasks if t.get("id")]
+        recovered = await wt_manager.recover_worktrees(task_ids)
+        logger.info(f"   Recovered {recovered} worktrees from disk")
     elif workspace_path:
         # OLD RUN: Generate NEW paths using config (outside workspace!)
         workspace_path_obj = Path(workspace_path)

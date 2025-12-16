@@ -328,12 +328,19 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
                     workspace_path_obj = Path(workspace_path)
                     worktree_base = Path(worktree_base_path)
                     worktree_base.mkdir(parents=True, exist_ok=True)
-                    state["_wt_manager"] = WorktreeManager(
+                    wt_manager = WorktreeManager(
                         repo_path=workspace_path_obj,
                         worktree_base=worktree_base
                     )
+                    state["_wt_manager"] = wt_manager
                     logger.info(f"   Restored _workspace_path: {workspace_path}")
                     logger.info(f"   Reinitialized _wt_manager at: {worktree_base}")
+                    
+                    # CRITICAL: Recover existing worktrees from disk
+                    tasks = state.get("tasks", [])
+                    task_ids = [t.get("id") for t in tasks if t.get("id")]
+                    recovered = await wt_manager.recover_worktrees(task_ids)
+                    logger.info(f"   Recovered {recovered} worktrees from disk")
                 elif workspace_path:
                     # OLD RUN: Generate NEW paths using config (outside workspace!)
                     workspace_path_obj = Path(workspace_path)

@@ -70,6 +70,7 @@ class IntegratedTaskDefinition(BaseModel):
     depends_on: List[str] = Field(description="List of EXACT TITLES of local dependencies (tasks in this deduplicated list)")
     dependency_queries: List[str] = Field(default_factory=list, description="Natural language queries for external dependencies")
     worker_profile: str = "code_worker"
+    test_file_paths: List[str] = Field(default_factory=list, description="TDD: Paths to tests that BUILD tasks must pass")
 
 
 class RejectedTask(BaseModel):
@@ -464,7 +465,8 @@ async def integrate_plans(suggestions: List[Dict[str, Any]], state: Dict[str, An
             "description": desc,
             "depends_on": s.get("depends_on", []),
             "dependency_queries": s.get("dependency_queries", []),  # Preserve for Pass 2
-            "rationale": s.get("rationale", "")
+            "rationale": s.get("rationale", ""),
+            "test_file_paths": s.get("test_file_paths", [])  # TDD: Tests this task must pass
         })
 
     # Get design spec for scope context
@@ -812,6 +814,7 @@ Reread the instructions carefully and provide a complete task list INCLUDING TES
             acceptance_criteria=t_def.acceptance_criteria,
             depends_on=resolved_deps,
             dependency_queries=t_def.dependency_queries,  # Preserve for Pass 2
+            test_file_paths=t_def.test_file_paths,  # TDD: Tests this task must pass
             created_at=datetime.now(),
             updated_at=datetime.now()
         )

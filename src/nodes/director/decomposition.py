@@ -56,7 +56,7 @@ class APIEndpoint(BaseModel):
 class DataModel(BaseModel):
     """Data model/schema definition."""
     name: str = Field(description="Model name (e.g., User, Task)")
-    fields: Dict[str, str] = Field(description="Field name to type mapping (e.g., {'id': 'int', 'name': 'str'})")
+    fields: Dict[str, str] = Field(description="REQUIRED: Field name to type mapping (e.g., {'id': 'int', 'name': 'str'})")
     description: str = Field(description="What this model represents")
 
 
@@ -66,6 +66,30 @@ class InterfaceSpec(BaseModel):
     models: List[DataModel] = Field(default_factory=list, description="Data models/schemas")
     has_frontend: bool = Field(default=False, description="Whether project has a frontend component")
     frontend_components: List[str] = Field(default_factory=list, description="Key frontend components if applicable")
+
+
+def _validate_interface_spec(spec: InterfaceSpec) -> List[str]:
+    """
+    Validate that the interface spec has all required data for TDD.
+    
+    Returns:
+        List of validation error messages (empty if valid)
+    """
+    errors = []
+    
+    # Check that models have fields defined
+    for i, model in enumerate(spec.models):
+        if not model.fields:
+            errors.append(f"Model '{model.name}' is missing 'fields' (field name to type mapping is REQUIRED)")
+        if not model.description:
+            errors.append(f"Model '{model.name}' is missing 'description'")
+    
+    # Check that endpoints have response bodies
+    for i, endpoint in enumerate(spec.endpoints):
+        if not endpoint.response_body:
+            errors.append(f"Endpoint '{endpoint.method} {endpoint.path}' is missing 'response_body'")
+    
+    return errors
 
 
 # =============================================================================
@@ -99,7 +123,7 @@ async def generate_interface_specs(
         orch_config = OrchestratorConfig()
 
     llm = get_llm(orch_config.director_model)
-    structured_llm = llm.with_structured_output(InterfaceSpec)
+    structured_llm = llm.with_structured_output(InterfaceSpec, method="function_calling")
 
     await broadcast_progress(state, "Generating interface specifications (TDD)...", "initialization")
 
@@ -109,27 +133,35 @@ async def generate_interface_specs(
 Your job is to extract CONCRETE, EXECUTABLE specifications from the design document.
 These specifications will be used by Test Architects to write failing tests BEFORE any code is written.
 
-**CRITICAL RULES:**
-1. Every endpoint must have explicit request/response schemas
-2. Every model must have explicit field types
-3. Be PRECISE - vague specs lead to test/implementation mismatches
-4. Use standard types: str, int, float, bool, List[X], Optional[X], Dict[str, X], datetime
+**🚨 MANDATORY REQUIREMENTS 🚨**
 
-**OUTPUT REQUIREMENTS:**
+For EVERY data model, you MUST provide:
+1. `name`: Model name in PascalCase (e.g., User, Task, Order)
+2. `fields`: A dictionary mapping field names to types - THIS IS REQUIRED, NOT OPTIONAL!
+   Example: {{"id": "int", "name": "str", "email": "str", "created_at": "datetime"}}
+3. `description`: What this model represents
 
-For each API endpoint, specify:
-- HTTP method (GET, POST, PUT, DELETE, PATCH)
-- Path (e.g., /api/users, /api/tasks/{task_id})
-- Request body as a Python dict or Pydantic-style schema string
-- Response body as a Python dict or Pydantic-style schema string
-- Brief description
+For EVERY API endpoint, you MUST provide:
+1. `method`: HTTP method (GET, POST, PUT, DELETE, PATCH)
+2. `path`: URL path (e.g., /api/users, /api/tasks/{{task_id}})
+3. `response_body`: Response schema - THIS IS REQUIRED!
+4. `description`: What this endpoint does
+5. `request_body`: Request schema (optional for GET/DELETE)
 
-For each data model, specify:
-- Model name (PascalCase)
-- Field name to type mapping
-- Brief description
+**CRITICAL: DO NOT SKIP THE `fields` PROPERTY ON MODELS!**
+Without fields, Test Architects cannot write tests. Every model MUST have its fields defined.
 
-Example endpoint:
+**Standard Types:**
+str, int, float, bool, List[X], Optional[X], Dict[str, X], datetime
+
+**Example Model (CORRECT):**
+```
+name: User
+fields: {{"id": "int", "name": "str", "email": "str", "password_hash": "str", "is_active": "bool", "created_at": "datetime"}}
+description: User account information
+```
+
+**Example Endpoint (CORRECT):**
 ```
 method: POST
 path: /api/users
@@ -138,29 +170,73 @@ response_body: {{"id": "int", "name": "str", "email": "str", "created_at": "date
 description: Create a new user account
 ```
 
-Example model:
-```
-name: User
-fields: {{"id": "int", "name": "str", "email": "str", "password_hash": "str", "created_at": "datetime"}}
-description: User account information
-```
-
-Analyze the design spec and extract ALL necessary interfaces."""),
+Analyze the design spec and extract ALL necessary interfaces with COMPLETE field definitions."""),
         ("user", """Objective: {objective}
 
 Design Specification:
 {design_spec}
 
-Extract all API endpoints and data models from this specification.""")
+Extract all API endpoints and data models from this specification.
+REMEMBER: Every model MUST have a 'fields' dictionary with field name to type mappings!""")
     ])
 
+    MAX_RETRIES = 2
+    response = None
+    validation_errors = []
+    
     try:
-        response = await structured_llm.ainvoke(
-            interface_prompt.format(
-                objective=objective,
-                design_spec=design_spec_content[:8000]  # Limit to avoid token overflow
-            )
-        )
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                if attempt == 0:
+                    # First attempt - use standard prompt
+                    prompt_text = interface_prompt.format(
+                        objective=objective,
+                        design_spec=design_spec_content[:8000]
+                    )
+                else:
+                    # Retry with feedback about what was missing
+                    retry_prompt = f"""Your previous response was INCOMPLETE. The following issues were found:
+
+{chr(10).join(f'- {e}' for e in validation_errors)}
+
+Please provide a COMPLETE interface specification with ALL required fields.
+
+REMINDER: Every model MUST have:
+- name: The model name
+- fields: A dictionary like {{"id": "int", "name": "str"}} - THIS IS REQUIRED!
+- description: What the model represents
+
+Original objective: {objective}
+
+Design spec summary:
+{design_spec_content[:4000]}
+
+Try again with complete field definitions for all models."""
+                    prompt_text = retry_prompt
+                
+                response = await structured_llm.ainvoke(prompt_text)
+                
+                # Validate the response
+                validation_errors = _validate_interface_spec(response)
+                
+                if not validation_errors:
+                    # Valid response - proceed
+                    logger.info(f"Interface spec validated successfully (attempt {attempt + 1})")
+                    break
+                else:
+                    # Invalid - log and retry
+                    logger.warning(f"Interface spec validation failed (attempt {attempt + 1}): {validation_errors}")
+                    if attempt == MAX_RETRIES:
+                        logger.error(f"Max retries reached. Proceeding with incomplete spec.")
+                        # Still use the response, just warn that it's incomplete
+                        
+            except Exception as e:
+                logger.error(f"Interface generation attempt {attempt + 1} failed: {e}")
+                if attempt == MAX_RETRIES:
+                    raise
+
+        if not response:
+            raise ValueError("Failed to generate interface specs after retries")
 
         # Create interfaces directory
         interfaces_dir = Path(workspace_path) / "interfaces"
