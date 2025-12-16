@@ -502,11 +502,14 @@ Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
                 traceback.print_exc()
     else:
         # 2. Collect suggestions from ALL completed/failed tasks
+        # CRITICAL: Also check PLANNED tasks! Non-planner workers spawn subtasks,
+        # then Strategist resets them to PLANNED (not AWAITING_QA) to avoid triggering QA.
+        # We must still collect their suggested_tasks for integration.
         all_suggestions = []
         tasks_with_suggestions = []
 
         for task in all_tasks:
-            if task.status in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA]:
+            if task.status in [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.AWAITING_QA, TaskStatus.PLANNED]:
                 raw_task = next((t for t in tasks if t["id"] == task.id), None)
                 if raw_task and raw_task.get("suggested_tasks"):
                     all_suggestions.extend(raw_task["suggested_tasks"])
