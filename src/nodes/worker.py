@@ -23,6 +23,7 @@ from .handlers import (
     _code_handler,
     _plan_handler,
     _test_handler,
+    _test_architect_handler,  # TDD: writes failing tests from specs
     _research_handler,
     _write_handler,
     _merge_handler
@@ -179,6 +180,7 @@ def _get_handler(profile: WorkerProfile) -> Callable:
         WorkerProfile.PLANNER: _plan_handler,
         WorkerProfile.CODER: _code_handler,
         WorkerProfile.TESTER: _test_handler,
+        WorkerProfile.TEST_ARCHITECT: _test_architect_handler,  # TDD: writes failing tests
         WorkerProfile.RESEARCHER: _research_handler,
         WorkerProfile.WRITER: _write_handler,
         WorkerProfile.MERGER: _merge_handler,

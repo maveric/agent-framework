@@ -236,10 +236,50 @@ Research tasks are blocking. Create them ONLY for niche/esoteric technology.
 
 ---
 
-### 🚨 MANDATORY TEST TASKS 🚨
-You MUST create at least ONE task with `phase: "test"`.
-- Worker: `test_worker`
-- Dependencies: Must depend on the build tasks it validates
+### 🔴🟢 TDD: TEST-DRIVEN DEVELOPMENT 🔴🟢
+
+**CRITICAL: Tests come BEFORE implementation!**
+
+The system follows Test-Driven Development (TDD):
+1. **Interface specs exist** in `interfaces/api_spec.yaml` and `interfaces/models.py`
+2. **Tests are written FIRST** (RED phase) - they must FAIL initially
+3. **Implementation follows** (GREEN phase) - make tests pass
+
+**Task Creation Order:**
+1. Create TEST tasks FIRST (worker: `test_architect`, phase: `test`)
+2. Create BUILD tasks SECOND (worker: `code_worker`, phase: `build`)
+3. BUILD tasks depend on TEST tasks and must pass those tests
+
+**TDD Task Schema:**
+```json
+// STEP 1: Test Architect writes failing tests
+{{{{
+  "title": "Write API tests for {component_name or 'feature'}",
+  "worker_profile": "test_architect",
+  "phase": "test",
+  "depends_on": [],
+  "dependency_queries": ["Project foundation is complete"],
+  "description": "Write tests from interfaces/api_spec.yaml. Tests MUST FAIL initially (RED phase).",
+  "acceptance_criteria": ["Tests written", "Tests fail as expected (no implementation yet)"]
+}}}}
+
+// STEP 2: Code Worker implements to pass tests
+{{{{
+  "title": "Implement {component_name or 'feature'}",
+  "worker_profile": "code_worker",
+  "phase": "build",
+  "depends_on": ["Write API tests for {component_name or 'feature'}"],
+  "dependency_queries": [],
+  "test_file_paths": ["tests/test_{component_name or 'feature'}.py"],
+  "description": "Implement code to make tests pass (GREEN phase). Read tests first.",
+  "acceptance_criteria": ["All tests pass", "Implementation matches interface spec"]
+}}}}
+```
+
+**IMPORTANT:**
+- Test Architect (`test_architect`) writes tests FROM specs, BEFORE implementation
+- Code Worker (`code_worker`) implements to PASS those tests
+- BUILD tasks should list their `test_file_paths` so they know what tests to pass
 
 ---
 
@@ -271,14 +311,26 @@ Generate your plan now.
 
     # VALIDATION: Planners MUST create at least one TEST task
     test_tasks = [
-        t for t in result.suggested_tasks 
+        t for t in result.suggested_tasks
         if hasattr(t, 'phase') and (
-            t.phase == 'test' or 
-            str(t.phase).lower() == 'test' or 
+            t.phase == 'test' or
+            str(t.phase).lower() == 'test' or
             (hasattr(t.phase, 'value') and t.phase.value == 'test')
         )
     ]
-    
+
+    # TDD: Log info about test architect usage
+    test_architect_tasks = [
+        t for t in result.suggested_tasks
+        if hasattr(t, 'worker_profile') and (
+            t.worker_profile == 'test_architect' or
+            str(t.worker_profile).lower() == 'test_architect' or
+            (hasattr(t.worker_profile, 'value') and t.worker_profile.value == 'test_architect')
+        )
+    ]
+    if test_architect_tasks:
+        logger.info(f"TDD: Planner created {len(test_architect_tasks)} Test Architect task(s)")
+
     if len(test_tasks) == 0:
         logger.error(f"Planner {task.id} created {len(result.suggested_tasks)} tasks but ZERO test tasks!")
         logger.error(f"Task phases: {[str(t.phase) if hasattr(t, 'phase') else 'no-phase' for t in result.suggested_tasks]}")
@@ -286,7 +338,7 @@ Generate your plan now.
             status="failed",
             result_path=result.result_path if result else "",
             aar=AAR(
-                summary=f"FAILED: Planner created {len(result.suggested_tasks)} tasks but NO test tasks. Every plan MUST include at least one task with phase:'test'.",
+                summary=f"FAILED: Planner created {len(result.suggested_tasks)} tasks but NO test tasks. Every plan MUST include at least one task with phase:'test' and worker 'test_architect'.",
                 approach="N/A",
                 challenges=["Did not create any test tasks (phase: 'test')"],
                 decisions_made=[],
