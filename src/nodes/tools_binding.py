@@ -14,20 +14,25 @@ from orchestrator_types import WorkerProfile
 logger = logging.getLogger(__name__)
 
 
-def _create_read_file_wrapper(tool, worktree_path, files_read: Set[str]):
+def _create_read_file_wrapper(tool, worktree_path, workspace_path, files_read: Set[str]):
     """Create read_file wrapper that tracks which files have been read."""
+    # additional_roots allows access to main workspace (for .venv, etc.)
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def read_file_wrapper(path: str, encoding: str = "utf-8"):
         """Read the contents of a file."""
         # Normalize path for tracking
         normalized = path.replace("\\", "/").lower().strip("/")
         files_read.add(normalized)
         logger.debug(f"  [READ TRACKER] Added '{normalized}' to files_read ({len(files_read)} total)")
-        return await tool(path, encoding, root=worktree_path)
+        return await tool(path, encoding, root=worktree_path, additional_roots=additional_roots)
     return read_file_wrapper
 
 
-def _create_write_file_wrapper(tool, worktree_path, files_read: Set[str]):
+def _create_write_file_wrapper(tool, worktree_path, workspace_path, files_read: Set[str]):
     """Create write_file wrapper that enforces read-before-write for existing files."""
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def write_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
         """Write content to a file. MUST read existing files first!"""
         # Normalize path for tracking
@@ -55,7 +60,7 @@ def _create_write_file_wrapper(tool, worktree_path, files_read: Set[str]):
         else:
             logger.info(f"  [WRITE GUARD] ✅ Allowing write to '{path}' (was read first)")
         
-        result = await tool(path, content, encoding, root=worktree_path)
+        result = await tool(path, content, encoding, root=worktree_path, additional_roots=additional_roots)
         
         # After successful write, add to files_read so future writes are allowed
         # This prevents: write new file → need to read it → write again
@@ -65,31 +70,39 @@ def _create_write_file_wrapper(tool, worktree_path, files_read: Set[str]):
     return write_file_wrapper
 
 
-def _create_append_file_wrapper(tool, worktree_path):
+def _create_append_file_wrapper(tool, worktree_path, workspace_path):
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def append_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
         """Append content to an existing file."""
-        return await tool(path, content, encoding, root=worktree_path)
+        return await tool(path, content, encoding, root=worktree_path, additional_roots=additional_roots)
     return append_file_wrapper
 
 
-def _create_list_directory_wrapper(tool, worktree_path):
+def _create_list_directory_wrapper(tool, worktree_path, workspace_path):
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def list_directory_wrapper(path: str = ".", recursive: bool = False, pattern: str = "*"):
         """List files and directories."""
-        return await tool(path, recursive, pattern, root=worktree_path)
+        return await tool(path, recursive, pattern, root=worktree_path, additional_roots=additional_roots)
     return list_directory_wrapper
 
 
-def _create_file_exists_wrapper(tool, worktree_path):
+def _create_file_exists_wrapper(tool, worktree_path, workspace_path):
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def file_exists_wrapper(path: str):
         """Check if a file or directory exists."""
-        return await tool(path, root=worktree_path)
+        return await tool(path, root=worktree_path, additional_roots=additional_roots)
     return file_exists_wrapper
 
 
-def _create_delete_file_wrapper(tool, worktree_path):
+def _create_delete_file_wrapper(tool, worktree_path, workspace_path):
+    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    
     async def delete_file_wrapper(path: str, confirm: bool):
         """Delete a file."""
-        return await tool(path, confirm, root=worktree_path)
+        return await tool(path, confirm, root=worktree_path, additional_roots=additional_roots)
     return delete_file_wrapper
 
 
@@ -138,6 +151,11 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
 
     logger.debug(f"Binding tools to path: {worktree_path}")
 
+    # Get main workspace path for additional_roots (allows access to .venv, etc.)
+    workspace_path = state.get("_workspace_path")
+    if workspace_path:
+        logger.debug(f"Main workspace path: {workspace_path}")
+
     # Track which files have been read this session (for read-before-write enforcement)
     files_read: Set[str] = set()
     
@@ -153,27 +171,27 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
             # Use factory functions to avoid closure loop variable capture issues
             # NOTE: Pass coroutine= directly - LangChain infers schema from the async function signature
             if tool.__name__ in ["read_file", "read_file_async"]:
-                wrapper = _create_read_file_wrapper(tool, worktree_path, files_read)
+                wrapper = _create_read_file_wrapper(tool, worktree_path, workspace_path, files_read)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="read_file", description="Read the contents of a file.", handle_tool_error=True))
 
             elif tool.__name__ in ["write_file", "write_file_async"]:
-                wrapper = _create_write_file_wrapper(tool, worktree_path, files_read)
+                wrapper = _create_write_file_wrapper(tool, worktree_path, workspace_path, files_read)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="write_file", description="Write content to a file. MUST read existing files first!", handle_tool_error=True))
 
             elif tool.__name__ in ["append_file", "append_file_async"]:
-                wrapper = _create_append_file_wrapper(tool, worktree_path)
+                wrapper = _create_append_file_wrapper(tool, worktree_path, workspace_path)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="append_file", description="Append content to an existing file.", handle_tool_error=True))
 
             elif tool.__name__ in ["list_directory", "list_directory_async"]:
-                wrapper = _create_list_directory_wrapper(tool, worktree_path)
+                wrapper = _create_list_directory_wrapper(tool, worktree_path, workspace_path)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="list_directory", description="List files and directories.", handle_tool_error=True))
 
             elif tool.__name__ in ["file_exists", "file_exists_async"]:
-                wrapper = _create_file_exists_wrapper(tool, worktree_path)
+                wrapper = _create_file_exists_wrapper(tool, worktree_path, workspace_path)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="file_exists", description="Check if a file or directory exists.", handle_tool_error=True))
 
             elif tool.__name__ in ["delete_file", "delete_file_async"]:
-                wrapper = _create_delete_file_wrapper(tool, worktree_path)
+                wrapper = _create_delete_file_wrapper(tool, worktree_path, workspace_path)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="delete_file", description="Delete a file.", handle_tool_error=True))
 
         elif tool.__name__ in ["run_python", "run_shell", "run_python_async", "run_shell_async"]:
