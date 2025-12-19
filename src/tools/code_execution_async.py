@@ -126,27 +126,40 @@ async def run_python_async(code: str, timeout: int = 30, cwd: str = None, worksp
         return f"Error executing code: {str(e)}"
 
 
-async def run_shell_async(command: str, timeout: int = 30, cwd: str = None) -> str:
+async def run_shell_async(command: str, timeout: int = 30, cwd: str = None, workspace_path: str = None) -> str:
     f"""
     Execute shell command asynchronously.
-    
+
     Args:
         command: Command to execute
         timeout: Max execution time in seconds
         cwd: Directory to execute in (default: current working directory)
-        
+        workspace_path: Path to workspace root (for finding workspace venv)
+
     Returns:
         Combined stdout and stderr
 
     NOTE:
         Platform - {PLATFORM}
-        CRITICAL - SHELL COMMAND SYNTAX:
-        {'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-        Python and npm are both located in the venv. Do NOT use system Python or npm.
+        Shell: cmd.exe on Windows, /bin/sh on Unix. Both support && for command chaining.
+        Python and npm are both located in the workspace venv. Do NOT use system Python or npm.
     """
+    from pathlib import Path
+
     env = os.environ.copy()
     if cwd:
         env["PYTHONPATH"] = str(cwd) + os.pathsep + env.get("PYTHONPATH", "")
+
+    # Prepend workspace venv to PATH so agents use workspace's npm/python, not framework's
+    if workspace_path:
+        venv_path = Path(workspace_path) / ".venv"
+        if platform.system() == "Windows":
+            venv_bin = venv_path / "Scripts"
+        else:
+            venv_bin = venv_path / "bin"
+
+        if venv_bin.exists():
+            env["PATH"] = str(venv_bin) + os.pathsep + env.get("PATH", "")
     
     try:
         # Create process with proper process group handling

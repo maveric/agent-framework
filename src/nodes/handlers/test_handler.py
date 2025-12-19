@@ -101,12 +101,11 @@ CRITICAL RULES:
 - **Node.js**: Use `npm test` or `npx jest` (uses local node_modules)
 
 Platform - {PLATFORM}
-CRITICAL - SHELL COMMAND SYNTAX:
-{'- Windows PowerShell: Use semicolons (;) NOT double-ampersand (&&)' if platform.system() == 'Windows' else '- Unix shell: Use double-ampersand (&&) or semicolons (;)'}
-**BEST PRACTICE - AVOID CHAINING**:
-    - ❌ FORBIDDEN: cd backend && python test.py
-    - ✅ CORRECT: `{venv_python} backend\\test.py` (Windows)
-    - ✅ CORRECT: `{venv_python} backend/test.py` (Unix)
+Shell: cmd.exe on Windows, /bin/sh on Unix. Both support && for command chaining.
+The workspace venv is in PATH - use `python` or `npm` directly.
+**BEST PRACTICE**:
+    - ✅ CORRECT: `python backend/test.py` (venv python is in PATH)
+    - ✅ CORRECT: `npm test` (venv npm is in PATH)
 
 **🚨🚨🚨 BLOCKING COMMANDS WILL HANG FOREVER 🚨🚨🚨**:
 **BANNED COMMANDS**: `python app.py`, `flask run`, `npm start`, `npm run dev`
