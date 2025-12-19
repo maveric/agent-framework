@@ -183,6 +183,7 @@ REMEMBER: Every model MUST have a 'fields' dictionary with field name to type ma
     MAX_RETRIES = 2
     response = None
     validation_errors = []
+    last_pydantic_error = None  # Capture Pydantic errors for feedback
     
     try:
         for attempt in range(MAX_RETRIES + 1):
@@ -194,25 +195,48 @@ REMEMBER: Every model MUST have a 'fields' dictionary with field name to type ma
                         design_spec=design_spec_content[:8000]
                     )
                 else:
-                    # Retry with feedback about what was missing
-                    retry_prompt = f"""Your previous response was INCOMPLETE. The following issues were found:
+                    # Retry with feedback about what was wrong
+                    error_feedback = ""
+                    
+                    # Include Pydantic validation errors if any
+                    if last_pydantic_error:
+                        error_feedback += f"""
+🚨 PYDANTIC VALIDATION ERROR 🚨
+Your previous response could not be parsed. The error was:
+{last_pydantic_error}
 
+COMMON FIXES:
+- request_body and response_body must be STRINGS, not objects/dicts
+  ❌ WRONG: "request_body": {{"title": "str"}}
+  ✅ CORRECT: "request_body": "{{'title': 'str'}}"
+- Use proper JSON string escaping
+"""
+                    
+                    # Include custom validation errors if any
+                    if validation_errors:
+                        error_feedback += f"""
+⚠️ VALIDATION ISSUES:
 {chr(10).join(f'- {e}' for e in validation_errors)}
+"""
+                    
+                    retry_prompt = f"""{error_feedback}
 
 Please provide a COMPLETE interface specification with ALL required fields.
 
-REMINDER: Every model MUST have:
-- name: The model name
-- fields: A dictionary like {{"id": "int", "name": "str"}} - THIS IS REQUIRED!
-- description: What the model represents
+REMINDER: 
+- request_body and response_body must be STRINGS (quoted), not raw objects
+- Every model MUST have 'fields' as a dict
 
 Original objective: {objective}
 
 Design spec summary:
 {design_spec_content[:4000]}
 
-Try again with complete field definitions for all models."""
+Try again with correct formatting."""
                     prompt_text = retry_prompt
+                
+                # Reset error state for this attempt
+                last_pydantic_error = None
                 
                 response = await structured_llm.ainvoke(prompt_text)
                 
@@ -231,7 +255,13 @@ Try again with complete field definitions for all models."""
                         # Still use the response, just warn that it's incomplete
                         
             except Exception as e:
+                error_str = str(e)
                 logger.error(f"Interface generation attempt {attempt + 1} failed: {e}")
+                
+                # Capture Pydantic errors for retry feedback
+                if "validation error" in error_str.lower() or "pydantic" in error_str.lower():
+                    last_pydantic_error = error_str
+                
                 if attempt == MAX_RETRIES:
                     raise
 

@@ -201,6 +201,301 @@ def _check_test_triviality(test_content: str) -> Dict[str, Any]:
     }
 
 
+# =============================================================================
+# BUILD TASK QA FUNCTIONS
+# =============================================================================
+
+import subprocess
+import platform
+
+async def _run_tests_for_qa(
+    task: Dict[str, Any], 
+    workspace_path: str, 
+    worktree_path: Optional[str]
+) -> Dict[str, Any]:
+    """
+    Run tests for a BUILD task to verify they pass.
+    Uses test harness pattern (subprocess + terminate) to avoid hanging.
+    
+    Args:
+        task: The task dict with test_file_paths
+        workspace_path: Root workspace (where .venv lives)
+        worktree_path: Path to the task's worktree (where code lives)
+        
+    Returns:
+        Dict with keys: success (bool), output (str), error (str or None)
+    """
+    test_file_paths = task.get("test_file_paths", [])
+    
+    if not test_file_paths:
+        return {
+            "success": True,
+            "output": "No test_file_paths specified - skipping test execution",
+            "error": None
+        }
+    
+    # Determine execution path (worktree if available, else workspace)
+    exec_path = worktree_path if worktree_path and Path(worktree_path).exists() else workspace_path
+    
+    # Build venv python path
+    is_windows = platform.system() == "Windows"
+    if is_windows:
+        venv_python = str(Path(workspace_path) / ".venv" / "Scripts" / "python.exe")
+    else:
+        venv_python = str(Path(workspace_path) / ".venv" / "bin" / "python")
+    
+    # Check if venv exists
+    if not Path(venv_python).exists():
+        logger.warning(f"  [QA] Venv not found at {venv_python}, falling back to system python")
+        venv_python = "python"
+    
+    # Build pytest command with the specific test files
+    test_paths_str = " ".join(test_file_paths)
+    cmd = [venv_python, "-m", "pytest"] + test_file_paths + ["-v", "--tb=short"]
+    
+    logger.info(f"  [QA] Running tests: {' '.join(cmd[:5])}...")
+    
+    try:
+        # Use test harness pattern: spawn process with timeout
+        result = subprocess.run(
+            cmd,
+            cwd=exec_path,
+            capture_output=True,
+            text=True,
+            timeout=120  # 2 minute timeout for tests
+        )
+        
+        output = result.stdout + "\n" + result.stderr
+        success = result.returncode == 0
+        
+        if success:
+            logger.info(f"  [QA] ✅ Tests passed")
+        else:
+            logger.warning(f"  [QA] ❌ Tests failed (exit code: {result.returncode})")
+        
+        return {
+            "success": success,
+            "output": output[:5000],  # Cap output size
+            "error": None if success else f"Exit code: {result.returncode}"
+        }
+        
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"  [QA] Tests timed out after 120s")
+        return {
+            "success": False,
+            "output": str(e.stdout or "") + "\n" + str(e.stderr or ""),
+            "error": "Test execution timed out after 120 seconds"
+        }
+    except FileNotFoundError as e:
+        logger.error(f"  [QA] Could not find python/pytest: {e}")
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Could not execute tests: {e}"
+        }
+    except Exception as e:
+        logger.error(f"  [QA] Test execution error: {e}")
+        return {
+            "success": False,
+            "output": "",
+            "error": str(e)
+        }
+
+
+async def _evaluate_build_task_with_llm(
+    task: Dict[str, Any], 
+    test_output: Optional[str],
+    files_modified: List[str],
+    objective: str
+) -> Dict[str, Any]:
+    """
+    LLM evaluation of BUILD task completion.
+    Checks acceptance criteria fulfillment and test results.
+    
+    Args:
+        task: The task dict
+        test_output: Output from running tests (or None if no tests)
+        files_modified: List of files the coder modified
+        objective: Project objective for context
+        
+    Returns:
+        Dict with keys: passed (bool), feedback (str), focus (str)
+    """
+    from config import OrchestratorConfig
+    orch_config = OrchestratorConfig()
+    llm = get_llm(orch_config.strategist_model)
+    
+    acceptance_criteria = task.get("acceptance_criteria", [])
+    criteria_text = "\n".join(f"- {c}" for c in acceptance_criteria) if acceptance_criteria else "No specific criteria defined"
+    test_file_paths = task.get("test_file_paths", [])
+    
+    # Build test results section
+    if test_output:
+        test_section = f"""
+═══════════════════════════════════════════════════════════
+TEST EXECUTION RESULTS
+═══════════════════════════════════════════════════════════
+Tests that were required to pass: {', '.join(test_file_paths) if test_file_paths else 'None specified'}
+
+Test Output:
+{test_output}
+"""
+    else:
+        test_section = """
+═══════════════════════════════════════════════════════════
+TEST EXECUTION RESULTS
+═══════════════════════════════════════════════════════════
+No tests were executed (task has no test_file_paths).
+"""
+
+    system_prompt = """You are a QA engineer evaluating BUILD/coding task completion.
+
+YOUR ROLE: Verify the coder did what they were supposed to do FOR THIS SPECIFIC TASK.
+
+═══════════════════════════════════════════════════════════
+EVALUATION CRITERIA
+═══════════════════════════════════════════════════════════
+
+**STEP 1: Check ACCEPTANCE CRITERIA**
+Each acceptance criterion for THIS TASK must be satisfied:
+- Look at the task description and criteria list
+- Did the coder's work address each point?
+- Files modified should align with what was requested
+
+**STEP 2: Check TEST RESULTS (TASK-SCOPED EVALUATION)**
+🚨 CRITICAL: Only evaluate tests that are RELEVANT TO THIS TASK'S SCOPE 🚨
+
+The test file may contain tests for MULTIPLE features. This task may only be responsible 
+for implementing SOME of them. Your job is to determine which test failures (if any) 
+are this task's responsibility.
+
+✅ PASS if:
+• All tests RELEVANT to this task's scope passed
+• Failing tests are for features this task was NOT meant to implement
+• Test output shows the specific tests for this task's work are green
+
+❌ FAIL if:
+• Tests that are directly related to this task's description/criteria failed
+• The task was supposed to make specific tests pass and those tests failed
+
+HOW TO DETERMINE RELEVANCE:
+1. Read the task description and acceptance criteria carefully
+2. Look at which tests failed and what they're testing
+3. If a failing test is testing functionality this task was meant to implement → FAIL
+4. If a failing test is testing OTHER functionality not in this task → IGNORE IT
+
+Example: Task is "Implement user login API"
+- test_user_login FAILED → This is relevant → FAIL
+- test_user_profile FAILED → This is a different feature → IGNORE, still PASS
+
+**STEP 3: Check WORK QUALITY**
+- Did they modify the right files?
+- Does the work appear complete (not stub implementations)?
+- Any red flags (empty files, placeholder code)?
+
+═══════════════════════════════════════════════════════════
+RESPONSE FORMAT
+═══════════════════════════════════════════════════════════
+
+VERDICT: PASS or FAIL
+FEEDBACK: [Explain your reasoning for each step. Be specific about what passed/failed.]
+FOCUS: [If FAIL, what should the coder fix? If PASS, say "None"]"""
+
+    user_prompt = f"""═══════════════════════════════════════════════════════════
+TASK BEING EVALUATED
+═══════════════════════════════════════════════════════════
+Title: {task.get('title', 'N/A')}
+Description: {task.get('description', 'N/A')}
+
+ACCEPTANCE CRITERIA (MUST SATISFY):
+{criteria_text}
+
+FILES MODIFIED BY CODER:
+{chr(10).join(f"- {f}" for f in files_modified) if files_modified else "- No files modified"}
+{test_section}
+═══════════════════════════════════════════════════════════
+PROJECT CONTEXT (for reference only)
+═══════════════════════════════════════════════════════════
+{objective}
+
+Evaluate this BUILD task strictly."""
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt)
+    ]
+    
+    MAX_RETRIES = 3
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await llm.ainvoke(messages)
+            content = str(response.content)
+            
+            # Parse response
+            verdict = "FAIL"
+            feedback = "Unable to parse LLM response"
+            focus = ""
+            
+            normalized_content = content.replace("*", "")
+            
+            if "VERDICT:" in normalized_content.upper():
+                verdict_line = normalized_content.upper().split("VERDICT:", 1)[1].split("\n")[0]
+                verdict = "PASS" if "PASS" in verdict_line else "FAIL"
+            
+            if "FEEDBACK:" in normalized_content.upper():
+                content_upper = normalized_content.upper()
+                feedback_start = content_upper.find("FEEDBACK:")
+                after_feedback = normalized_content[feedback_start + len("FEEDBACK:"):]
+                focus_pos = after_feedback.upper().find("FOCUS:")
+                if focus_pos != -1:
+                    feedback = after_feedback[:focus_pos].strip()
+                else:
+                    feedback = after_feedback.strip()
+            
+            if "FOCUS:" in normalized_content.upper():
+                content_upper = normalized_content.upper()
+                focus_start = content_upper.find("FOCUS:")
+                focus = normalized_content[focus_start + len("FOCUS:"):].strip().split("\n")[0]
+            
+            if feedback != "Unable to parse LLM response":
+                return {
+                    "passed": verdict == "PASS",
+                    "feedback": feedback,
+                    "focus": focus if focus.lower() != "none" else ""
+                }
+            else:
+                if attempt < MAX_RETRIES - 1:
+                    logger.info(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...")
+                    continue
+                else:
+                    logger.error(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts")
+                    return {
+                        "passed": False,
+                        "feedback": f"QA evaluation parse error. Raw: {content[:1000]}",
+                        "focus": "Fix QA system"
+                    }
+                    
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                logger.info(f"  [QA RETRY] LLM error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                continue
+            else:
+                logger.error(f"  [QA ERROR] LLM failed after {MAX_RETRIES} attempts: {e}")
+                return {
+                    "passed": False,
+                    "feedback": f"QA evaluation error: {str(e)}",
+                    "focus": "Retry task"
+                }
+    
+    # Should not reach here, but just in case
+    return {
+        "passed": False,
+        "feedback": "QA evaluation failed unexpectedly",
+        "focus": "Retry task"
+    }
+
+
 def _create_merge_task(
     original_task: Dict[str, Any],
     conflict_files: List[str],
@@ -748,12 +1043,68 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         logger.error(f"  [TDD GREEN FAIL] {tdd_result['feedback']}")
 
                 elif files_modified or is_explicitly_completed:
-                    logger.info(f"  [QA PASS] Validated work for {task_phase} task {task_id}")
-                    qa_verdict = {
-                        "passed": True,
-                        "overall_feedback": f"Validated work (files modified: {len(files_modified)})",
-                        "suggested_focus": ""
-                    }
+                    # Check if this is a CODER worker - only coders get LLM test evaluation
+                    is_coder = worker_profile == WorkerProfile.CODER.value or worker_profile == "code_worker"
+                    
+                    if is_coder:
+                        # LLM-BASED QA for CODER tasks only
+                        # Run tests if test_file_paths specified, then use LLM to evaluate
+                        logger.info(f"  [CODER QA] Evaluating coder task with LLM validation...")
+                        
+                        # Get worktree path for test execution
+                        worktree_base = state.get("_worktree_base_path")
+                        if worktree_base:
+                            task_worktree_path = str(Path(worktree_base) / task_id)
+                        else:
+                            task_worktree_path = str(Path(workspace_path) / ".worktrees" / task_id)
+                        
+                        # Run tests if this task has test_file_paths
+                        test_output = None
+                        tests_all_passed = True
+                        if test_file_paths:
+                            logger.info(f"  [CODER QA] Running {len(test_file_paths)} test file(s) for verification...")
+                            test_result = await _run_tests_for_qa(task, workspace_path, task_worktree_path)
+                            test_output = test_result["output"]
+                            tests_all_passed = test_result["success"]
+                            
+                            if tests_all_passed:
+                                logger.info(f"  [CODER QA] ✅ All tests passed")
+                            else:
+                                # Tests had failures - but let LLM decide if they're relevant to this task
+                                logger.info(f"  [CODER QA] ⚠️ Some tests failed - LLM will evaluate relevance to task scope")
+                        
+                        # Always run LLM evaluation for coders
+                        if not mock_mode:
+                            qa_result = await _evaluate_build_task_with_llm(
+                                task, 
+                                test_output, 
+                                files_modified,
+                                objective
+                            )
+                            qa_verdict = {
+                                "passed": qa_result["passed"],
+                                "overall_feedback": qa_result["feedback"],
+                                "suggested_focus": qa_result.get("focus", "")
+                            }
+                            if qa_result["passed"]:
+                                logger.info(f"  [CODER QA] ✅ LLM evaluation passed")
+                            else:
+                                logger.warning(f"  [CODER QA] ❌ LLM evaluation failed: {qa_result['feedback'][:200]}")
+                        else:
+                            # Mock mode - pass with warning
+                            qa_verdict = {
+                                "passed": True,
+                                "overall_feedback": "MOCK: QA skipped (mock mode enabled)",
+                                "suggested_focus": ""
+                            }
+                    else:
+                        # NON-CODER workers (planners, etc) - simple files_modified check
+                        logger.info(f"  [QA PASS] Non-coder task ({worker_profile}) validated (files modified: {len(files_modified)})")
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": f"Validated work (files modified: {len(files_modified)})",
+                            "suggested_focus": ""
+                        }
                 else:
                     # FAIL: No work done
                     logger.error(f"  [QA FAIL] No files modified for {task_phase} task {task_id}")
