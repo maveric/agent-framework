@@ -1,12 +1,15 @@
 """
 React loop execution for worker agents.
+
+Includes Guardian integration for drift detection - every N tool calls,
+the guardian checks if the agent is on track and can inject nudges.
 """
 
 import logging
 from typing import Any, Dict, Callable, List
 from datetime import datetime
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage, BaseMessage
 from langgraph.prebuilt import create_react_agent
 
 from orchestrator_types import Task, TaskPhase, WorkerProfile, WorkerResult, AAR, SuggestedTask
@@ -15,8 +18,18 @@ from config import OrchestratorConfig, ModelConfig
 from llm_logger import log_llm_request, validate_request_size, log_llm_response
 
 from .utils import _detect_modified_files_via_git, _mock_execution
+from .guardian import check_agent_alignment
 
 logger = logging.getLogger(__name__)
+
+
+def _count_tool_calls(messages: List[BaseMessage]) -> int:
+    """Count the number of tool calls in message history."""
+    count = 0
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            count += len(msg.tool_calls)
+    return count
 
 
 async def _execute_react_loop(
@@ -98,13 +111,75 @@ async def _execute_react_loop(
     logger.info(f"  Starting ReAct agent...")
 
     # NOTE: The recursion_limit=150 is the circuit breaker for infinite loops.
+    # With guardian enabled, we run in smaller chunks and check alignment between chunks.
 
-    # Invoke agent
-    # We use a recursion limit to prevent infinite loops
+    # Check if guardian is enabled
+    guardian_enabled = orch_config.enable_guardian
+    check_interval = orch_config.guardian_check_interval if guardian_enabled else 150
+    total_limit = 150  # Overall limit
+
+    # Invoke agent - with guardian, we run in chunks
     try:
-        # Increased recursion limit to prevent "Sorry, need more steps" error
-        # Using ainvoke for async execution
-        result = await agent.ainvoke(inputs, config={"recursion_limit": 150})
+        current_messages = inputs["messages"].copy()
+        total_tool_calls = 0
+        last_check_at = 0
+
+        while True:
+            # Calculate how many iterations until next guardian check
+            iterations_until_check = check_interval - (total_tool_calls - last_check_at)
+            # Use smaller of: iterations until check, or remaining limit
+            chunk_limit = min(iterations_until_check, total_limit - total_tool_calls, check_interval)
+
+            if chunk_limit <= 0:
+                logger.warning(f"  [AGENT] Reached total iteration limit ({total_limit})")
+                break
+
+            # Run agent for this chunk
+            chunk_inputs = {"messages": current_messages}
+            result = await agent.ainvoke(chunk_inputs, config={"recursion_limit": chunk_limit + 5})  # +5 buffer for final response
+
+            # Update message history
+            current_messages = result["messages"]
+            new_tool_calls = _count_tool_calls(current_messages)
+            tool_calls_this_chunk = new_tool_calls - total_tool_calls
+            total_tool_calls = new_tool_calls
+
+            # Check if agent completed (last message is AI without tool calls)
+            last_msg = current_messages[-1] if current_messages else None
+            agent_done = (
+                isinstance(last_msg, AIMessage) and
+                (not hasattr(last_msg, 'tool_calls') or not last_msg.tool_calls)
+            )
+
+            if agent_done:
+                logger.info(f"  [AGENT] Completed after {total_tool_calls} tool calls")
+                break
+
+            # Guardian check every N tool calls
+            if guardian_enabled and (total_tool_calls - last_check_at) >= check_interval:
+                last_check_at = total_tool_calls
+
+                nudge = await check_agent_alignment(
+                    task=task,
+                    messages=current_messages,
+                    config=orch_config,
+                    iteration_count=total_tool_calls
+                )
+
+                if nudge:
+                    # Inject nudge as a HumanMessage (appears as user feedback)
+                    nudge_msg = HumanMessage(content=f"[GUIDANCE]: {nudge.message}")
+                    current_messages.append(nudge_msg)
+                    logger.info(f"  [GUARDIAN] Injected nudge into conversation")
+
+            # Safety: if no tool calls happened in this chunk, agent might be stuck
+            if tool_calls_this_chunk == 0 and not agent_done:
+                logger.warning(f"  [AGENT] No tool calls in chunk - agent may be stuck")
+                break
+
+        # Ensure result contains all messages including any injected nudges
+        result["messages"] = current_messages
+
     except Exception as e:
         # Handle errors gracefully - return AAR instead of crashing
         error_type = type(e).__name__

@@ -109,6 +109,16 @@ class OrchestratorConfig:
     enable_git_worktrees: bool = False  # Git isolation per task
     enable_webhooks: bool = False
     enable_transitive_reduction: bool = False  # Graph optimization (testing - may remove needed deps)
+
+    # Guardian settings (when enable_guardian=True)
+    guardian_check_interval: int = 10  # Check every N tool calls
+    guardian_context_window: int = 20  # Send last N messages to guardian
+    guardian_model: ModelConfig = field(default_factory=lambda: ModelConfig(
+        provider="anthropic",
+        model_name="claude-3-5-haiku-20241022",  # Fast and cheap for monitoring
+        temperature=0.3,
+        max_tokens=1024
+    ))
     
     # Checkpointing
     checkpoint_dir: str = "./checkpoints"
