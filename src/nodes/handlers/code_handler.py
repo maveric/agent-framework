@@ -105,13 +105,12 @@ If you genuinely believe a test is incorrect (testing wrong behavior, impossible
 """
 
     platform_warning = f"""
-**🚨 CRITICAL - SHELL COMMANDS ({platform.system()}) 🚨**:
-{"⚠️ YOU ARE ON WINDOWS - NEVER USE && IN COMMANDS!" if is_windows else "Unix shell: Use && or ; for chaining"}
-- ❌ FORBIDDEN: `cd folder && python script.py` (BREAKS ON WINDOWS)
-- ❌ FORBIDDEN: `cd . && python test.py` (USELESS AND BREAKS)
+**SHELL COMMANDS ({platform.system()})**:
+- Shell: {"cmd.exe" if is_windows else "/bin/sh"} - && works for command chaining on both platforms
 - ✅ CORRECT: `{correct_path}` (Run from project root)
 - ✅ CORRECT: `{correct_pytest}` (Use -m for modules)
-The run_shell tool ALREADY runs in the correct working directory. DO NOT use cd.
+- The run_shell tool ALREADY runs in the correct working directory with the workspace venv in PATH.
+- npm and python are available from the workspace venv - just use `npm` or `python` directly.
 """
 
     # Stronger system prompt to force file creation

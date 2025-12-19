@@ -113,10 +113,10 @@ def _create_run_python_wrapper(tool, worktree_path, workspace_path=None):
     return run_python_wrapper
 
 
-def _create_run_shell_wrapper(tool, worktree_path):
+def _create_run_shell_wrapper(tool, worktree_path, workspace_path=None):
     async def run_shell_wrapper(command: str, timeout: int = 30):
-        """Execute shell command."""
-        return await tool(command, timeout, cwd=worktree_path)
+        """Execute shell command using workspace venv."""
+        return await tool(command, timeout, cwd=worktree_path, workspace_path=workspace_path)
     return run_shell_wrapper
 
 
@@ -200,8 +200,8 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
                 wrapper = _create_run_python_wrapper(tool, worktree_path, workspace_path=workspace_path)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="run_python", description="Execute Python code using shared venv if available.", handle_tool_error=True))
             elif tool.__name__ in ["run_shell", "run_shell_async"]:
-                wrapper = _create_run_shell_wrapper(tool, worktree_path)
-                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="run_shell", description="Execute shell command.", handle_tool_error=True))
+                wrapper = _create_run_shell_wrapper(tool, worktree_path, workspace_path=workspace_path)
+                bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="run_shell", description="Execute shell command using workspace venv.", handle_tool_error=True))
 
         elif tool.__name__ == "create_subtasks":
              # Allow Planners, Testers, and Coders to create subtasks
