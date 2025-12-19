@@ -80,6 +80,7 @@ class OrchestratorConfig:
     tester_model: Optional[ModelConfig] = None   # For test tasks - can use faster model
     # researcher_model: Optional[ModelConfig] = None  # For research tasks
     writer_model: Optional[ModelConfig] = None   # For documentation/writing tasks
+    merger_model: Optional[ModelConfig] = None   # For git merge/conflict resolution tasks
     
     strategist_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         # provider="anthropic",
