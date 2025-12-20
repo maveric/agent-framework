@@ -136,9 +136,10 @@ async def _execute_react_loop(
 
             # Run agent for this chunk
             # NOTE: LangGraph counts ALL graph steps (reasoning + tool calls + responses), not just tool calls
-            # So we need a much larger buffer: ~3x the tool call limit to account for reasoning steps
+            # Each tool call = ~3 graph steps (think → call → result), so multiply by 3
+            # Add small buffer for final response
             chunk_inputs = {"messages": current_messages}
-            recursion_limit = max(chunk_limit * 3, 50)  # At least 50, or 3x the tool calls
+            recursion_limit = (chunk_limit * 3) + 5
             result = await agent.ainvoke(chunk_inputs, config={"recursion_limit": recursion_limit})
 
             # Update message history
