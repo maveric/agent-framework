@@ -135,8 +135,11 @@ async def _execute_react_loop(
                 break
 
             # Run agent for this chunk
+            # NOTE: LangGraph counts ALL graph steps (reasoning + tool calls + responses), not just tool calls
+            # So we need a much larger buffer: ~3x the tool call limit to account for reasoning steps
             chunk_inputs = {"messages": current_messages}
-            result = await agent.ainvoke(chunk_inputs, config={"recursion_limit": chunk_limit + 5})  # +5 buffer for final response
+            recursion_limit = max(chunk_limit * 3, 50)  # At least 50, or 3x the tool calls
+            result = await agent.ainvoke(chunk_inputs, config={"recursion_limit": recursion_limit})
 
             # Update message history
             current_messages = result["messages"]
@@ -150,6 +153,13 @@ async def _execute_react_loop(
                 isinstance(last_msg, AIMessage) and
                 (not hasattr(last_msg, 'tool_calls') or not last_msg.tool_calls)
             )
+
+            # CRITICAL: Detect "need more steps" message - this means agent hit recursion limit, NOT completion
+            if agent_done and last_msg and hasattr(last_msg, 'content'):
+                content = str(last_msg.content).lower()
+                if "need more steps" in content or "sorry" in content and "steps" in content:
+                    logger.warning(f"  [AGENT] Hit recursion limit - agent needs more steps, continuing...")
+                    agent_done = False  # Force continuation
 
             if agent_done:
                 logger.info(f"  [AGENT] Completed after {total_tool_calls} tool calls")
