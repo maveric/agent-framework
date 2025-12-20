@@ -155,11 +155,35 @@ async def _execute_react_loop(
             )
 
             # CRITICAL: Detect "need more steps" message - this means agent hit recursion limit, NOT completion
+            # This is the PERFECT time for guardian to check in and provide guidance
             if agent_done and last_msg and hasattr(last_msg, 'content'):
                 content = str(last_msg.content).lower()
-                if "need more steps" in content or "sorry" in content and "steps" in content:
-                    logger.warning(f"  [AGENT] Hit recursion limit - agent needs more steps, continuing...")
+                if "need more steps" in content or ("sorry" in content and "steps" in content):
+                    logger.warning(f"  [AGENT] Hit recursion limit - invoking guardian for guidance...")
                     agent_done = False  # Force continuation
+
+                    # Guardian check at recursion limit - agent needs help continuing
+                    if orch_config.enable_guardian:
+                        nudge = await check_agent_alignment(
+                            task=task,
+                            messages=current_messages,
+                            config=orch_config,
+                            iteration_count=total_tool_calls
+                        )
+                        if nudge:
+                            nudge_msg = HumanMessage(content=f"[GUIDANCE]: {nudge.message}")
+                            current_messages.append(nudge_msg)
+                            logger.info(f"  [GUARDIAN] Injected guidance for continuation")
+                        else:
+                            # Guardian says on track - just encourage continuation
+                            continue_msg = HumanMessage(content="[GUIDANCE]: You're making good progress. Please continue with the task.")
+                            current_messages.append(continue_msg)
+                            logger.info(f"  [GUARDIAN] Agent on track, encouraging continuation")
+                    else:
+                        # Guardian disabled - just inject a simple continuation prompt
+                        continue_msg = HumanMessage(content="Please continue with the task.")
+                        current_messages.append(continue_msg)
+                        logger.info(f"  [AGENT] Injected continuation prompt")
 
             if agent_done:
                 logger.info(f"  [AGENT] Completed after {total_tool_calls} tool calls")
