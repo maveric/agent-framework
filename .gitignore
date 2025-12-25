@@ -33,3 +33,5 @@ error.log
 
 # Observability - generated configs
 observability/prometheus.yml
+
+resumes/

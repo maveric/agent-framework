@@ -6,6 +6,8 @@ A production-ready multi-agent LLM orchestration system that coordinates special
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+> ⚠️ **Status**: Active development. Core orchestration functionality is complete and working. UI polish and documentation improvements are ongoing.
+
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
@@ -37,10 +39,14 @@ The Agent Orchestrator Framework enables **autonomous software development** by 
 |-------|------|-------------|
 | **Director** | Orchestrator | Decomposes objectives into tasks, manages dependencies, handles retries |
 | **Code Worker** | Builder | Writes implementation code (backend, frontend, APIs) |
-| **Test Worker** | Validator | Creates and runs tests, validates implementations |
+| **Test Architect** | Test Designer | Designs test strategy and creates test specifications |
+| **Test Worker** | Validator | Implements and runs tests, validates implementations |
 | **Planner Worker** | Decomposer | Breaks down complex tasks into atomic subtasks |
 | **Strategist** | QA | Evaluates completed work against acceptance criteria |
 | **Research Worker** | Investigator | Searches the web and codebase for information |
+| **Writer Worker** | Documentation | Creates documentation, READMEs, and technical writing |
+| **Merge Worker** | Integration | Handles git merges and conflict resolution |
+| **Guardian** | Monitor | *(Optional)* Drift detection and course correction during execution |
 
 All agents operate on a shared **blackboard** state, communicating through structured task objects rather than direct agent-to-agent messaging.
 
@@ -79,7 +85,7 @@ React-based monitoring interface with:
 
 ### 🧠 Task Memory Persistence
 - Full agent conversation history saved per task
-- Survives server restarts (SQLite-backed)
+- Survives server restarts\r\n- Multiple database backends: SQLite (default), PostgreSQL, MySQL
 - Useful for debugging and post-mortem analysis
 
 ### 🚀 Concurrent Execution
@@ -233,14 +239,20 @@ class OrchestratorConfig:
         temperature=0.7
     ))
     
-    # Workers use faster/cheaper model for execution
+    # Default worker model (can be overridden per worker type)
     worker_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         provider="glm",
         model_name="glm-4.6",
         temperature=0.5
     ))
     
-    # QA strategist uses analytical model
+    # Per-worker-type models (optional - falls back to worker_model)
+    planner_model: Optional[ModelConfig] = None
+    researcher_model: Optional[ModelConfig] = None
+    coder_model: Optional[ModelConfig] = None
+    tester_model: Optional[ModelConfig] = None
+    
+    # QA strategist
     strategist_model: ModelConfig = field(default_factory=lambda: ModelConfig(
         provider="openrouter",
         model_name="minimax/minimax-m2",
@@ -248,11 +260,30 @@ class OrchestratorConfig:
     ))
     
     # Execution limits
-    max_concurrent_workers: int = 5  # Parallel LLM calls
+    max_concurrent_workers: int = 5
     max_iterations_per_task: int = 10
-    
-    # Timeouts (seconds)
-    worker_timeout: int = 300  # 5 minutes per task
+    worker_timeout: int = 300  # seconds
+```
+
+### Database Backend
+
+```python
+# In config.py
+checkpoint_mode: str = "sqlite"  # "sqlite", "postgres", "mysql", or "memory"
+
+# PostgreSQL
+postgres_uri: Optional[str] = None  # Falls back to POSTGRES_URI env var
+
+# MySQL
+mysql_uri: Optional[str] = None  # Falls back to MYSQL_URI env var
+```
+
+### Feature Flags
+
+```python
+enable_guardian: bool = False      # Drift detection during execution
+enable_git_worktrees: bool = False # Git isolation per task
+enable_webhooks: bool = False      # External notifications
 ```
 
 ### Supported LLM Providers
@@ -278,6 +309,7 @@ The dashboard provides real-time visibility into agent operations:
 |------|-------------|
 | **Dashboard** | List of all runs with status and progress |
 | **Run Details** | Live task graph, agent logs, model config |
+| **New Run** | Create new runs with objective and workspace config |
 | **Human Queue** | Tasks waiting for HITL intervention |
 
 ### Task Graph
@@ -365,16 +397,15 @@ Each worker uses a ReAct (Reasoning + Acting) agent loop:
 
 ### Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents |
-| `write_file` | Create or overwrite file |
-| `append_file` | Append to file |
-| `list_directory` | List directory contents |
-| `run_shell` | Execute shell command |
-| `search_codebase` | Search for patterns in code |
-| `web_search` | Search the web (Tavily) |
-| `create_subtasks` | Create child tasks (planners only) |
+Tools use a progressive disclosure system — workers request only what they need.
+
+| Category | Tools |
+|----------|-------|
+| **Filesystem** | `read_file`, `write_file`, `append_file`, `list_directory`, `delete_file` |
+| **Code Execution** | `run_shell`, `run_python` |
+| **Git** | `git_status`, `git_commit`, `git_diff`, `git_log` |
+| **Search** | `search_codebase`, `web_search` (Tavily) |
+| **Framework** | `create_subtasks`, `post_insight`, `log_design_decision` |
 
 ---
 
@@ -383,15 +414,18 @@ Each worker uses a ReAct (Reasoning + Acting) agent loop:
 ```
 agent-framework/
 ├── src/
-│   ├── server.py              # FastAPI app, lifespan, mounts
+│   ├── server.py              # FastAPI app, lifespan, mounts (MAIN ENTRY)
+│   ├── config.py              # Configuration dataclasses
 │   ├── api/
 │   │   ├── dispatch.py        # Continuous dispatch loop (core engine)
 │   │   ├── state.py           # Shared API state
+│   │   ├── types.py           # API type definitions
 │   │   ├── websocket.py       # WebSocket connection manager
 │   │   └── routes/
 │   │       ├── runs.py        # Run CRUD endpoints
 │   │       ├── tasks.py       # Task endpoints
 │   │       ├── interrupts.py  # HITL endpoints
+│   │       ├── metrics.py     # Prometheus metrics endpoint
 │   │       └── ws.py          # WebSocket endpoint
 │   ├── nodes/
 │   │   ├── director_main.py   # Director orchestration logic
@@ -403,29 +437,39 @@ agent-framework/
 │   │   │   └── graph_utils.py
 │   │   ├── worker.py          # Worker node entry point
 │   │   ├── execution.py       # ReAct loop execution
+│   │   ├── guardian.py        # Drift detection (optional)
+│   │   ├── strategist.py      # QA evaluation node
 │   │   ├── handlers/          # Worker profile handlers
 │   │   │   ├── code_handler.py
 │   │   │   ├── plan_handler.py
 │   │   │   ├── test_handler.py
-│   │   │   └── ...
-│   │   ├── strategist.py      # QA evaluation node
+│   │   │   ├── test_architect_handler.py
+│   │   │   ├── research_handler.py
+│   │   │   ├── write_handler.py
+│   │   │   └── merge_handler.py
 │   │   └── tools_binding.py   # Tool wrappers for agents
 │   ├── tools/                 # Tool implementations
+│   │   ├── base.py            # Tool registry & definitions
+│   │   ├── filesystem_async.py
+│   │   ├── code_execution_async.py
+│   │   ├── git_async.py
 │   │   └── search_tools.py
 │   ├── git_manager.py         # Worktree management
 │   ├── llm_client.py          # Multi-provider LLM client
-│   ├── config.py              # Configuration dataclasses
 │   ├── state.py               # State definition and reducers
 │   ├── orchestrator_types.py  # Core type definitions
-│   ├── run_persistence.py     # SQLite state persistence
-│   └── task_queue.py          # Async task queue
+│   ├── run_persistence.py     # Database state persistence
+│   ├── task_queue.py          # Async task queue
+│   ├── metrics.py             # Prometheus metrics
+│   └── async_utils.py         # Async helper utilities
 │
 ├── orchestrator-dashboard/    # React frontend
 │   ├── src/
 │   │   ├── pages/
 │   │   │   ├── Dashboard.tsx
 │   │   │   ├── RunDetails.tsx
-│   │   │   └── NewRun.tsx
+│   │   │   ├── NewRun.tsx
+│   │   │   └── HumanQueue.tsx
 │   │   ├── components/
 │   │   │   ├── TaskGraph.tsx  # DAG visualization
 │   │   │   ├── InterruptModal.tsx
@@ -443,6 +487,7 @@ agent-framework/
 │   ├── unit/                  # Unit tests
 │   └── test_task_memories.py  # Integration tests
 │
+├── docs/                      # Additional documentation
 ├── requirements.txt
 └── README.md
 ```

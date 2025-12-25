@@ -30,16 +30,31 @@ if [ ! -f .env ]; then
     echo "Creating .env file from template..."
     cat > .env << 'EOF'
 # LLM Provider API Keys (add your keys here)
+# At minimum, you need ONE of these providers configured
 OPENAI_API_KEY=your-key-here
 ANTHROPIC_API_KEY=your-key-here
 GOOGLE_API_KEY=your-key-here
+OPENROUTER_API_KEY=your-key-here
+GLM_API_KEY=your-key-here
+
+# Web Search (required for research worker)
+TAVILY_API_KEY=your-key-here
+
+# For local models via Ollama (optional)
+# OLLAMA_BASE_URL=http://localhost:11434/v1
 
 # Optional: LangSmith tracing
 LANGCHAIN_TRACING_V2=false
 LANGCHAIN_API_KEY=
 
-# Frontend URL for CORS (optional)
-FRONTEND_URL=http://localhost:3000
+# Database (default: SQLite, options: sqlite, postgres, mysql)
+# CHECKPOINT_MODE=sqlite
+
+# PostgreSQL (if CHECKPOINT_MODE=postgres)
+# POSTGRES_URI=postgresql://user:password@localhost:5432/orchestrator
+
+# MySQL (if CHECKPOINT_MODE=mysql)
+# MYSQL_URI=mysql://user:password@localhost:3306/orchestrator
 EOF
     echo "⚠️  Please edit .env and add your API keys"
 fi
@@ -88,5 +103,5 @@ echo "3. Start the frontend (in another terminal):"
 echo "   cd orchestrator-dashboard"
 echo "   npm run dev"
 echo ""
-echo "4. Open http://localhost:3000"
+echo "4. Open http://localhost:8085 (backend serves the dashboard)"
 echo ""
