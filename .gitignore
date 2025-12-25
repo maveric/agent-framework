@@ -29,7 +29,17 @@ node_modules/
 
 # Logs
 logs/
+*.log
 error.log
+heartbeat.log
+exit_diagnostic.log
+crash_fault.log
+monitor.log
+watchdog.log
+
+# Ancillary docs (not part of main documentation)
+DATABASE_CONFIG.md
+REFACTORING_SUMMARY.md
 
 # Observability - generated configs
 observability/prometheus.yml
