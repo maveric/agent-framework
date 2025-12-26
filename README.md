@@ -63,7 +63,7 @@ The Agent Orchestrator Framework coordinates **multi-step software workflows** â
 | **Control Plane** | Director, Dispatch Loop, Phoenix Protocol, HITL | Orchestration, retry logic, human escalation |
 | **Execution Plane** | Code Worker, Test Worker, Test Architect, Planner, Research Worker, Writer | Domain-specific task execution |
 | **Integration Plane** | Merge Worker, Git Manager | Code integration, conflict resolution |
-| **Safety Layer** | Guardian *(optional[WIP])*, Strategist (QA) | Drift detection, quality evaluation |
+| **Safety Layer** | Guardian *(optional, WIP)*, Strategist (QA) | Drift detection, quality evaluation |
 
 All agents operate on a shared **blackboard** â€” state lives outside the model in structured task objects.
 
