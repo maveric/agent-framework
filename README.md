@@ -1,12 +1,31 @@
 # 🤖 Agent Orchestrator Framework
 
-A production-ready multi-agent LLM orchestration system that coordinates specialized AI agents to build software projects autonomously, with human-in-the-loop (HITL) intervention for quality control and course correction.
+A reliability-focused multi-agent LLM orchestration system designed for long-running software workflows with explicit state management, failure handling, and human-in-the-loop escalation.
 
 ![Status](https://img.shields.io/badge/status-active-green)
 ![Python](https://img.shields.io/badge/python-3.11+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-> ⚠️ **Status**: Active development. Core orchestration functionality is complete and working. UI polish and documentation improvements are ongoing.
+> **Status**: Active development. Task lifecycle, retry protocol, and HITL escalation are functional. Supports 7 task states, configurable retries (default 4), and persistence via SQLite/PostgreSQL/MySQL.
+
+---
+
+## 🎯 What Makes This Different
+
+Most agent frameworks optimize for impressive demos. This one optimizes for **systems that run unattended and fail gracefully**.
+
+| Principle | Implementation |
+|-----------|----------------|
+| **Explicit state** | Blackboard architecture — state lives outside the model, in observable task objects |
+| **Bounded authority** | LLMs propose actions; tools execute through validation layer with logging |
+| **Failure as expected** | Phoenix retry protocol with accumulated context; escalates to human after max retries |
+| **Human-in-the-loop** | HITL is a designed control path, not an exception handler — runs pause and wait for guidance |
+| **Replayable runs** | Full task history persisted; conversation logs saved per task for debugging |
+| **Isolation** | Git worktrees per task — parallel execution without merge conflicts |
+
+For the philosophy behind these decisions, see [WHY.md](WHY.md).
+
+---
 
 ## 📋 Table of Contents
 
@@ -26,29 +45,27 @@ A production-ready multi-agent LLM orchestration system that coordinates special
 
 ## 🌟 Overview
 
-The Agent Orchestrator Framework enables **autonomous software development** by coordinating multiple specialized AI agents working in parallel. It combines:
+The Agent Orchestrator Framework coordinates **multi-step software workflows** — planning, building, testing, and integration — using specialized agents with explicit state management and controlled execution.
 
-- **LangGraph** for agent state management and workflow orchestration
-- **FastAPI** for REST/WebSocket APIs
-- **React** for a real-time monitoring dashboard
-- **Git worktrees** for isolated parallel development
+### Core Design
 
-### Agent Roles
+- **Explicit task lifecycle**: Tasks move through defined states (`planned` → `ready` → `active` → `awaiting_qa` → `complete`/`failed`)
+- **Separation of reasoning and execution**: LLMs decide what to do; tools execute through a validation layer
+- **Failure handling built-in**: Phoenix retry protocol accumulates context across attempts; escalates to human after configurable retries
+- **Observable state**: All task state, agent logs, and decisions are persisted and queryable
 
-| Agent | Role | Description |
-|-------|------|-------------|
-| **Director** | Orchestrator | Decomposes objectives into tasks, manages dependencies, handles retries |
-| **Code Worker** | Builder | Writes implementation code (backend, frontend, APIs) |
-| **Test Architect** | Test Designer | Designs test strategy and creates test specifications |
-| **Test Worker** | Validator | Implements and runs tests, validates implementations |
-| **Planner Worker** | Decomposer | Breaks down complex tasks into atomic subtasks |
-| **Strategist** | QA | Evaluates completed work against acceptance criteria |
-| **Research Worker** | Investigator | Searches the web and codebase for information |
-| **Writer Worker** | Documentation | Creates documentation, READMEs, and technical writing |
-| **Merge Worker** | Integration | Handles git merges and conflict resolution |
-| **Guardian** | Monitor | *(Optional)* Drift detection and course correction during execution |
+**Implemented with**: LangGraph (state machines), FastAPI (REST/WebSocket), React (dashboard), Git worktrees (isolation)
 
-All agents operate on a shared **blackboard** state, communicating through structured task objects rather than direct agent-to-agent messaging.
+### System Architecture
+
+| Layer | Components | Purpose |
+|-------|------------|---------|
+| **Control Plane** | Director, Dispatch Loop, Phoenix Protocol, HITL | Orchestration, retry logic, human escalation |
+| **Execution Plane** | Code Worker, Test Worker, Test Architect, Planner, Research Worker, Writer | Domain-specific task execution |
+| **Integration Plane** | Merge Worker, Git Manager | Code integration, conflict resolution |
+| **Safety Layer** | Guardian *(optional[WIP])*, Strategist (QA) | Drift detection, quality evaluation |
+
+All agents operate on a shared **blackboard** — state lives outside the model in structured task objects.
 
 ---
 
@@ -69,8 +86,8 @@ Failed tasks don't just error out:
 - Human escalation for persistent failures
 
 ### 👤 Human-in-the-Loop (HITL)
-When tasks exceed retry limits or encounter blockers:
-- Run pauses and waits for human decision
+When tasks exceed retry limits or are interrupted by human intervention:
+- Task pauses and waits for human decision - other tasks continue if dependencies allow
 - Options: **Retry** (with modifications), **Abandon**, **Spawn New Task**
 - Real-time dashboard shows task status and agent logs
 - Seamless resume after human intervention
@@ -81,11 +98,12 @@ React-based monitoring interface with:
 - Agent conversation logs (full LLM chat history)
 - WebSocket-based real-time updates
 - Run management (start, stop, restart, cancel)
-- Visual task dependency creation (click-to-connect)
+- Visual task dependency creation (click-to-connect/disconnect)
 
 ### 🧠 Task Memory Persistence
 - Full agent conversation history saved per task
-- Survives server restarts\r\n- Multiple database backends: SQLite (default), PostgreSQL, MySQL
+- Survives server restarts
+- Multiple database backends: SQLite (default), PostgreSQL, MySQL
 - Useful for debugging and post-mortem analysis
 
 ### 🚀 Concurrent Execution
@@ -139,12 +157,13 @@ React-based monitoring interface with:
 
 ### State Flow
 
-1. **Director** decomposes objective → creates tasks with dependencies
-2. **Dispatch Loop** spawns workers for READY tasks (dependencies satisfied)
-3. **Workers** execute in isolated worktrees using ReAct agent pattern
-4. **Strategist** evaluates completed work against acceptance criteria
-5. **Director** promotes successful tasks, retries failures (Phoenix protocol)
-6. **Git Manager** merges approved work to main branch
+1. **Director** decomposes objective → creates planner tasks
+2. **Planner** creates worker tasks with dependencies
+3. **Dispatch Loop** spawns workers for READY tasks (dependencies satisfied)
+4. **Workers** execute in isolated worktrees using ReAct agent pattern
+5. **Strategist** evaluates completed work against acceptance criteria
+6. **Director** promotes successful tasks, retries failures (Phoenix protocol)
+7. **Git Manager** merges approved work to main branch
 
 ---
 
@@ -160,7 +179,7 @@ React-based monitoring interface with:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/agent-framework.git
+git clone https://github.com/maveric/agent-framework.git
 cd agent-framework
 
 # Create virtual environment
@@ -282,8 +301,7 @@ mysql_uri: Optional[str] = None  # Falls back to MYSQL_URI env var
 
 ```python
 enable_guardian: bool = False      # Drift detection during execution
-enable_git_worktrees: bool = False # Git isolation per task
-enable_webhooks: bool = False      # External notifications
+enable_webhooks: bool = False      # External notifications - WIP
 ```
 
 ### Supported LLM Providers
@@ -317,7 +335,7 @@ The dashboard provides real-time visibility into agent operations:
 - **Nodes** = Tasks (color-coded by status)
 - **Edges** = Dependencies (arrows show "depends on")
 - **Click** = View task details and agent conversation
-- **Link Mode** = Click-to-connect for adding dependencies
+- **Link Mode** = Click-to-connect/disconnect for adding/removing dependencies
 
 ### Task Statuses
 
