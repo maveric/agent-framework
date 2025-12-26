@@ -573,6 +573,15 @@ This is an active research project. Key areas for contribution:
 
 ---
 
+## Non-goals
+
+* Not a general AGI sandbox
+* Not optimizing for clever prompting
+* Not agent-to-agent roleplay chat
+* Not a turnkey SaaS / multi-user system (yet)
+
+---
+
 ## ⚠️ Known Limitations
 
 1. **Database Size**: `orchestrator.db` can grow large with many runs. Periodic cleanup recommended.

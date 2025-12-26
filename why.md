@@ -75,7 +75,7 @@ These systems often look impressive in short demos but break down quickly in rea
 * Partial failure is expected
 * The system must run unattended
 
-In controls engineering, a system that 'usually works' gets people hurt. I apply that same rigor here: an agent is a stochastic component in a deterministic system, not the other way around.
+In controls engineering, a system that 'usually works' is unacceptable. I apply that same rigor here: an agent is a stochastic component in a deterministic system, not the other way around.
 
 ---
 
