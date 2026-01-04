@@ -91,6 +91,143 @@ class AsyncWorktreeManager:
             return self.worktree_base / f"{safe_id}_retry_{retry_num}"
         return self.worktree_base / safe_id
     
+
+    async def recover_worktrees(self, task_ids: List[str] = None) -> int:
+        """
+        Recover existing worktrees from disk after a restart.
+        
+        This scans the worktree_base directory for existing worktree directories
+        and registers them in the worktrees dict so operations can continue.
+        
+        Args:
+            task_ids: Optional list of task IDs to look for. If None, scans all.
+            
+        Returns:
+            Number of worktrees recovered
+        """
+        if not self.worktree_base.exists():
+            logger.info("No worktree_base directory found - nothing to recover")
+            return 0
+        
+        recovered = 0
+        
+        for wt_dir in self.worktree_base.iterdir():
+            if not wt_dir.is_dir():
+                continue
+            
+            # Extract task_id from directory name (format: task_XXXXXXXX or task_XXXXXXXX_retry_N)
+            dir_name = wt_dir.name
+            
+            # Check if this is a retry worktree
+            retry_num = 0
+            if "_retry_" in dir_name:
+                parts = dir_name.rsplit("_retry_", 1)
+                base_task_id = parts[0]
+                try:
+                    retry_num = int(parts[1])
+                except ValueError:
+                    base_task_id = dir_name
+            else:
+                base_task_id = dir_name
+            
+            # If specific task_ids provided, skip non-matching
+            if task_ids and base_task_id not in task_ids:
+                continue
+            
+            # Already registered?
+            if base_task_id in self.worktrees:
+                continue
+            
+            # Check if it looks like a valid git worktree
+            git_dir = wt_dir / ".git"
+            if not git_dir.exists():
+                logger.debug(f"Skipping {dir_name} - not a git worktree")
+                continue
+            
+            # Clean any stale lock files before git operations
+            await self._clean_stale_locks(wt_dir)
+            
+            # Determine branch name from the worktree
+            try:
+                _, head_ref, _ = await self._run_git(
+                    ["rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=wt_dir,
+                    check=False
+                )
+                branch_name = head_ref.strip() if head_ref else f"task/{base_task_id}"
+            except Exception:
+                branch_name = f"task/{base_task_id}"
+            
+            # Register the worktree
+            self.worktrees[base_task_id] = WorktreeInfo(
+                task_id=base_task_id,
+                worktree_path=wt_dir,
+                branch_name=branch_name,
+                status=WorktreeStatus.ACTIVE,
+                retry_number=retry_num,
+                commits=[]  # We could recover commits but not critical
+            )
+            recovered += 1
+            logger.info(f"  🔄 Recovered worktree for task {base_task_id} at {wt_dir}")
+        
+        if recovered > 0:
+            logger.info(f"✅ Recovered {recovered} worktree(s) from disk")
+        
+        return recovered
+    
+    async def _clean_stale_locks(self, worktree_path: Path) -> int:
+        """
+        Clean stale git lock files from a worktree.
+        
+        Git lock files (.lock) are left behind when git processes crash or are killed.
+        These prevent subsequent git operations with "Another git process seems to be running".
+        
+        Args:
+            worktree_path: Path to the worktree to clean
+            
+        Returns:
+            Number of lock files removed
+        """
+        cleaned = 0
+        
+        # Check for index.lock in worktree .git file/directory
+        git_path = worktree_path / ".git"
+        
+        if git_path.is_file():
+            # Worktree .git is a file pointing to the real git dir
+            # Parse it to find the actual git directory
+            try:
+                content = git_path.read_text().strip()
+                if content.startswith("gitdir:"):
+                    real_git_dir = Path(content[7:].strip())
+                    if not real_git_dir.is_absolute():
+                        real_git_dir = worktree_path / real_git_dir
+                    
+                    # Clean locks in the real git dir
+                    index_lock = real_git_dir / "index.lock"
+                    if index_lock.exists():
+                        try:
+                            index_lock.unlink()
+                            logger.info(f"  🧹 Cleaned stale index.lock from {real_git_dir}")
+                            cleaned += 1
+                        except Exception as e:
+                            logger.warning(f"  Failed to remove {index_lock}: {e}")
+            except Exception as e:
+                logger.debug(f"  Could not parse .git file: {e}")
+        elif git_path.is_dir():
+            # Standard git directory (for main repo)
+            index_lock = git_path / "index.lock"
+            if index_lock.exists():
+                try:
+                    index_lock.unlink()
+                    logger.info(f"  🧹 Cleaned stale index.lock from {git_path}")
+                    cleaned += 1
+                except Exception as e:
+                    logger.warning(f"  Failed to remove {index_lock}: {e}")
+        
+        return cleaned
+    
+
     async def _run_git(
         self,
         args: List[str],
