@@ -162,6 +162,7 @@ class AsyncWorktreeManager:
                 task_id=base_task_id,
                 worktree_path=wt_dir,
                 branch_name=branch_name,
+                status=WorktreeStatus.ACTIVE,
                 retry_number=retry_num,
                 commits=[]  # We could recover commits but not critical
             )
