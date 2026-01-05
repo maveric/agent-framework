@@ -37,6 +37,26 @@ limiter = Limiter(key_func=get_remote_address)
 # HELPER FUNCTIONS
 # =============================================================================
 
+async def _ensure_checkpointer_connected():
+    """Ensure the checkpointer connection is alive, reconnect if needed."""
+    try:
+        # Only applies to MySQL checkpointer
+        from config import OrchestratorConfig
+        config = OrchestratorConfig()
+        if config.checkpoint_mode.lower() != "mysql":
+            return  # SQLite and Postgres don't have this issue
+        
+        # Try to ping the connection
+        if hasattr(global_checkpointer, 'conn') and global_checkpointer.conn:
+            try:
+                await global_checkpointer.conn.ping(reconnect=True)
+                logger.debug("MySQL connection is alive")
+            except Exception as ping_error:
+                logger.warning(f"MySQL ping failed: {ping_error}, connection will auto-reconnect on next query")
+    except Exception as e:
+        logger.warning(f"Error checking checkpointer connection: {e}")
+
+
 async def ensure_run_in_index(run_id: str) -> bool:
     """
     Ensure run is in runs_index by looking it up in database if needed.
@@ -56,6 +76,9 @@ async def ensure_run_in_index(run_id: str) -> bool:
     logger.info(f"🔍 Looking up run {run_id} in database (CLI-initiated run?)")
     try:
         get_orchestrator_graph()
+
+        # CRITICAL: Ensure database connection is alive before querying
+        await _ensure_checkpointer_connected()
 
         # Get async connection from checkpointer
         conn = global_checkpointer.conn

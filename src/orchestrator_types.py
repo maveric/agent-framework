@@ -371,6 +371,7 @@ class Task:
     # Execution
     retry_count: int = 0
     max_retries: int = 3          # Before escalating to WAITING_HUMAN
+    previous_attempt_summary: Optional[str] = None  # Phoenix: LLM summary of last failed attempt
     acceptance_criteria: List[str] = field(default_factory=list)
     
     # Results (populated during/after execution)
@@ -647,6 +648,7 @@ def task_to_dict(t: Task) -> Dict[str, Any]:
         "assigned_worker_profile": t.assigned_worker_profile.value if t.assigned_worker_profile else None,
         "retry_count": t.retry_count,
         "max_retries": t.max_retries,
+        "previous_attempt_summary": t.previous_attempt_summary,
         "acceptance_criteria": t.acceptance_criteria,
         "result_path": t.result_path,
         "qa_verdict": _qa_verdict_to_dict(t.qa_verdict) if t.qa_verdict else None,
@@ -683,6 +685,7 @@ def _dict_to_task(data: Dict[str, Any]) -> Task:
         assigned_worker_profile=WorkerProfile(data["assigned_worker_profile"]) if data.get("assigned_worker_profile") else None,
         retry_count=data.get("retry_count", 0),
         max_retries=data.get("max_retries", 3),
+        previous_attempt_summary=data.get("previous_attempt_summary"),
         acceptance_criteria=data.get("acceptance_criteria", []),
         result_path=data.get("result_path"),
         qa_verdict=_dict_to_qa_verdict(data["qa_verdict"]) if data.get("qa_verdict") else None,

@@ -88,3 +88,38 @@ def _mock_execution(task: Task) -> WorkerResult:
             files_modified=["mock_output.py"]
         )
     )
+
+
+def get_phoenix_retry_context(task: Task) -> str:
+    """
+    Generate Phoenix retry context section for system prompts.
+    
+    Returns an empty string if this is the first attempt,
+    or a formatted section with the previous attempt summary.
+    """
+    # Check if this is a retry (retry_count > 0 means we've already tried once)
+    if task.retry_count <= 0:
+        return ""
+    
+    # Get the summary from the task
+    summary = getattr(task, 'previous_attempt_summary', None)
+    if not summary:
+        return ""
+    
+    return f"""
+## ⚠️ PHOENIX RETRY - LEARN FROM PREVIOUS FAILURE ⚠️
+
+**This is retry attempt #{task.retry_count}.** Your previous attempt failed.
+Read the summary below carefully to avoid repeating the same mistakes.
+
+{summary}
+
+---
+**CRITICAL**: Use the information above to:
+1. Avoid repeating failed approaches
+2. Build on what worked
+3. Fix the specific issues mentioned
+4. Verify your work before completing
+
+"""
+

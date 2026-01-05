@@ -30,6 +30,28 @@ router = APIRouter(prefix="/api/v1/runs/{run_id}", tags=["interrupts"])
 # HELPER FUNCTIONS
 # =============================================================================
 
+async def _ensure_checkpointer_connected():
+    """Ensure the checkpointer connection is alive, reconnect if needed."""
+    from api.state import global_checkpointer
+    from config import OrchestratorConfig
+    
+    try:
+        # Only applies to MySQL checkpointer
+        config = OrchestratorConfig()
+        if config.checkpoint_mode.lower() != "mysql":
+            return  # SQLite and Postgres don't have this issue
+        
+        # Try to ping the connection
+        if hasattr(global_checkpointer, 'conn') and global_checkpointer.conn:
+            try:
+                await global_checkpointer.conn.ping(reconnect=True)
+                logger.debug("MySQL connection is alive")
+            except Exception as ping_error:
+                logger.warning(f"MySQL ping failed: {ping_error}, connection will auto-reconnect on next query")
+    except Exception as e:
+        logger.warning(f"Error checking checkpointer connection: {e}")
+
+
 async def ensure_run_in_index(run_id: str) -> bool:
     """
     Ensure run is in runs_index by looking it up in database if needed.
@@ -51,6 +73,9 @@ async def ensure_run_in_index(run_id: str) -> bool:
     logger.info(f"🔍 Looking up run {run_id} in database (CLI-initiated run?)")
     try:
         get_orchestrator_graph()
+
+        # CRITICAL: Ensure database connection is alive
+        await _ensure_checkpointer_connected()
 
         # Get async connection from checkpointer
         conn = global_checkpointer.conn
@@ -237,6 +262,9 @@ async def get_interrupts(run_id: str):
         thread_id = runs_index[run_id]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
 
+        # CRITICAL: Ensure database connection is alive before querying
+        await _ensure_checkpointer_connected()
+
         # Get current state snapshot (correct LangGraph API)
         snapshot = await orchestrator.aget_state(config)
 
@@ -263,6 +291,7 @@ async def get_interrupts(run_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
 @router.post("/resolve")
 async def resolve_interrupt(run_id: str, resolution: HumanResolution, background_tasks: BackgroundTasks):
     """Resume execution with human decision."""
@@ -276,6 +305,9 @@ async def resolve_interrupt(run_id: str, resolution: HumanResolution, background
         orchestrator = get_orchestrator_graph()
         thread_id = runs_index[run_id]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
+
+        # CRITICAL: Ensure database connection is alive before querying
+        await _ensure_checkpointer_connected()
 
         # Check if there's a real interrupt in the graph (from interrupt() call)
         snapshot = await orchestrator.aget_state(config)

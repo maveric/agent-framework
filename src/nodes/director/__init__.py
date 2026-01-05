@@ -10,6 +10,7 @@ from .integration import integrate_plans, IntegratedTaskDefinition, IntegrationR
 from .readiness import evaluate_readiness
 from .hitl import process_human_resolution
 from .graph_utils import detect_and_break_cycles
+from .phoenix_summary import summarize_failed_attempt
 
 __all__ = [
     # Decomposition
@@ -28,4 +29,6 @@ __all__ = [
     "process_human_resolution",
     # Graph Utils
     "detect_and_break_cycles",
+    # Phoenix
+    "summarize_failed_attempt",
 ]

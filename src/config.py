@@ -53,7 +53,7 @@ class OrchestratorConfig:
         # provider="anthropic",
         # model_name="claude-3-5-sonnet-20241022",
         provider="glm",
-        model_name="glm-4.6",
+        model_name="glm-4.7",
         temperature=0.5
     ))
 

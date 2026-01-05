@@ -205,4 +205,10 @@ Instead:
 - Do NOT attempt worktree manipulation
 """
 
+    # INJECT PHOENIX RETRY CONTEXT if this is a retry attempt
+    from ..utils import get_phoenix_retry_context
+    phoenix_context = get_phoenix_retry_context(task)
+    if phoenix_context:
+        system_prompt = f"{phoenix_context}\n\n{system_prompt}"
+
     return await _execute_react_loop(task, tools, system_prompt, state, config)

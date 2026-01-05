@@ -33,7 +33,8 @@ from .director import (
     integrate_plans,
     evaluate_readiness,
     process_human_resolution,
-    detect_and_break_cycles
+    detect_and_break_cycles,
+    summarize_failed_attempt
 )
 
 logger = logging.getLogger(__name__)
@@ -310,18 +311,46 @@ Read the failure details below carefully and fix the issues.
                     task.retry_count = retry_count + 1
                     task.updated_at = datetime.now()
 
-                    # Include QA feedback OR AAR failure reason in description
-                    failure_reason = ""
-                    if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
-                        failure_reason = f"QA FEEDBACK: {task.qa_verdict.overall_feedback}"
-                    elif task.aar and task.aar.summary:
-                         failure_reason = f"PREVIOUS FAILURE: {task.aar.summary}"
-
-                    if failure_reason:
-                        logger.info(f"  Previous failure: {failure_reason[:100]}")
-                        # Append to description if not already there to avoid duplication
-                        if "PREVIOUS FAILURE:" not in task.description and "QA FEEDBACK:" not in task.description:
-                             task.description += f"\n\n{failure_reason}"
+                    # PHOENIX SUMMARIZATION: Summarize the failed attempt before retry
+                    # This provides focused context without bloating tokens
+                    task_memories = state.get("task_memories", {})
+                    messages = task_memories.get(task.id, [])
+                    
+                    if messages:
+                        logger.info(f"  Phoenix: Summarizing failed attempt ({len(messages)} messages)...")
+                        
+                        # Get QA feedback for summarization
+                        qa_feedback = None
+                        if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
+                            qa_feedback = task.qa_verdict.overall_feedback
+                        elif task.aar and task.aar.summary:
+                            qa_feedback = task.aar.summary
+                        
+                        try:
+                            # Call summarizer with previous summary (for retry #2+)
+                            summary = await summarize_failed_attempt(
+                                task_id=task.id,
+                                messages=messages,
+                                qa_feedback=qa_feedback,
+                                previous_summary=task.previous_attempt_summary  # Include prior context
+                            )
+                            task.previous_attempt_summary = summary
+                            logger.info(f"  Phoenix: Summary generated ({len(summary)} chars)")
+                        except Exception as e:
+                            logger.error(f"  Phoenix: Summarization failed: {e}")
+                            # Fallback: just use QA feedback
+                            task.previous_attempt_summary = f"### Previous Attempt Summary\n\n**Summarization failed:** {e}\n\n**QA Feedback:** {qa_feedback or 'Unknown'}"
+                    else:
+                        # No messages to summarize - use simple feedback
+                        failure_reason = ""
+                        if task.qa_verdict and hasattr(task.qa_verdict, 'overall_feedback'):
+                            failure_reason = task.qa_verdict.overall_feedback
+                        elif task.aar and task.aar.summary:
+                            failure_reason = task.aar.summary
+                        
+                        if failure_reason:
+                            task.previous_attempt_summary = f"### Previous Attempt Summary\n\n**QA Failure Reason:**\n{failure_reason}"
+                            logger.info(f"  Phoenix: No messages found, using QA feedback directly")
 
                     # Immediately evaluate readiness for instant retry
                     new_status = evaluate_readiness(task, all_tasks)

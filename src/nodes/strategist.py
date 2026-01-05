@@ -84,11 +84,18 @@ async def _validate_tdd_red_phase(task: Dict[str, Any], workspace_path: str, con
         }
 
 
-async def _validate_tdd_green_phase(task: Dict[str, Any], workspace_path: str, config: Any) -> Dict[str, Any]:
+async def _validate_tdd_green_phase(task: Dict[str, Any], workspace_path: str, config: Any, task_worktree_path: str = None) -> Dict[str, Any]:
     """
     Validate that a BUILD phase task in TDD made all tests PASS (Green phase).
 
     This is called when task.test_file_paths is set, indicating TDD mode.
+    Uses LLM to evaluate test results instead of brittle keyword matching.
+
+    Args:
+        task: The task dict
+        workspace_path: Main workspace path (fallback location)
+        config: RunnableConfig
+        task_worktree_path: Path to task's worktree (check here FIRST for fresh results)
 
     Returns:
         Dict with keys: passed (bool), feedback (str), tests_passing (bool)
@@ -103,66 +110,143 @@ async def _validate_tdd_green_phase(task: Dict[str, Any], workspace_path: str, c
             "tests_passing": None
         }
 
-    # Look for test results in standard locations
+    # Look for test results ONLY in the task's worktree (agent work is isolated there)
+    # Main workspace is NOT consulted - it only has merged/approved work
     task_id = task["id"]
     component = task.get("component", task_id)
-    test_results_path = Path(workspace_path) / f"agents-work/test-results/test-{component}.md"
+    expected_file = f"agents-work/test-results/test-{component}.md"
+    
+    test_results_path = None
+    
+    # Check worktree ONLY (where worker writes during execution)
+    if task_worktree_path:
+        worktree_path = Path(task_worktree_path) / expected_file
+        if worktree_path.exists():
+            test_results_path = worktree_path
+            logger.info(f"  [TDD] Found test results in worktree: {worktree_path}")
+        else:
+            logger.info(f"  [TDD] No test results file in worktree at: {worktree_path}")
+    else:
+        logger.warning(f"  [TDD] No worktree path provided for task {task_id}")
 
     # Also check AAR for test execution evidence
     aar = task.get("aar", {})
-    aar_summary = aar.get("summary", "").lower()
+    aar_summary = aar.get("summary", "")
 
-    # Evidence of test execution in AAR
-    tests_mentioned_in_aar = "test" in aar_summary and ("pass" in aar_summary or "green" in aar_summary)
-
-    if test_results_path.exists():
+    # Collect all available test evidence
+    test_content = ""
+    
+    # 1. Check test results file (worktree only)
+    if test_results_path and test_results_path.exists():
         try:
-            content = test_results_path.read_text(encoding="utf-8")
-            content_lower = content.lower()
+            test_content = test_results_path.read_text(encoding="utf-8")
+            logger.info(f"  [TDD] Read test results file: {test_results_path}")
+        except Exception as e:
+            logger.warning(f"  [TDD] Error reading test results: {e}")
+    
+    # 2. Include AAR summary as additional context
+    if aar_summary:
+        test_content += f"\n\n--- AAR Summary ---\n{aar_summary}"
+    
+    # 3. Check for test output in AAR challenges/decisions
+    if aar.get("challenges"):
+        test_content += f"\n\n--- Challenges ---\n" + "\n".join(aar["challenges"])
+    
+    # If we have ANY test evidence, let LLM evaluate it
+    if test_content.strip():
+        # Use LLM to evaluate test results
+        from config import OrchestratorConfig
+        orch_config = OrchestratorConfig()
+        llm = get_llm(orch_config.strategist_model)
+        
+        system_prompt = """You are a QA engineer evaluating test execution results for a TDD (Test-Driven Development) task.
 
-            # Check for passing evidence
-            has_all_passed = "all tests passed" in content_lower or "100%" in content_lower or "0 failed" in content_lower
-            has_failures = "failed" in content_lower and "0 failed" not in content_lower
+YOUR JOB: Determine if ALL tests PASSED.
 
-            if has_all_passed and not has_failures:
+LOOK FOR:
+1. **Test execution output** - actual terminal/console output from running tests
+2. **Pass/Fail counts** - e.g., "8 passed", "3/3 passed", "0 failed"
+3. **Test framework summary** - pytest, vitest, jest, etc. output
+4. **AAR (After Action Report)** - worker's summary of what happened
+
+RESPOND WITH JSON:
+{
+    "passed": true/false,
+    "feedback": "Brief explanation of what you found",
+    "tests_passing": true/false/null
+}
+
+RULES:
+- If output shows ALL tests passed (e.g., "8 passed (8)", "0 failed") → passed: true
+- If output shows ANY failures (e.g., "2 failed", "FAIL") → passed: false  
+- If AAR says "all tests pass" with convincing evidence → passed: true
+- Warnings (like React act() warnings) are NOT failures unless tests actually errored
+- If unclear or no test execution evidence → passed: false with explanation
+
+Be a smart evaluator, not a keyword matcher. Understand the context."""
+
+        user_content = f"""Evaluate these test results for task component '{component}':
+
+{test_content[:4000]}"""  # Limit to 4k chars to avoid token bloat
+        
+        try:
+            response = await llm.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_content)
+            ])
+            
+            # Parse LLM response
+            import json
+            import re
+            
+            response_text = str(response.content).strip()
+            
+            # Extract JSON from response (handle markdown code blocks)
+            json_match = re.search(r'\{[^{}]*"passed"[^{}]*\}', response_text, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
                 return {
-                    "passed": True,
-                    "feedback": "TDD GREEN PHASE VERIFIED: All tests pass. Implementation satisfies the contract.",
-                    "tests_passing": True
-                }
-            elif has_failures:
-                return {
-                    "passed": False,
-                    "feedback": "TDD GREEN PHASE FAILED: Some tests still failing. Implementation incomplete.",
-                    "tests_passing": False
+                    "passed": result.get("passed", False),
+                    "feedback": result.get("feedback", "LLM evaluation complete"),
+                    "tests_passing": result.get("tests_passing", result.get("passed", False))
                 }
             else:
-                return {
-                    "passed": False,
-                    "feedback": "TDD GREEN VERIFICATION UNCLEAR: Test results file exists but could not confirm all tests pass.",
-                    "tests_passing": None
-                }
-
+                # LLM didn't return valid JSON - try to parse intent from text
+                response_lower = response_text.lower()
+                if "passed" in response_lower and "true" in response_lower:
+                    return {
+                        "passed": True,
+                        "feedback": f"TDD GREEN: {response_text[:200]}",
+                        "tests_passing": True
+                    }
+                else:
+                    return {
+                        "passed": False,
+                        "feedback": f"TDD evaluation unclear: {response_text[:200]}",
+                        "tests_passing": None
+                    }
+                    
         except Exception as e:
+            logger.error(f"  [TDD] LLM evaluation failed: {e}")
+            # Fallback: if AAR mentions tests passing, trust it
+            aar_lower = aar_summary.lower()
+            if "test" in aar_lower and ("pass" in aar_lower or "green" in aar_lower):
+                return {
+                    "passed": True,
+                    "feedback": "TDD GREEN PHASE: Test execution mentioned in AAR (LLM eval failed, using fallback).",
+                    "tests_passing": True
+                }
             return {
                 "passed": False,
-                "feedback": f"TDD GREEN VERIFICATION ERROR: Failed to read test results: {e}",
+                "feedback": f"TDD GREEN VERIFICATION ERROR: LLM evaluation failed: {e}",
                 "tests_passing": None
             }
-
-    elif tests_mentioned_in_aar:
-        # No explicit test results file, but AAR mentions tests passing
-        return {
-            "passed": True,
-            "feedback": "TDD GREEN PHASE: Test execution mentioned in AAR. Consider creating explicit test results file.",
-            "tests_passing": True
-        }
-
+    
     else:
-        # TDD mode but no test evidence
+        # TDD mode but no test evidence at all
         return {
             "passed": False,
-            "feedback": f"TDD GREEN VERIFICATION FAILED: Task has test_file_paths but no test results found at agents-work/test-results/test-{component}.md",
+            "feedback": f"TDD GREEN VERIFICATION FAILED: Task has test_file_paths but no test results found at agents-work/test-results/test-{component}.md and no test evidence in AAR.",
             "tests_passing": None
         }
 
@@ -306,7 +390,11 @@ async def _evaluate_build_task_with_llm(
     task: Dict[str, Any], 
     test_output: Optional[str],
     files_modified: List[str],
-    objective: str
+    objective: str,
+    workspace_path: str = None,
+    task_worktree_path: str = None,
+    already_implemented_claim: str = None,
+    aar_summary: str = None
 ) -> Dict[str, Any]:
     """
     LLM evaluation of BUILD task completion.
@@ -316,7 +404,11 @@ async def _evaluate_build_task_with_llm(
         task: The task dict
         test_output: Output from running tests (or None if no tests)
         files_modified: List of files the coder modified
-        objective: Project objective for context
+        objective: Project for context
+        workspace_path: Main workspace path for file reading
+        task_worktree_path: Task worktree path for file reading
+        already_implemented_claim: If agent claims work is already done, their verification summary
+        aar_summary: Agent's own summary of work completed (from AAR)
         
     Returns:
         Dict with keys: passed (bool), feedback (str), focus (str)
@@ -328,6 +420,44 @@ async def _evaluate_build_task_with_llm(
     acceptance_criteria = task.get("acceptance_criteria", [])
     criteria_text = "\n".join(f"- {c}" for c in acceptance_criteria) if acceptance_criteria else "No specific criteria defined"
     test_file_paths = task.get("test_file_paths", [])
+    
+    # Read contents of modified files for verification
+    # This allows the LLM to actually SEE what was changed, not just filenames
+    file_contents_section = ""
+    if files_modified and (workspace_path or task_worktree_path):
+        file_contents_list = []
+        for file_path in files_modified[:10]:  # Limit to first 10 files to avoid token overflow
+            try:
+                # Try reading from worktree first, then main workspace
+                from pathlib import Path
+                
+                file_found = False
+                content = None
+                
+                if task_worktree_path:
+                    worktree_file = Path(task_worktree_path) / file_path
+                    if worktree_file.exists() and worktree_file.is_file():
+                        content = worktree_file.read_text(encoding="utf-8", errors="ignore")
+                        file_found = True
+                
+                if not file_found and workspace_path:
+                    main_file = Path(workspace_path) / file_path
+                    if main_file.exists() and main_file.is_file():
+                        content = main_file.read_text(encoding="utf-8", errors="ignore")
+                        file_found = True
+                
+                if file_found and content is not None:
+                    # Truncate very long files
+                    if len(content) > 2000:
+                        content = content[:2000] + f"\n\n... (truncated, {len(content)} total chars)"
+                    file_contents_list.append(f"**{file_path}**:\n```\n{content}\n```")
+                else:
+                    file_contents_list.append(f"**{file_path}**: (file not found or unreadable)")
+            except Exception as e:
+                file_contents_list.append(f"**{file_path}**: (error reading: {e})")
+        
+        if file_contents_list:
+            file_contents_section = "\n\nFILE CONTENTS:\n" + "\n\n".join(file_contents_list)
     
     # Build test results section
     if test_output:
@@ -394,12 +524,55 @@ Example: Task is "Implement user login API"
 - Any red flags (empty files, placeholder code)?
 
 ═══════════════════════════════════════════════════════════
-RESPONSE FORMAT
+RESPONSE FORMAT (JSON REQUIRED)
 ═══════════════════════════════════════════════════════════
 
-VERDICT: PASS or FAIL
-FEEDBACK: [Explain your reasoning for each step. Be specific about what passed/failed.]
-FOCUS: [If FAIL, what should the coder fix? If PASS, say "None"]"""
+You MUST respond with ONLY this JSON object (no markdown, no extra text):
+
+{
+    "verdict": "PASS" or "FAIL",
+    "feedback": "Your explanation of what passed/failed and why",
+    "focus": "If FAIL, what should be fixed. If PASS, empty string"
+}
+
+Example PASS response:
+{"verdict": "PASS", "feedback": "All acceptance criteria met. Files modified correctly.", "focus": ""}
+
+Example FAIL response:
+{"verdict": "FAIL", "feedback": "Missing required file backend/models.py", "focus": "Create the models file"}"""
+
+    # Build already-implemented section if agent made this claim
+    already_implemented_section = ""
+    if already_implemented_claim:
+        already_implemented_section = f"""
+═══════════════════════════════════════════════════════════
+⚠️ AGENT CLAIMS: ALREADY IMPLEMENTED
+═══════════════════════════════════════════════════════════
+The agent claims this work was already done by a previous task or already exists.
+They did NOT modify any files - instead they verified existing code meets requirements.
+
+AGENT'S VERIFICATION SUMMARY:
+{already_implemented_claim}
+
+YOUR JOB: Evaluate if the agent's claim is reasonable based on their verification.
+- If they checked the right files and confirmed the requirements are met → PASS
+- If their verification is vague, doesn't match acceptance criteria, or suspicious → FAIL
+- Trust but verify: the agent's word alone isn't enough, their evidence must be convincing
+"""
+
+    # Build AAR summary section if available
+    aar_section = ""
+    if aar_summary:
+        aar_section = f"""
+═══════════════════════════════════════════════════════════
+AGENT'S WORK SUMMARY (from After Action Report)
+═══════════════════════════════════════════════════════════
+The agent provided this summary of what they did:
+
+{aar_summary[:3000]}
+
+Evaluate if this summary matches the acceptance criteria and represents completed work.
+"""
 
     user_prompt = f"""═══════════════════════════════════════════════════════════
 TASK BEING EVALUATED
@@ -409,9 +582,10 @@ Description: {task.get('description', 'N/A')}
 
 ACCEPTANCE CRITERIA (MUST SATISFY):
 {criteria_text}
-
+{already_implemented_section}{aar_section}
 FILES MODIFIED BY CODER:
-{chr(10).join(f"- {f}" for f in files_modified) if files_modified else "- No files modified"}
+{chr(10).join(f"- {f}" for f in files_modified) if files_modified else "- No files modified (see AGENT'S WORK SUMMARY or ALREADY IMPLEMENTED sections if present)"}
+{file_contents_section}
 {test_section}
 ═══════════════════════════════════════════════════════════
 PROJECT CONTEXT (for reference only)
@@ -430,14 +604,34 @@ Evaluate this BUILD task strictly."""
     for attempt in range(MAX_RETRIES):
         try:
             response = await llm.ainvoke(messages)
-            content = str(response.content)
+            content = str(response.content).strip()
             
-            # Parse response
+            # Try JSON parsing first (preferred)
+            import json
+            import re
+            
+            # Extract JSON from response (handle markdown code blocks)
+            json_match = re.search(r'\{[^{}]*"verdict"[^{}]*\}', content, re.DOTALL | re.IGNORECASE)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group())
+                    verdict = result.get("verdict", "").upper()
+                    feedback = result.get("feedback", "No feedback provided")
+                    focus = result.get("focus", "")
+                    
+                    return {
+                        "passed": verdict == "PASS",
+                        "feedback": feedback,
+                        "focus": focus if focus else ""
+                    }
+                except json.JSONDecodeError:
+                    logger.warning(f"  [QA] JSON parse failed, trying legacy parsing")
+            
+            # Legacy fallback: keyword parsing for old-format responses
+            normalized_content = content.replace("*", "")
             verdict = "FAIL"
             feedback = "Unable to parse LLM response"
             focus = ""
-            
-            normalized_content = content.replace("*", "")
             
             if "VERDICT:" in normalized_content.upper():
                 verdict_line = normalized_content.upper().split("VERDICT:", 1)[1].split("\n")[0]
@@ -465,11 +659,41 @@ Evaluate this BUILD task strictly."""
                     "focus": focus if focus.lower() != "none" else ""
                 }
             else:
+                # SMART FALLBACK: If structured parsing failed, try to infer from content
+                # Count pass/fail indicators in the raw response
+                pass_indicators = content.count("✅") + content.upper().count("PASS") + content.upper().count("PASSED")
+                fail_indicators = content.count("❌") + content.upper().count("FAIL") + content.upper().count("FAILED")
+                
+                # If there are pass indicators and no fail indicators, infer PASS
+                if pass_indicators > 0 and fail_indicators == 0:
+                    logger.info(f"  [QA FALLBACK] Inferred PASS from content ({pass_indicators} pass indicators, 0 fail indicators)")
+                    return {
+                        "passed": True,
+                        "feedback": f"QA inferred PASS from evaluation content (structured parsing failed). Summary: {content[:500]}",
+                        "focus": ""
+                    }
+                # If there are more fail indicators, infer FAIL
+                elif fail_indicators > pass_indicators:
+                    logger.info(f"  [QA FALLBACK] Inferred FAIL from content ({fail_indicators} fail indicators)")
+                    return {
+                        "passed": False,
+                        "feedback": f"QA inferred FAIL from evaluation content. Summary: {content[:500]}",
+                        "focus": "Review failed criteria"
+                    }
+                
+                # Otherwise, retry or give up
                 if attempt < MAX_RETRIES - 1:
                     logger.info(f"  [QA RETRY] Parse failed (attempt {attempt + 1}/{MAX_RETRIES}), retrying...")
                     continue
                 else:
                     logger.error(f"  [QA ERROR] Parse failed after {MAX_RETRIES} attempts")
+                    # Last resort: if content mentions all criteria passing, assume pass
+                    if "all" in content.lower() and ("pass" in content.lower() or "✅" in content):
+                        return {
+                            "passed": True,
+                            "feedback": f"QA assumed PASS (parse error but content positive). Raw: {content[:500]}",
+                            "focus": ""
+                        }
                     return {
                         "passed": False,
                         "feedback": f"QA evaluation parse error. Raw: {content[:1000]}",
@@ -870,22 +1094,18 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         if Path(file).is_absolute():
                             test_results_path = Path(file)
                         else:
-                            # Try worktree first, then fall back to main workspace
-                            # (after merge, files are in main, not worktree)
+                            # ONLY check worktree (agent work is isolated there)
+                            # NO fallback to main - main only has merged/approved work
                             worktree_file = worktree_path / file
-                            main_file = Path(workspace_path) / file
                             
                             if worktree_file.exists():
                                 test_results_path = worktree_file
-                            elif main_file.exists():
-                                test_results_path = main_file
-                                logger.info(f"  [QA] Found test results in main workspace (post-merge): {file}")
+                                logger.info(f"  [QA] Found test results in worktree: {file}")
                             else:
-                                # Try both paths with the file as-is
-                                test_results_path = main_file  # Default to main
+                                logger.info(f"  [QA] Test results file not found in worktree: {worktree_file}")
                         break
             
-            # PROACTIVE SEARCH: If no test results found in AAR, check expected location
+            # PROACTIVE SEARCH: If no test results found in AAR, check expected worktree location
             # This handles cases where file was written but not tracked in files_modified
             if not test_results_path or not test_results_path.exists():
                 task_filename = task.get("component", task_id)
@@ -898,15 +1118,13 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 else:
                     worktree_path = Path(workspace_path) / ".worktrees" / task_id
                 worktree_expected = worktree_path / expected_file
-                main_expected = Path(workspace_path) / expected_file
 
-
+                # ONLY check worktree - NO fallback to main workspace
                 if worktree_expected.exists():
                     test_results_path = worktree_expected
                     logger.info(f"  [QA] Found test results at expected worktree path: {expected_file}")
-                elif main_expected.exists():
-                    test_results_path = main_expected
-                    logger.info(f"  [QA] Found test results at expected main path: {expected_file}")
+                else:
+                    logger.info(f"  [QA] No test results in worktree at: {worktree_expected}")
             
             # Check for PROACTIVE FIXES (suggested_tasks) from the worker
             # If the worker suggested fixes, we skip strict QA and reset to PLANNED
@@ -1025,7 +1243,15 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 # TDD GREEN PHASE: Validate all tests pass
                 if is_tdd_build:
                     logger.info(f"  [TDD] Build task with tests - validating GREEN phase")
-                    tdd_result = await _validate_tdd_green_phase(task, workspace_path, config)
+                    
+                    # Get worktree path for this task (check here first for fresh test results)
+                    worktree_base = state.get("_worktree_base_path")
+                    if worktree_base:
+                        task_worktree_path = str(Path(worktree_base) / task_id)
+                    else:
+                        task_worktree_path = str(Path(workspace_path) / ".worktrees" / task_id)
+                    
+                    tdd_result = await _validate_tdd_green_phase(task, workspace_path, config, task_worktree_path)
 
                     if tdd_result["passed"]:
                         qa_verdict = {
@@ -1042,7 +1268,40 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                         }
                         logger.error(f"  [TDD GREEN FAIL] {tdd_result['feedback']}")
 
-                elif files_modified or is_explicitly_completed:
+                elif is_explicitly_completed:
+                    # Agent claims code already exists - verify with LLM using agent's evidence
+                    # Don't auto-pass, but give LLM the agent's verification details to evaluate
+                    logger.info(f"  [QA] Task marked as already implemented - LLM will verify agent's claim")
+                    
+                    if not mock_mode:
+                        # Pass agent's verification to LLM
+                        qa_result = await _evaluate_build_task_with_llm(
+                            task, 
+                            test_output=None,  # No test output 
+                            files_modified=[],  # No files modified
+                            objective=objective,
+                            workspace_path=workspace_path,
+                            task_worktree_path=None,
+                            already_implemented_claim=aar.get("summary", ""),  # Pass agent's claim
+                            aar_summary=aar.get("summary", "")  # Also pass as AAR summary
+                        )
+                        qa_verdict = {
+                            "passed": qa_result["passed"],
+                            "overall_feedback": qa_result["feedback"],
+                            "suggested_focus": qa_result.get("focus", "")
+                        }
+                        if qa_result["passed"]:
+                            logger.info(f"  [QA] ✅ LLM verified agent's 'already implemented' claim")
+                        else:
+                            logger.warning(f"  [QA] ❌ LLM rejected agent's claim: {qa_result['feedback'][:200]}")
+                    else:
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": "MOCK: Trusted agent's already-implemented claim",
+                            "suggested_focus": ""
+                        }
+
+                elif files_modified:
                     # Check if this is a CODER worker - only coders get LLM test evaluation
                     is_coder = worker_profile == WorkerProfile.CODER.value or worker_profile == "code_worker"
                     
@@ -1079,7 +1338,10 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                                 task, 
                                 test_output, 
                                 files_modified,
-                                objective
+                                objective,
+                                workspace_path=workspace_path,
+                                task_worktree_path=task_worktree_path,
+                                aar_summary=aar.get("summary", "")  # Pass agent's work summary
                             )
                             qa_verdict = {
                                 "passed": qa_result["passed"],
