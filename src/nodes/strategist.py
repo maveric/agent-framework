@@ -424,27 +424,42 @@ async def _evaluate_build_task_with_llm(
     # Read contents of modified files for verification
     # This allows the LLM to actually SEE what was changed, not just filenames
     file_contents_section = ""
-    if files_modified and (workspace_path or task_worktree_path):
+    if files_modified and task_worktree_path:
         file_contents_list = []
         for file_path in files_modified[:10]:  # Limit to first 10 files to avoid token overflow
             try:
-                # Try reading from worktree first, then main workspace
+                # ONLY read from worktree - agent work is isolated there
+                # NO fallback to main workspace
                 from pathlib import Path
                 
                 file_found = False
                 content = None
                 
-                if task_worktree_path:
+                # Handle absolute paths
+                if Path(file_path).is_absolute():
+                    if Path(file_path).exists() and Path(file_path).is_file():
+                        content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+                        file_found = True
+                        logger.info(f"  [QA] Read file from absolute path: {file_path}")
+                else:
+                    # Try worktree path
                     worktree_file = Path(task_worktree_path) / file_path
                     if worktree_file.exists() and worktree_file.is_file():
                         content = worktree_file.read_text(encoding="utf-8", errors="ignore")
                         file_found = True
-                
-                if not file_found and workspace_path:
-                    main_file = Path(workspace_path) / file_path
-                    if main_file.exists() and main_file.is_file():
-                        content = main_file.read_text(encoding="utf-8", errors="ignore")
-                        file_found = True
+                        logger.info(f"  [QA] Read file from worktree: {worktree_file}")
+                    else:
+                        # Maybe it's just a filename - search for it in worktree
+                        filename = Path(file_path).name
+                        for root, dirs, files in os.walk(task_worktree_path):
+                            if filename in files:
+                                found_path = Path(root) / filename
+                                content = found_path.read_text(encoding="utf-8", errors="ignore")
+                                file_found = True
+                                logger.info(f"  [QA] Found file by name search: {found_path}")
+                                break
+                        if not file_found:
+                            logger.warning(f"  [QA] File not found in worktree: {file_path} (tried {worktree_file})")
                 
                 if file_found and content is not None:
                     # Truncate very long files
@@ -452,7 +467,7 @@ async def _evaluate_build_task_with_llm(
                         content = content[:2000] + f"\n\n... (truncated, {len(content)} total chars)"
                     file_contents_list.append(f"**{file_path}**:\n```\n{content}\n```")
                 else:
-                    file_contents_list.append(f"**{file_path}**: (file not found or unreadable)")
+                    file_contents_list.append(f"**{file_path}**: (file not found in worktree at {task_worktree_path})")
             except Exception as e:
                 file_contents_list.append(f"**{file_path}**: (error reading: {e})")
         
