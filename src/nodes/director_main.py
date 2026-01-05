@@ -455,11 +455,22 @@ Read the failure details below carefully and fix the issues.
             prompt = f"""Given these incomplete tasks, determine their dependencies.
 Each task should depend on tasks that must complete BEFORE it can start.
 
-CRITICAL: Maximize parallelism while respecting necessary ordering.
-- Tasks that CAN run in parallel SHOULD (e.g., frontend + backend simultaneously)
-- Only add dependencies where there's a real blocker (e.g., API depends on database models)
-- Create proper layering: foundation tasks → mid-level tasks → integration tasks
-- Avoid unnecessary dependencies that would force serial execution
+CRITICAL ORDERING RULES:
+
+1. **TDD (Test-Driven Development) ORDER**:
+   - TEST tasks MUST come BEFORE BUILD tasks for the same feature/component
+   - Write tests first (RED phase) → then implement code (GREEN phase)
+   - If you see "Write tests for X" and "Implement X", the BUILD depends on the TEST
+   - Example: "Implement TaskCard component" DEPENDS ON "Write tests for TaskCard"
+
+2. **PARALLELISM**:
+   - Tasks that CAN run in parallel SHOULD (e.g., frontend tests + backend tests simultaneously)
+   - Different features/components can be developed in parallel
+   - Only add dependencies where there's a real blocker
+
+3. **LAYERING**:
+   - Foundation tasks → Feature tasks → Integration tasks
+   - Test specs can be written in parallel with foundation setup
 
 Tasks:
 {chr(10).join(task_summaries)}
@@ -467,7 +478,7 @@ Tasks:
 Return ONLY a JSON object mapping task_id -> list of dependency task_ids:
 {{"task_xxx": ["task_yyy", "task_zzz"], ...}}
 
-Keep dependencies minimal - only include direct blockers, not transitive dependencies.
+Key: For each BUILD task, check if there's a corresponding TEST task - if so, BUILD depends on TEST.
 Tasks with no dependencies should map to empty array: {{"task_xxx": []}}
 """
             
