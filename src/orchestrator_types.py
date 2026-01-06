@@ -52,6 +52,8 @@ class WorkerProfile(str, Enum):
     RESEARCHER = "research_worker"
     WRITER = "writer_worker"
     MERGER = "merge_worker"  # Resolves git merge/rebase conflicts
+    QA = "qa_worker"  # Read-only verification agent
+
 
 
 class GuardianVerdict(str, Enum):
