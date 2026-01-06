@@ -37,43 +37,67 @@ async def _sqlite_connection(db_path: str):
         yield db
 
 
+# MySQL connection pool (lazily initialized)
+_mysql_pool = None
+_mysql_pool_lock = None
+
+async def _get_mysql_pool(config):
+    """Get or create the MySQL connection pool."""
+    global _mysql_pool, _mysql_pool_lock
+    import asyncio
+    
+    # Create lock on first call (must be in async context)
+    if _mysql_pool_lock is None:
+        _mysql_pool_lock = asyncio.Lock()
+    
+    async with _mysql_pool_lock:
+        if _mysql_pool is not None:
+            return _mysql_pool
+        
+        if not AIOMYSQL_AVAILABLE:
+            raise ImportError("aiomysql is required for MySQL support. Install with: pip install aiomysql")
+
+        # Parse URI if provided, otherwise use individual settings
+        mysql_uri = config.mysql_uri or os.getenv("MYSQL_URI")
+
+        if mysql_uri:
+            # Parse mysql://user:password@host:port/database
+            from urllib.parse import urlparse
+            parsed = urlparse(mysql_uri)
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 3306
+            user = parsed.username or "root"
+            password = parsed.password or ""
+            database = parsed.path.lstrip("/") or "orchestrator"
+        else:
+            host = config.mysql_host
+            port = config.mysql_port
+            user = config.mysql_user
+            password = config.mysql_password
+            database = config.mysql_database
+
+        # Create pool with reasonable defaults
+        _mysql_pool = await aiomysql.create_pool(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            db=database,
+            autocommit=True,
+            minsize=1,
+            maxsize=10,
+            pool_recycle=3600,  # Recycle connections after 1 hour
+        )
+        logger.info(f"✅ MySQL connection pool created: {host}:{port}/{database}")
+        return _mysql_pool
+
+
 @asynccontextmanager
 async def _mysql_connection(config):
-    """Open MySQL connection using config settings."""
-    if not AIOMYSQL_AVAILABLE:
-        raise ImportError("aiomysql is required for MySQL support. Install with: pip install aiomysql")
-
-    # Parse URI if provided, otherwise use individual settings
-    mysql_uri = config.mysql_uri or os.getenv("MYSQL_URI")
-
-    if mysql_uri:
-        # Parse mysql://user:password@host:port/database
-        from urllib.parse import urlparse
-        parsed = urlparse(mysql_uri)
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 3306
-        user = parsed.username or "root"
-        password = parsed.password or ""
-        database = parsed.path.lstrip("/") or "orchestrator"
-    else:
-        host = config.mysql_host
-        port = config.mysql_port
-        user = config.mysql_user
-        password = config.mysql_password
-        database = config.mysql_database
-
-    conn = await aiomysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        db=database,
-        autocommit=True
-    )
-    try:
+    """Get a connection from the MySQL pool."""
+    pool = await _get_mysql_pool(config)
+    async with pool.acquire() as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 # Get database configuration
