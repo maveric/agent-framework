@@ -956,17 +956,40 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                             "suggested_focus": "Fix test results file access"
                         }
                 else:
-                    # No test results found - FAIL
-                    expected_path = f"agents-work/test-results/test-{task.get('component', task_id)}.md"
-                    qa_verdict = {
-                        "passed": False,
-                        "overall_feedback": (
-                            f"MISSING TEST RESULTS FILE: No test results documentation found.\n"
-                            f"REQUIRED: {expected_path} with actual test output."
-                        ),
-                        "suggested_focus": "Write test results to agents-work/test-results/"
-                    }
-                    logger.error(f"  [QA FAIL]: Missing test results file at {expected_path}")
+                    # No test results file found - use QA Agent to verify
+                    # The QA Agent can run tests and check files itself
+                    logger.info(f"  [QA] No test results file found - using QA Agent to verify")
+                    
+                    # Get worktree path for this task
+                    worktree_base = state.get("_worktree_base_path")
+                    if worktree_base:
+                        task_worktree_path = str(Path(worktree_base) / task_id)
+                    else:
+                        task_worktree_path = str(Path(workspace_path) / ".worktrees" / task_id)
+                    
+                    aar = task.get("aar", {})
+                    
+                    if not mock_mode:
+                        qa_result = await _evaluate_build_task_with_llm(
+                            task,
+                            test_output=None,
+                            files_modified=aar.get("files_modified", []),
+                            objective=objective,
+                            workspace_path=workspace_path,
+                            task_worktree_path=task_worktree_path,
+                            aar_summary=aar.get("summary", "")
+                        )
+                        qa_verdict = {
+                            "passed": qa_result["passed"],
+                            "overall_feedback": qa_result["feedback"],
+                            "suggested_focus": qa_result.get("focus", "")
+                        }
+                    else:
+                        qa_verdict = {
+                            "passed": True,
+                            "overall_feedback": "MOCK: QA skipped (mock mode)",
+                            "suggested_focus": ""
+                        }
             else:
                 # SMART VALIDATION for BUILD/PLAN tasks
                 # Check if task actually DID something
