@@ -568,10 +568,13 @@ async def broadcast_state_update(run_id: str, state: dict):
     """Broadcast state update to connected clients.
     
     Only broadcasts when state has actually changed to reduce WS spam.
+    Also rate-limits to max 2 broadcasts per second per run.
     """
     global _last_broadcast_hash
     
     try:
+        import time
+        
         serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
 
         # NOTE: task_memories (full LLM conversations) are NOT included in broadcasts
@@ -592,11 +595,23 @@ async def broadcast_state_update(run_id: str, state: dict):
         import json
         state_hash = hashlib.md5(json.dumps(state_fingerprint, sort_keys=True).encode()).hexdigest()
         
-        # Skip broadcast if nothing changed
-        if run_id in _last_broadcast_hash and _last_broadcast_hash[run_id] == state_hash:
+        # Get last broadcast info for this run
+        last_info = _last_broadcast_hash.get(run_id, {"hash": None, "time": 0})
+        current_time = time.time()
+        
+        # Skip if: (1) hash unchanged OR (2) too soon since last broadcast
+        MIN_BROADCAST_INTERVAL = 0.5  # Max 2 broadcasts per second
+        
+        if last_info["hash"] == state_hash:
             return  # No change, skip broadcast
         
-        _last_broadcast_hash[run_id] = state_hash
+        if current_time - last_info["time"] < MIN_BROADCAST_INTERVAL:
+            # Rate limited - update hash but skip broadcast
+            # Next check will see the new hash but respect timing
+            _last_broadcast_hash[run_id] = {"hash": state_hash, "time": last_info["time"]}
+            return
+        
+        _last_broadcast_hash[run_id] = {"hash": state_hash, "time": current_time}
 
         await api_state.manager.broadcast_to_run(run_id, {
             "type": "state_update",
