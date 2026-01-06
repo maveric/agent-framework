@@ -426,6 +426,45 @@ async def get_run(request: Request, run_id: str):
     }
 
 
+@router.get("/{run_id}/tasks/{task_id}/memories")
+@limiter.limit("100/minute")
+async def get_task_memories(request: Request, run_id: str, task_id: str):
+    """
+    Fetch LLM conversation history (task_memories) for a specific task.
+    
+    This endpoint allows on-demand fetching of task memories instead of
+    sending all memories in every broadcast (which causes OOM crashes).
+    """
+    from run_persistence import load_run_state
+    
+    # First try in-memory state
+    state = run_states.get(run_id)
+    
+    # Fallback to database
+    if not state:
+        state = await load_run_state(run_id)
+    
+    if not state:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    raw_memories = state.get("task_memories", {})
+    
+    # Get memories for specific task
+    task_messages = raw_memories.get(task_id, [])
+    
+    if not task_messages:
+        return {"task_id": task_id, "messages": []}
+    
+    # Serialize messages
+    serialized = serialize_messages(task_messages)
+    
+    return {
+        "task_id": task_id,
+        "messages": serialized,
+        "message_count": len(serialized)
+    }
+
+
 @router.post("/{run_id}/pause")
 async def pause_run(run_id: str):
     if run_id not in runs_index:

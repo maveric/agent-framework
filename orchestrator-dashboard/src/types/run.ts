@@ -32,6 +32,7 @@ export interface Task {
         suggested_action: string;
         blocking?: boolean;
     };
+    failure_reason?: string;
 }
 
 export interface RunDetails {
