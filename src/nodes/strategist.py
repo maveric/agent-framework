@@ -549,8 +549,12 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
 
                     # Step 1: Rebase on main to handle concurrent edits
                     try:
-                        logger.info(f"  [REBASE] Starting rebase for {task_id}...")
-                        rebase_result = await wt_manager.rebase_on_main(task_id)
+                        # CRITICAL: If this is a merge task, it operated on the ORIGINAL task's worktree/branch
+                        # We must rebase/merge THAT worktree, not the merge task ID (which has no worktree)
+                        target_task_id = task.get("_use_worktree_task_id", task_id)
+                        
+                        logger.info(f"  [REBASE] Starting rebase for {target_task_id} (task={task_id})...")
+                        rebase_result = await wt_manager.rebase_on_main(target_task_id)
 
                         if not rebase_result.success:
                             # Rebase failed (conflicts) - spawn merge agent instead of failing
@@ -598,7 +602,8 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
 
                             # Step 2: Merge to main (should be clean since we just rebased)
                             try:
-                                merge_result = await wt_manager.merge_to_main(task_id)
+                                logger.info(f"  [MERGE] Merging {target_task_id} to main (task={task_id})...")
+                                merge_result = await wt_manager.merge_to_main(target_task_id)
                                 if merge_result.success:
                                     logger.info(f"  [MERGED] Task {task_id} merged successfully to main")
                                 elif merge_result.conflict and not is_merge_task:
