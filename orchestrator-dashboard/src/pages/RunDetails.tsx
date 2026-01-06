@@ -29,7 +29,13 @@ export function RunDetails() {
     const [statusMessage, setStatusMessage] = useState<string>('');
     const [statusPhase, setStatusPhase] = useState<string>('');
 
-    const toggleTask = (taskId: string) => {
+    // Track separately fetched task memories (on-demand loading)
+    const [fetchedMemories, setFetchedMemories] = useState<Record<string, any[]>>({});
+    const [loadingMemories, setLoadingMemories] = useState<Set<string>>(new Set());
+
+    const toggleTask = async (taskId: string) => {
+        const isExpanding = !expandedTasks.has(taskId);
+
         setExpandedTasks(prev => {
             const next = new Set(prev);
             if (next.has(taskId)) {
@@ -39,6 +45,28 @@ export function RunDetails() {
             }
             return next;
         });
+
+        // Fetch memories on-demand when expanding (if not already fetched)
+        if (isExpanding && runId && !fetchedMemories[taskId] && !loadingMemories.has(taskId)) {
+            setLoadingMemories(prev => new Set(prev).add(taskId));
+            try {
+                const response = await apiClient<{ task_id: string; messages: any[] }>(
+                    `/api/runs/${runId}/tasks/${taskId}/memories`
+                );
+                setFetchedMemories(prev => ({
+                    ...prev,
+                    [taskId]: response.messages
+                }));
+            } catch (err) {
+                console.error('Failed to fetch task memories:', err);
+            } finally {
+                setLoadingMemories(prev => {
+                    const next = new Set(prev);
+                    next.delete(taskId);
+                    return next;
+                });
+            }
+        }
     };
 
     // WebSocket: Subscribe to run updates and interrupts
@@ -330,7 +358,8 @@ export function RunDetails() {
                                         task={task}
                                         allTasks={sortedTasks}
                                         isExpanded={expandedTasks.has(task.id)}
-                                        logs={run.task_memories?.[task.id]}
+                                        logs={fetchedMemories[task.id] || run.task_memories?.[task.id]}
+                                        isLoadingLogs={loadingMemories.has(task.id)}
                                         onToggle={() => toggleTask(task.id)}
                                         onResolveClick={handleResolveClick}
                                     />
@@ -350,7 +379,7 @@ export function RunDetails() {
                         return task ? (
                             <TaskInspector
                                 task={task}
-                                logs={run.task_memories?.[task.id]}
+                                logs={fetchedMemories[task.id] || run.task_memories?.[task.id]}
                                 onClose={() => setSelectedTaskId(null)}
                                 onInterrupt={handleInterrupt}
                                 onResolveClick={handleResolveClick}

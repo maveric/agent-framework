@@ -1,38 +1,6 @@
 
 import { AlertCircle, UserCheck } from 'lucide-react';
-
-// Define the interface locally or import it if shared
-interface Task {
-    id: string;
-    description: string;
-    status: 'planned' | 'ready' | 'active' | 'complete' | 'failed' | 'blocked' | 'waiting_human' | 'awaiting_qa' | 'abandoned';
-    phase: string;
-    component: string;
-    assigned_worker_profile?: string;
-    depends_on: string[];
-    acceptance_criteria?: string[];
-    result_path?: string;
-    qa_verdict?: {
-        passed: boolean;
-        overall_feedback: string;
-    };
-    aar?: {
-        summary: string;
-        approach: string;
-        challenges: string[];
-        decisions_made: string[];
-        files_modified: string[];
-        time_spent_estimate?: string;
-    };
-    escalation?: {
-        type: string;
-        reason: string;
-        suggested_action: string;
-        blocking?: boolean;
-    };
-    failure_reason?: string;
-    retry_count?: number;
-}
+import type { Task } from '../types/run';
 
 interface TaskDetailsContentProps {
     task: Task;

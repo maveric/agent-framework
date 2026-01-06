@@ -8,6 +8,7 @@ interface TaskCardProps {
     allTasks: Task[];
     isExpanded: boolean;
     logs?: any;
+    isLoadingLogs?: boolean;
     onToggle: () => void;
     onResolveClick: (task: Task) => void;
 }
@@ -17,6 +18,7 @@ export function TaskCard({
     allTasks,
     isExpanded,
     logs,
+    isLoadingLogs,
     onToggle,
     onResolveClick
 }: TaskCardProps) {
@@ -25,8 +27,8 @@ export function TaskCard({
     return (
         <div
             className={`bg-slate-800 p-4 rounded-lg border transition-all ${isWaiting
-                    ? 'border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow'
-                    : 'border-slate-700 hover:border-slate-600'
+                ? 'border-yellow-500 shadow-[0_0_15px_rgba(234,179,8,0.3)] animate-pulse-slow'
+                : 'border-slate-700 hover:border-slate-600'
                 }`}
         >
             <div
@@ -42,10 +44,10 @@ export function TaskCard({
                     <span className="font-mono text-xs text-slate-500">{task.id}</span>
                 </div>
                 <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${task.status === 'complete' ? 'bg-green-400/10 text-green-400' :
-                        task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
-                            task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
-                                task.status?.startsWith('pending_') ? 'bg-yellow-400/10 text-yellow-400 animate-pulse' :
-                                    'bg-slate-700 text-slate-400'
+                    task.status === 'failed' ? 'bg-red-400/10 text-red-400' :
+                        task.status === 'active' ? 'bg-blue-400/10 text-blue-400' :
+                            task.status?.startsWith('pending_') ? 'bg-yellow-400/10 text-yellow-400 animate-pulse' :
+                                'bg-slate-700 text-slate-400'
                     }`}>
                     {task.status?.startsWith('pending_')
                         ? task.status.replace('pending_', '') + ' (syncing)'
@@ -83,8 +85,8 @@ export function TaskCard({
                             <span
                                 key={dep}
                                 className={`px-1 rounded mr-1 font-mono ${isComplete
-                                        ? 'bg-green-900/30 border border-green-700/50 text-green-400'
-                                        : 'bg-slate-800 border border-slate-700 text-slate-400'
+                                    ? 'bg-green-900/30 border border-green-700/50 text-green-400'
+                                    : 'bg-slate-800 border border-slate-700 text-slate-400'
                                     }`}
                             >
                                 {dep}
@@ -96,11 +98,18 @@ export function TaskCard({
 
             {isExpanded && (
                 <div className="mt-4 pt-4 border-t border-slate-700">
-                    <TaskDetailsContent
-                        task={task}
-                        logs={logs}
-                        onResolveClick={onResolveClick}
-                    />
+                    {isLoadingLogs ? (
+                        <div className="flex items-center gap-2 text-slate-400 text-sm py-4">
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                            Loading conversation...
+                        </div>
+                    ) : (
+                        <TaskDetailsContent
+                            task={task}
+                            logs={logs}
+                            onResolveClick={onResolveClick}
+                        />
+                    )}
                 </div>
             )}
         </div>
