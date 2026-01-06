@@ -29,15 +29,32 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 _HEARTBEAT_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "heartbeat.log")
 
+# Rate-limit heartbeat writes to prevent I/O saturation
+_heartbeat_buffer = []
+_heartbeat_last_flush = 0
+
 def _heartbeat(run_id: str, msg: str):
-    """Write heartbeat to file with fsync. Cross-platform (Windows/Linux)."""
-    try:
-        with open(_HEARTBEAT_FILE, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now().isoformat()}] [{run_id[:8]}] {msg}\n")
-            f.flush()
-            os.fsync(f.fileno())
-    except:
-        pass
+    """Write heartbeat to buffer, flush periodically to reduce I/O."""
+    global _heartbeat_buffer, _heartbeat_last_flush
+    import time
+    
+    _heartbeat_buffer.append(f"[{datetime.now().isoformat()}] [{run_id[:8]}] {msg}\n")
+    
+    # Flush every 5 seconds or on critical messages
+    current_time = time.time()
+    is_critical = "EXCEPTION" in msg or "FATAL" in msg or "BASE_EXCEPTION" in msg
+    
+    if is_critical or (current_time - _heartbeat_last_flush) > 5.0:
+        try:
+            with open(_HEARTBEAT_FILE, "a", encoding="utf-8") as f:
+                f.writelines(_heartbeat_buffer)
+                f.flush()
+                if is_critical:
+                    os.fsync(f.fileno())  # Only fsync on critical errors
+            _heartbeat_buffer = []
+            _heartbeat_last_flush = current_time
+        except:
+            pass
 # =============================================================================
 
 
@@ -448,12 +465,14 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
                     }
                 })
 
-                # Save full state for restart capability (both in-memory and database)
-                run_states[run_id] = state.copy()
+                # Save full state for restart capability (ONLY when activity occurred)
+                # This prevents constant MySQL writes when the loop is idle
+                if activity_occurred:
+                    run_states[run_id] = state.copy()
 
-                # Persist to database
-                from run_persistence import save_run_state
-                await save_run_state(run_id, state, status="running")
+                    # Persist to database
+                    from run_persistence import save_run_state
+                    await save_run_state(run_id, state, status="running")
 
         if iteration >= max_iterations:
             logger.error(f"❌ Max iterations ({max_iterations}) reached for run {run_id}")
