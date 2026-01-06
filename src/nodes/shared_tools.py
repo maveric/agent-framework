@@ -2,10 +2,23 @@
 Shared tools used by multiple worker profiles.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
 
-def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
+class SubtaskDefinition(BaseModel):
+    """Definition for a subtask to be created."""
+    title: str = Field(..., description="Short, descriptive title (like a commit message)")
+    description: str = Field(..., description="What the task does, acceptance criteria")
+    phase: str = Field(default="build", description="Task phase: 'build' or 'test'")
+    depends_on: List[str] = Field(default_factory=list, description="List of task TITLES this depends on")
+    dependency_queries: List[str] = Field(default_factory=list, description="Natural language queries for external dependencies")
+    worker_profile: str = Field(default="code_worker", description="'code_worker' or 'test_worker'")
+    component: Optional[str] = Field(default=None, description="Optional component/feature name")
+
+
+def create_subtasks(subtasks: List[SubtaskDefinition]) -> str:
+
     """
     Create COMMIT-LEVEL subtasks to be executed by other workers.
 
@@ -66,6 +79,16 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     if len(subtasks) == 0:
         return "ERROR: No subtasks provided. You must create at least one subtask."
     
+    # Convert Pydantic models to dicts if needed (LangChain may pass either)
+    normalized_subtasks = []
+    for st in subtasks:
+        if isinstance(st, SubtaskDefinition):
+            normalized_subtasks.append(st.model_dump())
+        elif isinstance(st, dict):
+            normalized_subtasks.append(st)
+        else:
+            normalized_subtasks.append({})  # Will be caught as empty
+    
     # VALIDATE EACH SUBTASK BEFORE ACCEPTING
     # This gives the LLM immediate feedback to fix issues in the same conversation
     VALID_PHASES = ["plan", "build", "test"]
@@ -73,7 +96,7 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     warnings = []
     empty_count = 0  # Track how many subtasks are completely empty
 
-    for idx, subtask in enumerate(subtasks):
+    for idx, subtask in enumerate(normalized_subtasks):
         st_num = idx + 1
 
         # Check if dict
@@ -85,6 +108,7 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
         if len(subtask) == 0:
             empty_count += 1
             continue  # Don't add individual errors, we'll handle in bulk
+
 
         # Check required fields
         if "title" not in subtask or not subtask["title"]:
