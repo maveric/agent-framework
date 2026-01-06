@@ -143,12 +143,15 @@ or
     try:
         logger.info(f"  [QA Agent] Invoking agent with {len(tools)} tools...")
         
-        result = await agent.ainvoke({
-            "messages": [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content="Verify this task completion. Use your tools to check files, then return your verdict as JSON.")
-            ]
-        })
+        result = await agent.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content="Verify this task completion. Use your tools to check files, then return your verdict as JSON.")
+                ]
+            },
+            config={"recursion_limit": 50}  # Allow more turns for complex verification
+        )
         
         # Count tool calls
         tool_call_count = 0
