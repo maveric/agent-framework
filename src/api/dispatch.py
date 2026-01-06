@@ -565,11 +565,8 @@ async def broadcast_state_update(run_id: str, state: dict):
     try:
         serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
 
-        # Serialize task_memories (LLM conversations)
-        task_memories = {}
-        raw_memories = state.get("task_memories", {})
-        for task_id, messages in raw_memories.items():
-            task_memories[task_id] = serialize_messages(messages)
+        # NOTE: task_memories (full LLM conversations) are NOT included in broadcasts
+        # to prevent frontend memory exhaustion. Frontend should fetch on-demand if needed.
 
         await api_state.manager.broadcast_to_run(run_id, {
             "type": "state_update",
@@ -577,7 +574,7 @@ async def broadcast_state_update(run_id: str, state: dict):
                 "tasks": serialized_tasks,
                 "status": runs_index[run_id].get("status", "running"),
                 "task_counts": runs_index[run_id].get("task_counts", {}),
-                "task_memories": task_memories
+                # task_memories omitted to prevent OOM crashes
             }
         })
     except Exception as e:
