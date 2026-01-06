@@ -167,6 +167,8 @@ def create_qa_tools(worktree_path: str, workspace_path: str = None):
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',  # Handle non-UTF8 chars gracefully
                 timeout=120  # 2 minute timeout
             )
             
