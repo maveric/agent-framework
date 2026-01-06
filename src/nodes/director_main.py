@@ -251,10 +251,8 @@ async def director_node(state: OrchestratorState, config: RunnableConfig = None)
                                 detailed_context.append("\n## ACTUAL TEST OUTPUT (from test execution)")
                                 detailed_context.append(f"```\n{test_results[:2000]}\n```")  # Limit length
                             
-                            # Also check result_path for test file location
-                            result_path = raw_task.get("result_path", "")
-                            if result_path:
-                                detailed_context.append(f"\n**Test results file:** `{result_path}`")
+                            # result_path is the LLM log, not test results - skip it
+                            # The QA Agent can read files and run tests itself
 
                         full_description = "\n".join(detailed_context)
 
