@@ -71,6 +71,7 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
     VALID_PHASES = ["plan", "build", "test"]
     errors = []
     warnings = []
+    empty_count = 0  # Track how many subtasks are completely empty
 
     for idx, subtask in enumerate(subtasks):
         st_num = idx + 1
@@ -79,6 +80,11 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
         if not isinstance(subtask, dict):
             errors.append(f"Subtask #{st_num}: Must be a dictionary, got {type(subtask).__name__}")
             continue
+
+        # CIRCUIT BREAKER: Detect completely empty objects - model failure pattern
+        if len(subtask) == 0:
+            empty_count += 1
+            continue  # Don't add individual errors, we'll handle in bulk
 
         # Check required fields
         if "title" not in subtask or not subtask["title"]:
@@ -116,12 +122,48 @@ def create_subtasks(subtasks: List[Dict[str, Any]]) -> str:
                             f"depends_on value '{dep}' is very short and may not be a full title. "
                             f"Ensure it matches the exact title of the dependency task."
                         )
+
+    # CIRCUIT BREAKER: If ALL subtasks are empty, fail fast with concrete example
+    if empty_count == len(subtasks):
+        return """CRITICAL ERROR: All subtasks are empty objects '{}'.
+
+You MUST provide actual task definitions with 'title' and 'description' fields.
+
+COPY THIS EXACT FORMAT and fill in your own values:
+
+create_subtasks([
+    {
+        "title": "Setup project scaffolding",
+        "description": "Initialize project structure with package.json and folder hierarchy",
+        "phase": "build",
+        "depends_on": []
+    },
+    {
+        "title": "Implement main feature",
+        "description": "Build the core functionality as per design spec",
+        "phase": "build",
+        "depends_on": ["Setup project scaffolding"]
+    },
+    {
+        "title": "Add integration tests",
+        "description": "Test the main feature works end-to-end",
+        "phase": "test",
+        "depends_on": ["Implement main feature"]
+    }
+])
+
+DO NOT pass empty objects. Each task MUST have 'title' and 'description'."""
+
+    # If some tasks are empty but not all, report only the empty ones as errors
+    if empty_count > 0:
+        errors.insert(0, f"{empty_count} subtask(s) are completely empty '{{}}'. Each must have 'title' and 'description' fields.")
     
     # If validation errors, return them immediately for LLM to fix
     if errors:
         error_msg = f"VALIDATION ERRORS ({len(errors)} issues found):\n" + "\n".join(f"  - {err}" for err in errors)
         error_msg += "\n\nPlease fix these errors and call create_subtasks again with valid task definitions."
         return error_msg
+
 
     # If warnings (non-blocking but important), include them in success message
     success_msg = f"Created {len(subtasks)} subtasks. They will be added to the task graph by the Director."
