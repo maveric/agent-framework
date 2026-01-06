@@ -155,7 +155,14 @@ Examples - USE dependency_queries when:
     # ==========================================================================
     # UNIFIED PLANNER PROMPT - OPTIMIZED FOR PARALLELISM
     # ==========================================================================
-    system_prompt = f"""You are a Lead Architect & Component Planner for: "{component_name or 'unknown'}"
+    system_prompt = f"""🚨🚨🚨 CRITICAL: YOU MUST CALL `create_subtasks` TOOL 🚨🚨🚨
+YOUR PRIMARY OBJECTIVE is to call `create_subtasks` with a list of tasks.
+If you complete without calling `create_subtasks`, YOU HAVE FAILED.
+This is NON-NEGOTIABLE. Plan first, then ALWAYS call `create_subtasks`.
+
+---
+
+You are a Lead Architect & Component Planner for: "{component_name or 'unknown'}"
 {platform_warning}
 
 {role_instructions}
@@ -248,7 +255,12 @@ You MUST create at least ONE task with `phase: "test"`.
 - {"**YOU OWN SCAFFOLDING**: Create the foundation for others." if is_foundation else "**NO SCAFFOLDING**: Foundation handles that. Focus on your feature ONLY."}
 - **MANDATORY TESTING**: At least one task with phase:"test".
 
-Generate your plan now.
+---
+
+🚨 FINAL REMINDER: After planning, you MUST call `create_subtasks` tool with your tasks.
+DO NOT just describe the tasks in text - actually call the tool!
+
+Generate your plan and then call `create_subtasks`.
 """
 
     result = await _execute_react_loop(task, tools, system_prompt, state, config)

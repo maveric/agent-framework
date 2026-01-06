@@ -32,6 +32,8 @@ export function RunDetails() {
     // Track separately fetched task memories (on-demand loading)
     const [fetchedMemories, setFetchedMemories] = useState<Record<string, any[]>>({});
     const [loadingMemories, setLoadingMemories] = useState<Set<string>>(new Set());
+    // Track retry counts to invalidate cache when task is retried
+    const [memoryRetryCounts, setMemoryRetryCounts] = useState<Record<string, number>>({});
 
     const toggleTask = async (taskId: string) => {
         const isExpanding = !expandedTasks.has(taskId);
@@ -46,8 +48,16 @@ export function RunDetails() {
             return next;
         });
 
-        // Fetch memories on-demand when expanding (if not already fetched)
-        if (isExpanding && runId && !fetchedMemories[taskId] && !loadingMemories.has(taskId)) {
+        // Find the task to check its retry count
+        const task = run?.tasks.find(t => t.id === taskId);
+        const currentRetryCount = task?.retry_count ?? 0;
+        const cachedRetryCount = memoryRetryCounts[taskId] ?? -1;
+
+        // Fetch memories if: expanding AND (not cached OR retry count changed)
+        const needsFetch = isExpanding && runId && !loadingMemories.has(taskId) &&
+            (!fetchedMemories[taskId] || currentRetryCount !== cachedRetryCount);
+
+        if (needsFetch) {
             setLoadingMemories(prev => new Set(prev).add(taskId));
             try {
                 const response = await apiClient<{ task_id: string; messages: any[] }>(
@@ -56,6 +66,11 @@ export function RunDetails() {
                 setFetchedMemories(prev => ({
                     ...prev,
                     [taskId]: response.messages
+                }));
+                // Track the retry count for cache invalidation
+                setMemoryRetryCounts(prev => ({
+                    ...prev,
+                    [taskId]: currentRetryCount
                 }));
             } catch (err) {
                 console.error('Failed to fetch task memories:', err);
@@ -68,6 +83,7 @@ export function RunDetails() {
             }
         }
     };
+
 
     // WebSocket: Subscribe to run updates and interrupts
     const addMessageHandler = useWebSocketStore((state) => state.addMessageHandler);
