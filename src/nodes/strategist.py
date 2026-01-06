@@ -459,73 +459,85 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
             # - Report PASS/FAIL based on actual evidence
             
             if not mock_mode:
-                # Use QA ReAct agent for verification
-                from .handlers import _qa_handler
-                from orchestrator_types import _dict_to_task, WorkerProfile
+                # Initialize verdict as None
+                qa_verdict = None
+
+                # SKIP QA FOR PLANNER TASKS
+                # Planning tasks are verified by the user approving the implementation plan
+                if task.get("phase") == "plan" or task.get("assigned_worker_profile") == "planner_worker":
+                    logger.info(f"  [QA SKIP] Task {task_id} is a PLAN task - auto-passing")
+                    qa_verdict = {
+                        "passed": True,
+                        "overall_feedback": "Plan approved (auto-verified)",
+                        "suggested_focus": ""
+                    }
                 
-                # Prepare state for QA agent
-                qa_state = state.copy()
-                # Use main workspace (post-merge location) for QA
-                qa_state["worktree_path"] = workspace_path
-                
-                # Convert task dict to Task object for handler
-                task_obj = _dict_to_task(task)
-                
-                logger.info(f"  [QA AGENT] Starting verification for {task_id}")
-                try:
-                    qa_result = await _qa_handler(task_obj, qa_state, config)
+                # Use QA ReAct agent for verification (if not already decided)
+                if not qa_verdict:
+                    from .handlers import _qa_handler
+                    from orchestrator_types import _dict_to_task, WorkerProfile
                     
-                    # Parse QA agent's result
-                    # The agent returns WorkerResult with AAR containing its findings
-                    # Look for QA_VERDICT in the AAR summary or messages
-                    qa_passed = False
-                    qa_feedback = "QA agent did not provide a verdict"
-                    qa_suggestions = ""
+                    # Prepare state for QA agent
+                    qa_state = state.copy()
+                    # Use main workspace (post-merge location) for QA
+                    qa_state["worktree_path"] = workspace_path
                     
-                    if qa_result.aar:
-                        summary = qa_result.aar.summary
+                    # Convert task dict to Task object for handler
+                    task_obj = _dict_to_task(task)
+                    
+                    logger.info(f"  [QA AGENT] Starting verification for {task_id}")
+                    try:
+                        qa_result = await _qa_handler(task_obj, qa_state, config)
                         
-                        # Parse verdict from AAR summary
-                        if "QA_VERDICT: PASS" in summary:
-                            qa_passed = True
-                            # Extract feedback after PASS
-                            if "QA_FEEDBACK:" in summary:
-                                qa_feedback = summary.split("QA_FEEDBACK:")[1].split("QA_SUGGESTIONS:")[0].strip()
+                        # Parse QA agent's result
+                        qa_passed = False
+                        qa_feedback = "QA agent did not provide a verdict"
+                        qa_suggestions = ""
+                        
+                        if qa_result.aar:
+                            summary = qa_result.aar.summary
+                            
+                            # Parse verdict from AAR summary
+                            if "QA_VERDICT: PASS" in summary:
+                                qa_passed = True
+                                # Extract feedback after PASS
+                                if "QA_FEEDBACK:" in summary:
+                                    qa_feedback = summary.split("QA_FEEDBACK:")[1].split("QA_SUGGESTIONS:")[0].strip()
+                                else:
+                                    qa_feedback = summary
+                            elif "QA_VERDICT: FAIL" in summary:
+                                qa_passed = False
+                                if "QA_FEEDBACK:" in summary:
+                                    qa_feedback = summary.split("QA_FEEDBACK:")[1].split("QA_SUGGESTIONS:")[0].strip()
+                                if "QA_SUGGESTIONS:" in summary:
+                                    qa_suggestions = summary.split("QA_SUGGESTIONS:")[1].strip()
                             else:
+                                # No explicit verdict - check if files were verified
                                 qa_feedback = summary
-                        elif "QA_VERDICT: FAIL" in summary:
-                            qa_passed = False
-                            if "QA_FEEDBACK:" in summary:
-                                qa_feedback = summary.split("QA_FEEDBACK:")[1].split("QA_SUGGESTIONS:")[0].strip()
-                            if "QA_SUGGESTIONS:" in summary:
-                                qa_suggestions = summary.split("QA_SUGGESTIONS:")[1].strip()
-                        else:
-                            # No explicit verdict - check if files were verified
-                            qa_feedback = summary
-                            # If agent completed without error, assume pass for now
-                            qa_passed = qa_result.status == "complete"
-                    
-                    qa_verdict = {
-                        "passed": qa_passed,
-                        "overall_feedback": qa_feedback,
-                        "suggested_focus": qa_suggestions
-                    }
-                    
-                    # Store QA agent messages for task memories
-                    if qa_result.messages:
-                        task_memories[task_id] = qa_result.messages
-                    
-                    logger.info(f"  [QA AGENT] Verdict: {'PASS' if qa_passed else 'FAIL'}")
-                    
-                except Exception as e:
-                    import traceback
-                    logger.error(f"  [QA AGENT ERROR]: {e}")
-                    logger.error(traceback.format_exc())
-                    qa_verdict = {
-                        "passed": False,
-                        "overall_feedback": f"QA agent error: {str(e)}",
-                        "suggested_focus": "Check QA agent configuration"
-                    }
+                                # If agent completed without error, assume pass for now
+                                qa_passed = qa_result.status == "complete"
+                        
+                        qa_verdict = {
+                            "passed": qa_passed,
+                            "overall_feedback": qa_feedback,
+                            "suggested_focus": qa_suggestions
+                        }
+                        
+                        # Store QA agent messages for task memories
+                        if qa_result.messages:
+                            task_memories[task_id] = qa_result.messages
+                        
+                        logger.info(f"  [QA AGENT] Verdict: {'PASS' if qa_passed else 'FAIL'}")
+                        
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"  [QA AGENT ERROR]: {e}")
+                        logger.error(traceback.format_exc())
+                        qa_verdict = {
+                            "passed": False,
+                            "overall_feedback": f"QA agent error: {str(e)}",
+                            "suggested_focus": "Check QA agent configuration"
+                        }
             else:
                 # Mock mode - skip QA
                 qa_verdict = {
