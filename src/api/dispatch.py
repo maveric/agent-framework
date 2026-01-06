@@ -560,20 +560,50 @@ async def continuous_dispatch_loop(run_id: str, state: dict, run_config: dict):
         sys.stderr.flush()
 
 
+# Track last broadcast hash per run to avoid duplicate broadcasts
+_last_broadcast_hash: dict = {}
+
+
 async def broadcast_state_update(run_id: str, state: dict):
-    """Broadcast state update to connected clients."""
+    """Broadcast state update to connected clients.
+    
+    Only broadcasts when state has actually changed to reduce WS spam.
+    """
+    global _last_broadcast_hash
+    
     try:
         serialized_tasks = [task_to_dict(t) if hasattr(t, "status") else t for t in state.get("tasks", [])]
 
         # NOTE: task_memories (full LLM conversations) are NOT included in broadcasts
         # to prevent frontend memory exhaustion. Frontend should fetch on-demand if needed.
+        
+        status = runs_index[run_id].get("status", "running")
+        task_counts = runs_index[run_id].get("task_counts", {})
+        
+        # Create a fingerprint of the current state for change detection
+        # Only include fields that matter for the UI
+        state_fingerprint = {
+            "status": status,
+            "task_statuses": sorted([(t.get("id", ""), t.get("status", "")) for t in serialized_tasks]),
+            "task_count": len(serialized_tasks),
+        }
+        
+        import hashlib
+        import json
+        state_hash = hashlib.md5(json.dumps(state_fingerprint, sort_keys=True).encode()).hexdigest()
+        
+        # Skip broadcast if nothing changed
+        if run_id in _last_broadcast_hash and _last_broadcast_hash[run_id] == state_hash:
+            return  # No change, skip broadcast
+        
+        _last_broadcast_hash[run_id] = state_hash
 
         await api_state.manager.broadcast_to_run(run_id, {
             "type": "state_update",
             "payload": {
                 "tasks": serialized_tasks,
-                "status": runs_index[run_id].get("status", "running"),
-                "task_counts": runs_index[run_id].get("task_counts", {}),
+                "status": status,
+                "task_counts": task_counts,
                 # task_memories omitted to prevent OOM crashes
             }
         })
