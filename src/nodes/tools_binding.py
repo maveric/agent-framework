@@ -14,10 +14,15 @@ from orchestrator_types import WorkerProfile
 logger = logging.getLogger(__name__)
 
 
-def _create_read_file_wrapper(tool, worktree_path, workspace_path, files_read: Set[str]):
+def _create_read_file_wrapper(tool, worktree_path, workspace_path, source_worktree_path, files_read: Set[str]):
     """Create read_file wrapper that tracks which files have been read."""
-    # additional_roots allows access to main workspace (for .venv, etc.)
-    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    # additional_roots allows access to main workspace, and source worktree for merge workers
+    additional_roots = []
+    if workspace_path and str(workspace_path) != str(worktree_path):
+        additional_roots.append(workspace_path)
+    if source_worktree_path and str(source_worktree_path) != str(worktree_path):
+        additional_roots.append(source_worktree_path)
+    additional_roots = additional_roots if additional_roots else None
     
     async def read_file_wrapper(path: str, encoding: str = "utf-8"):
         """Read the contents of a file."""
@@ -29,9 +34,14 @@ def _create_read_file_wrapper(tool, worktree_path, workspace_path, files_read: S
     return read_file_wrapper
 
 
-def _create_write_file_wrapper(tool, worktree_path, workspace_path, files_read: Set[str]):
+def _create_write_file_wrapper(tool, worktree_path, workspace_path, source_worktree_path, files_read: Set[str]):
     """Create write_file wrapper that enforces read-before-write for existing files."""
-    additional_roots = [workspace_path] if workspace_path and str(workspace_path) != str(worktree_path) else None
+    additional_roots = []
+    if workspace_path and str(workspace_path) != str(worktree_path):
+        additional_roots.append(workspace_path)
+    if source_worktree_path and str(source_worktree_path) != str(worktree_path):
+        additional_roots.append(source_worktree_path)
+    additional_roots = additional_roots if additional_roots else None
     
     async def write_file_wrapper(path: str, content: str, encoding: str = "utf-8"):
         """Write content to a file. MUST read existing files first!"""
@@ -156,6 +166,13 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
     if workspace_path:
         logger.debug(f"Main workspace path: {workspace_path}")
 
+    # Get source worktree path for merge workers (allows access to original task's worktree)
+    # This is set when a merge task is created from a source task
+    source_worktree_path = state.get("_source_worktree_path")
+    if source_worktree_path:
+        logger.debug(f"Source worktree path: {source_worktree_path}")
+
+
     # Track which files have been read this session (for read-before-write enforcement)
     files_read: Set[str] = set()
     
@@ -171,11 +188,11 @@ def _bind_tools(tools: List[Callable], state: Dict[str, Any], profile: WorkerPro
             # Use factory functions to avoid closure loop variable capture issues
             # NOTE: Pass coroutine= directly - LangChain infers schema from the async function signature
             if tool.__name__ in ["read_file", "read_file_async"]:
-                wrapper = _create_read_file_wrapper(tool, worktree_path, workspace_path, files_read)
+                wrapper = _create_read_file_wrapper(tool, worktree_path, workspace_path, source_worktree_path, files_read)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="read_file", description="Read the contents of a file.", handle_tool_error=True))
 
             elif tool.__name__ in ["write_file", "write_file_async"]:
-                wrapper = _create_write_file_wrapper(tool, worktree_path, workspace_path, files_read)
+                wrapper = _create_write_file_wrapper(tool, worktree_path, workspace_path, source_worktree_path, files_read)
                 bound_tools.append(StructuredTool.from_function(func=wrapper, coroutine=wrapper, name="write_file", description="Write content to a file. MUST read existing files first!", handle_tool_error=True))
 
             elif tool.__name__ in ["append_file", "append_file_async"]:

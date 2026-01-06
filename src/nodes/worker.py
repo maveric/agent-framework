@@ -79,7 +79,19 @@ async def worker_node(state: Dict[str, Any], config: RunnableConfig = None) -> D
     # Inject worktree path and recovery context into state for handlers
     state["worktree_path"] = worktree_path
     state["_recovery_context"] = recovery_context  # Handlers will inject this into prompts
+    
+    # MERGE WORKER SUPPORT: If this is a merge task using another task's worktree,
+    # also store the source worktree path so tools can access it via additional_roots
+    if use_worktree_from := task_dict.get("_use_worktree_task_id"):
+        # The merge task might be using the source worktree, but we also want to
+        # allow access to any worktree path explicitly stored on the task
+        source_wt_path = task_dict.get("worktree_path")
+        if source_wt_path:
+            state["_source_worktree_path"] = source_wt_path
+            logger.info(f"  Merge worker: Source worktree path: {source_wt_path}")
+    
     logger.info(f"DEBUG: worker_node set state['worktree_path']={state.get('worktree_path')}")
+
 
     # Execute handler
     logger.info(f"Worker ({profile.value}): Starting task {task_id}")
