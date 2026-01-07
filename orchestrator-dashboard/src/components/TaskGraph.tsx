@@ -41,7 +41,7 @@ const TaskNode = ({ data }: { data: Task & { isLinkSource?: boolean; linkModeAct
         ready: 'border-slate-500 bg-slate-800',
         planned: 'border-slate-700 bg-slate-900',
         blocked: 'border-orange-500 bg-orange-900/20',
-        awaiting_qa: 'border-orange-400 bg-orange-900/20',
+        awaiting_qa: 'border-purple-400 bg-purple-900/20',
         waiting_human: 'border-yellow-500 bg-yellow-900/20',
         abandoned: 'border-slate-600 bg-slate-800/50 opacity-60',
     };
