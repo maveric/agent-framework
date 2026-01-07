@@ -352,45 +352,15 @@ async def _execute_react_loop(
     result_path = log_llm_response(task.id, result, files_modified, status="complete", workspace_path=workspace_path, logs_base_path=logs_base_path)
     logger.info(f"  [LOG] Files modified: {files_modified}")
 
-    # CRITICAL: Strict Success Check for BUILD tasks
-    # Ensures BUILD tasks actually create/modify code files
+    # NOTE: Previously this would FAIL BUILD tasks with no files modified.
+    # Now we let the LLM-based QA agent evaluate this case.
+    # The QA agent can check if the work was actually done (e.g., files already exist).
     if task.phase == TaskPhase.BUILD:
         meaningful_files = [f for f in files_modified if not f.endswith("response.md")]
         if not meaningful_files and not explicitly_completed:
-            logger.error(f"  [FAILURE] Build task {task.id} failed: No code files modified.")
-
-            # Detailed feedback for LLM retry via Phoenix recovery
-            failure_message = (
-                "CRITICAL FAILURE: No code files were modified during this BUILD task.\n\n"
-                "DIAGNOSIS:\n"
-                "- You may have only used chat responses instead of the write_file tool\n"
-                "- Tool calls may have failed (check for error messages in tool responses)\n"
-                "- You may have explored the codebase but forgot to actually write code\n\n"
-                "ACTION REQUIRED ON RETRY:\n"
-                "1. Use write_file to create or modify project files (NOT in agents-work/)\n"
-                "2. Verify each write_file call succeeded (check tool response)\n"
-                "3. If code already exists and meets requirements, use report_existing_implementation\n"
-                "4. DO NOT just describe what should be done - actually write the files\n\n"
-                "Files tracked: " + (str(files_modified) if files_modified else "[]")
-            )
-
-            return WorkerResult(
-                status="failed",
-                result_path=result_path,
-                aar=AAR(
-                    summary=failure_message,
-                    approach="ReAct agent execution - failed due to no file modifications",
-                    challenges=[
-                        "No code files were created or modified",
-                        "write_file tool was either not used or calls failed",
-                        "Task cannot be marked complete without tangible code changes"
-                    ],
-                    decisions_made=["Marked task as FAILED to trigger retry with feedback"],
-                    files_modified=files_modified
-                ),
-                suggested_tasks=suggested_tasks,
-                messages=result["messages"] if "messages" in result else []
-            )
+            logger.warning(f"  [WARNING] Build task {task.id} has no code files modified - QA will evaluate")
+            # Don't fail here - let QA agent determine if this is acceptable
+            # (e.g., worker verified existing implementation meets requirements)
     
     # CRITICAL: Validation Check for PLAN tasks
     # If planner created 0 tasks due to parse errors, fail with detailed feedback
