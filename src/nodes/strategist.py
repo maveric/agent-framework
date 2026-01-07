@@ -14,7 +14,7 @@ from pathlib import Path
 from state import OrchestratorState
 from llm_client import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
-from orchestrator_types import TaskStatus, TaskPhase, WorkerProfile
+from orchestrator_types import TaskStatus, TaskPhase, WorkerProfile, _dict_to_task
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +475,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
                 # Use QA ReAct agent for verification (if not already decided)
                 if not qa_verdict:
                     from .handlers import _qa_handler
-                    from orchestrator_types import _dict_to_task, WorkerProfile
+
                     
                     # Prepare state for QA agent
                     qa_state = state.copy()
