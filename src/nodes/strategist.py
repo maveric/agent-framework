@@ -707,7 +707,7 @@ async def strategist_node(state: Dict[str, Any], config: RunnableConfig = None) 
         try:
             # Count remaining active tasks
             all_tasks_raw = state.get("tasks", [])
-            from orchestrator_types import _dict_to_task, TaskStatus
+
             all_tasks = [_dict_to_task(t) for t in all_tasks_raw]
             # Count active tasks, excluding the ones we just updated
             updated_ids = {u["id"] for u in updates}
