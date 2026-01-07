@@ -602,14 +602,11 @@ async def broadcast_state_update(run_id: str, state: dict):
         # Skip if: (1) hash unchanged OR (2) too soon since last broadcast
         MIN_BROADCAST_INTERVAL = 0.5  # Max 2 broadcasts per second
         
-        if last_info["hash"] == state_hash:
+        # Skip if hash unchanged (no actual state change)
+        # This is sufficient to prevent spam - no need for time-based rate limiting
+        # which was causing legitimate updates to be dropped
+        if last_info.get("hash") == state_hash:
             return  # No change, skip broadcast
-        
-        if current_time - last_info["time"] < MIN_BROADCAST_INTERVAL:
-            # Rate limited - update hash but skip broadcast
-            # Next check will see the new hash but respect timing
-            _last_broadcast_hash[run_id] = {"hash": state_hash, "time": last_info["time"]}
-            return
         
         _last_broadcast_hash[run_id] = {"hash": state_hash, "time": current_time}
 
